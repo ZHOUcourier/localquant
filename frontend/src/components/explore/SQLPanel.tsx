@@ -34,11 +34,11 @@ export function SQLPanel() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-[4px] border border-[#403b3b] overflow-hidden">
+      <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] overflow-hidden">
         <Editor
           height="200px"
           defaultLanguage="sql"
-          theme="vs-dark"
+          theme="light"
           value={sql}
           onChange={(v) => setSql(v ?? '')}
           options={{
@@ -71,17 +71,17 @@ export function SQLPanel() {
       )}
 
       {result && result.columns.length > 0 && (
-        <div className="rounded-[4px] border border-[#403b3b] overflow-auto max-h-[400px]">
+        <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] overflow-auto max-h-[400px]">
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10">
-              <tr className="bg-[#302c2c]">
-                <th className="border-b border-[#403b3b] px-3 py-2 text-left text-xs font-medium text-[#9a9898] w-10">
+              <tr className="bg-[#f8f7f7]">
+                <th className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898] w-10">
                   #
                 </th>
                 {result.columns.map((col) => (
                   <th
                     key={col}
-                    className="border-b border-[#403b3b] px-3 py-2 text-left text-xs font-medium text-[#9a9898] whitespace-nowrap"
+                    className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898] whitespace-nowrap"
                   >
                     {col}
                   </th>
@@ -90,10 +90,10 @@ export function SQLPanel() {
             </thead>
             <tbody>
               {result.data.map((row, ri) => (
-                <tr key={ri} className="border-b border-[#403b3b] hover:bg-[#363131] transition-colors">
+                <tr key={ri} className="border-b border-[rgba(15,0,0,0.12)] hover:bg-[#f1eeee] transition-colors">
                   <td className="px-3 py-1.5 text-xs text-[#6e6e73]">{ri + 1}</td>
                   {row.map((val, ci) => (
-                    <td key={ci} className="px-3 py-1.5 text-[#fdfcfc] whitespace-nowrap font-mono text-xs">
+                    <td key={ci} className="px-3 py-1.5 text-[#201d1d] whitespace-nowrap font-mono text-xs">
                       {val === null ? <span className="text-[#6e6e73]">NULL</span> : String(val)}
                     </td>
                   ))}

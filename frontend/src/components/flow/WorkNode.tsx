@@ -73,7 +73,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
     <div
       className={nodeClassName}
       style={{
-        background: '#262222',
+        background: '#201d1d',
         border: `1px solid ${borderColor}`,
         borderRadius: 4,
         minWidth: 200,
@@ -83,7 +83,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
           ? '0 0 0 1px #007aff'
           : status === 'running'
           ? '0 0 8px rgba(0,122,255,0.3)'
-          : '0 2px 8px rgba(0,0,0,0.4)',
+          : 'none',
         overflow: 'visible',
         position: 'relative',
       }}
@@ -150,7 +150,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
                 width: 8,
                 height: 8,
                 background: '#007aff',
-                border: '1px solid #201d1d',
+                border: '1px solid #fdfcfc',
                 borderRadius: '50%',
               }}
             />
@@ -223,7 +223,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
                 width: 8,
                 height: 8,
                 background: '#007aff',
-                border: '1px solid #201d1d',
+                border: '1px solid #fdfcfc',
                 borderRadius: '50%',
               }}
             />

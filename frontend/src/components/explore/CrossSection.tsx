@@ -119,10 +119,10 @@ export function CrossSection() {
           ].map((item) => (
             <div
               key={item.label}
-              className="rounded-[4px] border border-[#403b3b] bg-[#262222] px-3 py-3"
+              className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-3"
             >
               <div className="text-xs text-[#9a9898] mb-1">{item.label}</div>
-              <div className="text-lg font-mono text-[#fdfcfc]">
+              <div className="text-lg font-mono text-[#201d1d]">
                 {Number.isFinite(item.value) ? item.value.toFixed(4) : '-'}
               </div>
             </div>
@@ -139,10 +139,10 @@ export function CrossSection() {
           ].map((item) => (
             <div
               key={item.label}
-              className="rounded-[4px] border border-[#403b3b] bg-[#262222] px-3 py-3"
+              className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-3"
             >
               <div className="text-xs text-[#9a9898] mb-1">{item.label}</div>
-              <div className="text-lg font-mono text-[#fdfcfc]">
+              <div className="text-lg font-mono text-[#201d1d]">
                 {Number.isFinite(item.value) ? item.value.toFixed(4) : '-'}
               </div>
             </div>
@@ -151,7 +151,7 @@ export function CrossSection() {
       )}
 
       {histogramData.length > 0 && (
-        <div className="rounded-[4px] border border-[#403b3b] bg-[#262222] p-4">
+        <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] p-4">
           <div className="text-sm text-[#9a9898] mb-3">分布直方图</div>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={histogramData}>
@@ -167,10 +167,10 @@ export function CrossSection() {
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: '#262222',
-                  border: '1px solid #403b3b',
+                  backgroundColor: '#fdfcfc',
+                  border: '1px solid rgba(15,0,0,0.12)',
                   borderRadius: '4px',
-                  color: '#fdfcfc',
+                  color: '#201d1d',
                 }}
               />
               <Bar dataKey="count" fill="#007aff" radius={[2, 2, 0, 0]} />

@@ -131,35 +131,35 @@ export function FlowEditor({ className }: FlowEditorProps) {
         onDrop={handleDrop}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
-        colorMode="dark"
+        colorMode="light"
         snapToGrid
         snapGrid={[16, 16]}
         connectionMode={ConnectionMode.Loose}
         fitView
         proOptions={{ hideAttribution: true }}
-        style={{ background: '#201d1d' }}
+        style={{ background: '#fdfcfc' }}
       >
         <Background
           variant={BackgroundVariant.Dots}
           gap={20}
           size={1}
-          color="#403b3b"
+          color="rgba(15,0,0,0.12)"
         />
         <Controls
           position="bottom-left"
           style={{
-            background: '#262222',
-            border: '1px solid #403b3b',
+            background: '#f1eeee',
+            border: '1px solid rgba(15,0,0,0.12)',
             borderRadius: 4,
           }}
         />
         <MiniMap
           position="bottom-right"
           nodeColor={() => '#007aff'}
-          maskColor="rgba(10, 10, 10, 0.8)"
+          maskColor="rgba(15,0,0,0.06)"
           style={{
-            background: '#262222',
-            border: '1px solid #403b3b',
+            background: '#f1eeee',
+            border: '1px solid rgba(15,0,0,0.12)',
             borderRadius: 4,
           }}
           pannable

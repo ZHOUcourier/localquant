@@ -120,8 +120,8 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         alignItems: 'center',
         gap: 12,
         padding: '8px 16px',
-        background: '#262222',
-        borderBottom: '1px solid #403b3b',
+        background: '#f1eeee',
+        borderBottom: '1px solid rgba(15,0,0,0.12)',
         height: 44,
         flexShrink: 0,
       }}
@@ -135,10 +135,10 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
           onBlur={handleNameSubmit}
           onKeyDown={handleNameKeyDown}
           style={{
-            background: '#201d1d',
+            background: '#f8f7f7',
             border: '1px solid #007aff',
             borderRadius: 4,
-            color: '#fdfcfc',
+            color: '#201d1d',
             padding: '2px 8px',
             fontSize: 13,
             fontFamily: 'inherit',
@@ -150,7 +150,7 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         <span
           onDoubleClick={() => { setDraft(workflowName); setEditing(true); }}
           style={{
-            color: '#fdfcfc',
+            color: '#201d1d',
             fontSize: 13,
             fontWeight: 600,
             cursor: 'pointer',
@@ -193,8 +193,8 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
           alignItems: 'center',
           gap: 5,
           padding: '4px 12px',
-          background: '#302c2c',
-          border: '1px solid #403b3b',
+          background: '#f8f7f7',
+          border: '1px solid rgba(15,0,0,0.12)',
           borderRadius: 4,
           color: saveBtnColor,
           fontSize: 12,

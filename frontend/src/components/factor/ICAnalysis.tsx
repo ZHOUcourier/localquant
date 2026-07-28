@@ -32,7 +32,7 @@ interface ICAnalysisProps {
 
 function StatCard({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="flex flex-col items-center rounded-[4px] border border-[#403b3b] bg-[#302c2c] px-3 py-2">
+    <div className="flex flex-col items-center rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2">
       <span className="text-xs text-[#9a9898]">{label}</span>
       <span className={`text-lg font-semibold font-mono ${color}`}>{value}</span>
     </div>
@@ -94,8 +94,8 @@ export default function ICAnalysis({ icSeries, stats, loading }: ICAnalysisProps
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: '#262222',
-                border: '1px solid #403b3b',
+                backgroundColor: '#fdfcfc',
+                border: '1px solid rgba(15,0,0,0.12)',
                 borderRadius: 4,
                 fontSize: 12,
               }}

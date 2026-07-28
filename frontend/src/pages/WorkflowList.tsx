@@ -61,7 +61,7 @@ export default function WorkflowList() {
     <div style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto' }}>
       {/* 顶部标题栏 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
-        <h1 style={{ color: '#fdfcfc', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <h1 style={{ color: '#201d1d', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Layout size={20} style={{ color: '#007aff' }} />
           工作流
         </h1>
@@ -73,8 +73,8 @@ export default function WorkflowList() {
             onClick={() => setShowTemplateMenu(!showTemplateMenu)}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: '6px 14px', background: '#302c2c', border: '1px solid #403b3b',
-              borderRadius: 4, color: '#d4d2d2', fontSize: 13, cursor: 'pointer',
+              padding: '6px 14px', background: '#f8f7f7', border: '1px solid rgba(15, 0, 0, 0.12)',
+              borderRadius: 4, color: '#424245', fontSize: 13, cursor: 'pointer',
             }}
           >
             <FolderOpen size={14} />
@@ -84,8 +84,8 @@ export default function WorkflowList() {
             <div
               style={{
                 position: 'absolute', top: '100%', right: 0, marginTop: 4,
-                background: '#262222', border: '1px solid #403b3b', borderRadius: 4,
-                minWidth: 220, zIndex: 100, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                background: '#fdfcfc', border: '1px solid rgba(15, 0, 0, 0.12)', borderRadius: 4,
+                minWidth: 220, zIndex: 100,
                 overflow: 'hidden',
               }}
             >
@@ -95,10 +95,10 @@ export default function WorkflowList() {
                   onClick={() => handleCreateFromTemplate(t.id)}
                   style={{
                     display: 'block', width: '100%', padding: '10px 14px',
-                    background: 'transparent', border: 'none', borderBottom: '1px solid #302c2c',
-                    color: '#d4d2d2', fontSize: 13, textAlign: 'left', cursor: 'pointer',
+                    background: 'transparent', border: 'none', borderBottom: '1px solid #f8f7f7',
+                    color: '#424245', fontSize: 13, textAlign: 'left', cursor: 'pointer',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#302c2c')}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#f8f7f7')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   <div style={{ fontWeight: 500 }}>{t.name}</div>
@@ -115,7 +115,7 @@ export default function WorkflowList() {
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
             padding: '6px 16px', background: '#007aff', border: 'none',
-            borderRadius: 4, color: '#201d1d', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            borderRadius: 4, color: '#fdfcfc', fontSize: 13, fontWeight: 600, cursor: 'pointer',
           }}
         >
           <Plus size={14} />
@@ -137,13 +137,13 @@ export default function WorkflowList() {
           padding: '80px 20px', color: '#9a9898',
         }}>
           <Layout size={48} style={{ color: '#403b3b', marginBottom: 16 }} />
-          <p style={{ fontSize: 15, marginBottom: 16, color: '#d4d2d2' }}>还没有工作流</p>
+          <p style={{ fontSize: 15, marginBottom: 16, color: '#424245' }}>还没有工作流</p>
           <button
             onClick={handleCreateNew}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '8px 20px', background: '#007aff', border: 'none',
-              borderRadius: 4, color: '#201d1d', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              borderRadius: 4, color: '#fdfcfc', fontSize: 13, fontWeight: 600, cursor: 'pointer',
             }}
           >
             <Plus size={14} />
@@ -164,8 +164,8 @@ export default function WorkflowList() {
               key={wf.id}
               onClick={() => navigate(`/workflow/${wf.id}`)}
               style={{
-                background: '#262222',
-                border: '1px solid #403b3b',
+                background: '#fdfcfc',
+                border: '1px solid rgba(15, 0, 0, 0.12)',
                 borderRadius: 4,
                 padding: '18px 20px',
                 cursor: 'pointer',
@@ -173,11 +173,11 @@ export default function WorkflowList() {
                 position: 'relative',
               }}
               onMouseEnter={e => {
-                e.currentTarget.style.borderColor = '#007aff';
+                e.currentTarget.style.borderColor = '#646262';
                 e.currentTarget.style.transform = 'translateY(-1px)';
               }}
               onMouseLeave={e => {
-                e.currentTarget.style.borderColor = '#403b3b';
+                e.currentTarget.style.borderColor = 'rgba(15, 0, 0, 0.12)';
                 e.currentTarget.style.transform = 'translateY(0)';
               }}
             >
@@ -195,14 +195,14 @@ export default function WorkflowList() {
                   cursor: 'pointer', opacity: 0.7,
                   transition: 'all 0.15s ease',
                 }}
-                onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#ff3b30' : '#302c2c'; }}
+                onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#ff3b30' : '#f8f7f7'; }}
                 onMouseLeave={e => { e.currentTarget.style.opacity = '0.7'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#ff3b30' : 'transparent'; }}
               >
                 <Trash2 size={14} />
               </button>
 
               {/* 名称 */}
-              <div style={{ color: '#fdfcfc', fontSize: 14, fontWeight: 600, marginBottom: 6, paddingRight: 32 }}>
+              <div style={{ color: '#201d1d', fontSize: 14, fontWeight: 600, marginBottom: 6, paddingRight: 32 }}>
                 {wf.name}
               </div>
 
@@ -218,7 +218,7 @@ export default function WorkflowList() {
 
               {/* 底部信息 */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ color: '#555', fontSize: 11 }}>
+                <span style={{ color: '#9a9898', fontSize: 11 }}>
                   {formatTime(wf.updated_at)}
                 </span>
               </div>

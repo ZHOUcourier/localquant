@@ -12,15 +12,16 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(
       <div
         ref={ref}
         className={cn(
-          'rounded-[4px] border border-[#403b3b] bg-[#262222]',
+          'rounded-[4px] border bg-[#f1eeee]',
           className
         )}
+        style={{ borderColor: 'rgba(15, 0, 0, 0.12)' }}
         {...props}
       >
         {(title || extra) && (
-          <div className="flex items-center justify-between border-b border-[#403b3b] px-3 py-2">
+          <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}>
             {title && (
-              <div className="text-sm font-medium text-[#fdfcfc]">{title}</div>
+              <div className="text-sm font-medium text-[#201d1d]">{title}</div>
             )}
             {extra && <div className="flex items-center gap-2">{extra}</div>}
           </div>

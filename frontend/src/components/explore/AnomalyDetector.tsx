@@ -107,17 +107,17 @@ export function AnomalyDetector() {
           <div className="text-xs text-[#9a9898]">
             检测到 {anomalyData.row_count} 个异常值（{result.code} / {result.field}）
           </div>
-          <div className="rounded-[4px] border border-[#403b3b] overflow-auto max-h-[500px]">
+          <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] overflow-auto max-h-[500px]">
             <table className="w-full border-collapse text-sm">
               <thead className="sticky top-0 z-10">
-                <tr className="bg-[#302c2c]">
-                  <th className="border-b border-[#403b3b] px-3 py-2 text-left text-xs font-medium text-[#9a9898] w-10">
+                <tr className="bg-[#f8f7f7]">
+                  <th className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898] w-10">
                     #
                   </th>
                   {anomalyData.columns.map((col) => (
                     <th
                       key={col}
-                      className="border-b border-[#403b3b] px-3 py-2 text-left text-xs font-medium text-[#9a9898] whitespace-nowrap"
+                      className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898] whitespace-nowrap"
                     >
                       {col}
                     </th>
@@ -126,7 +126,7 @@ export function AnomalyDetector() {
               </thead>
               <tbody>
                 {anomalyData.data.map((row, ri) => (
-                  <tr key={ri} className="border-b border-[#403b3b] hover:bg-[#363131] transition-colors">
+                  <tr key={ri} className="border-b border-[rgba(15,0,0,0.12)] hover:bg-[#f1eeee] transition-colors">
                     <td className="px-3 py-1.5 text-xs text-[#6e6e73]">{ri + 1}</td>
                     {row.map((val, ci) => {
                       const colName = anomalyData.columns[ci];
@@ -135,7 +135,7 @@ export function AnomalyDetector() {
                         <td
                           key={ci}
                           className={`px-3 py-1.5 whitespace-nowrap font-mono text-xs ${
-                            isZScore ? 'text-[#ff3b30]' : 'text-[#fdfcfc]'
+                            isZScore ? 'text-[#ff3b30]' : 'text-[#201d1d]'
                           }`}
                         >
                           {val === null ? (

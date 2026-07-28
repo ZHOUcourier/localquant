@@ -117,8 +117,8 @@ export function NodePalette() {
       style={{
         width: 200,
         flexShrink: 0,
-        background: '#262222',
-        borderRight: '1px solid #403b3b',
+        background: '#f1eeee',
+        borderRight: '1px solid rgba(15,0,0,0.12)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -133,10 +133,10 @@ export function NodePalette() {
           onChange={(e) => setSearch(e.target.value)}
           style={{
             width: '100%',
-            background: '#201d1d',
-            border: '1px solid #403b3b',
+            background: '#f8f7f7',
+            border: '1px solid rgba(15,0,0,0.12)',
             borderRadius: 4,
-            color: '#fdfcfc',
+            color: '#201d1d',
             fontSize: 12,
             padding: '5px 8px',
             outline: 'none',
@@ -149,7 +149,7 @@ export function NodePalette() {
       {/* 节点列表 */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {isLoading && (
-          <div style={{ color: '#555', fontSize: 11, textAlign: 'center', padding: 16 }}>
+          <div style={{ color: '#9a9898', fontSize: 11, textAlign: 'center', padding: 16 }}>
             加载中...
           </div>
         )}
@@ -206,7 +206,7 @@ export function NodePalette() {
                       transition: 'background 0.1s',
                     }}
                     onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLDivElement).style.background = '#302c2c';
+                      (e.currentTarget as HTMLDivElement).style.background = '#f8f7f7';
                     }}
                     onMouseLeave={(e) => {
                       (e.currentTarget as HTMLDivElement).style.background = 'transparent';
@@ -225,7 +225,7 @@ export function NodePalette() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div
                         style={{
-                          color: '#fdfcfc',
+                          color: '#201d1d',
                           fontSize: 12,
                           fontWeight: 500,
                           whiteSpace: 'nowrap',

@@ -123,11 +123,11 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {mode === 'code' && (
           <div className="flex flex-col gap-2">
             <label className="text-xs text-[#9a9898]">Python 代码</label>
-            <div className="rounded-[4px] border border-[#403b3b] overflow-hidden" style={{ height: 220 }}>
+            <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] overflow-hidden" style={{ height: 220 }}>
               <Editor
                 height="220px"
                 language="python"
-                theme="vs-dark"
+                theme="light"
                 value={code}
                 onChange={(v) => setCode(v ?? '')}
                 options={{
@@ -189,12 +189,12 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
             <ScrollArea maxHeight={200}>
               <table className="w-full border-collapse text-xs">
                 <thead>
-                  <tr className="bg-[#302c2c]">
-                    <th className="border-b border-[#403b3b] px-2 py-1.5 text-left text-[#9a9898] sticky top-0 bg-[#302c2c]">
+                  <tr className="bg-[#f8f7f7]">
+                    <th className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-left text-[#9a9898] sticky top-0 bg-[#f8f7f7]">
                       日期
                     </th>
                     {preview.stocks.map((s) => (
-                      <th key={s} className="border-b border-[#403b3b] px-2 py-1.5 text-right text-[#9a9898] sticky top-0 bg-[#302c2c]">
+                      <th key={s} className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-right text-[#9a9898] sticky top-0 bg-[#f8f7f7]">
                         {s}
                       </th>
                     ))}
@@ -202,14 +202,14 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
                 </thead>
                 <tbody>
                   {previewDates.map((d) => (
-                    <tr key={d} className="hover:bg-[#363131]">
-                      <td className="border-b border-[#403b3b] px-2 py-1 text-[#9a9898]">{d}</td>
+                    <tr key={d} className="hover:bg-[#f1eeee]">
+                      <td className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1 text-[#9a9898]">{d}</td>
                       {preview.stocks.map((s) => {
                         const v = preview.values[d]?.[s];
                         return (
                           <td
                             key={s}
-                            className={`border-b border-[#403b3b] px-2 py-1 text-right font-mono ${v != null && v > 0 ? 'text-[#30d158]' : v != null && v < 0 ? 'text-[#ff3b30]' : 'text-[#fdfcfc]'}`}
+                            className={`border-b border-[rgba(15,0,0,0.12)] px-2 py-1 text-right font-mono ${v != null && v > 0 ? 'text-[#30d158]' : v != null && v < 0 ? 'text-[#ff3b30]' : 'text-[#201d1d]'}`}
                           >
                             {v != null ? v.toFixed(3) : '-'}
                           </td>

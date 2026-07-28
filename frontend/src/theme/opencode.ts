@@ -1,17 +1,17 @@
 /**
- * OpenCode 设计系统主题
- * 暖黑背景 (#201d1d) + 暖白文字 (#fdfcfc) + Apple HIG 语义色，
+ * OpenCode 设计系统主题 (Light)
+ * 暖白背景 (#fdfcfc) + 暖黑文字 (#201d1d) + Apple HIG 语义色，
  * Berkeley Mono 单一字体，扁平无阴影，4px 圆角。
  */
 export const colors = {
   bg: {
-    primary: '#201d1d',
-    panel: '#262222',
-    element: '#302c2c',
-    hover: '#363131',
+    primary: '#fdfcfc',
+    panel: '#f1eeee',
+    element: '#f8f7f7',
+    hover: '#f1eeee',
   },
   text: {
-    primary: '#fdfcfc',
+    primary: '#201d1d',
     muted: '#9a9898',
     disabled: '#6e6e73',
   },
@@ -22,10 +22,9 @@ export const colors = {
   warning: '#ff9f0a',
   error: '#ff3b30',
   info: '#64d2ff',
-  border: '#403b3b',
+  border: 'rgba(15, 0, 0, 0.12)',
   borderOutline: '#646262',
   borderFocus: '#007aff',
-  // 节点类别色（Apple HIG 派生）
   nodeData: '#007aff',
   nodeProcess: '#30d158',
   nodeIndicator: '#ff9f0a',

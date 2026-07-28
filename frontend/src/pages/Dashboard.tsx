@@ -66,7 +66,7 @@ export default function Dashboard() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-xl font-semibold text-[#fdfcfc] mb-1">工作台</h1>
+        <h1 className="text-xl font-semibold text-[#201d1d] mb-1">工作台</h1>
         <p className="text-[13px] text-[#9a9898]">欢迎使用 LocalQuant 本地投研平台</p>
       </div>
 
@@ -75,7 +75,7 @@ export default function Dashboard() {
         {quickActions.map(({ title, description, icon: Icon, path, color }) => (
           <Card
             key={title}
-            className="cursor-pointer hover:border-[#007aff] transition-colors duration-150"
+            className="cursor-pointer hover:border-[#646262] transition-colors duration-150"
             onClick={() => navigate(path)}
           >
             <div className="flex flex-col gap-3 py-2">
@@ -83,7 +83,7 @@ export default function Dashboard() {
                 <Icon size={20} style={{ color }} />
               </div>
               <div>
-                <div className="text-sm font-medium text-[#fdfcfc] mb-1">{title}</div>
+                <div className="text-sm font-medium text-[#201d1d] mb-1">{title}</div>
                 <div className="text-[12px] text-[#9a9898] leading-relaxed">{description}</div>
               </div>
             </div>
@@ -101,12 +101,12 @@ export default function Dashboard() {
               {recentWorkflows.map(wf => (
                 <div
                   key={wf.id}
-                  className="flex items-center justify-between p-2 rounded hover:bg-[#363131] cursor-pointer transition-colors"
+                  className="flex items-center justify-between p-2 rounded hover:bg-[#f1eeee] cursor-pointer transition-colors"
                   onClick={() => navigate(`/workflow/${wf.id}`)}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <GitBranch size={14} className="text-[#007aff] flex-shrink-0" />
-                    <span className="text-sm text-[#fdfcfc] truncate">{wf.name || '未命名工作流'}</span>
+                    <span className="text-sm text-[#201d1d] truncate">{wf.name || '未命名工作流'}</span>
                   </div>
                   <span className="text-xs text-[#6e6e73] flex-shrink-0 ml-2">{formatTime(wf.updated_at)}</span>
                 </div>
@@ -122,10 +122,10 @@ export default function Dashboard() {
           ) : (
             <div className="space-y-2">
               {recentExperiments.map(exp => (
-                <div key={exp.id} className="flex items-center justify-between p-2 rounded hover:bg-[#363131] cursor-pointer transition-colors" onClick={() => navigate('/experiments')}>
+                <div key={exp.id} className="flex items-center justify-between p-2 rounded hover:bg-[#f1eeee] cursor-pointer transition-colors" onClick={() => navigate('/experiments')}>
                   <div className="flex items-center gap-2 min-w-0">
                     <FlaskConical size={14} className="text-[#30d158] flex-shrink-0" />
-                    <span className="text-sm text-[#fdfcfc] truncate">{exp.name || exp.id.slice(0, 8)}</span>
+                    <span className="text-sm text-[#201d1d] truncate">{exp.name || exp.id.slice(0, 8)}</span>
                     <Badge variant={statusVariant[exp.status] || 'default'} className="flex-shrink-0">{exp.status}</Badge>
                   </div>
                   <div className="flex gap-1 flex-shrink-0 ml-2">
@@ -151,7 +151,7 @@ export default function Dashboard() {
                 ) : (
                   <WifiOff size={16} className="text-[#ff3b30]" />
                 )}
-                <span className="text-sm text-[#fdfcfc]">QMT 连接</span>
+                <span className="text-sm text-[#201d1d]">QMT 连接</span>
               </div>
               <Badge variant={dataStatus?.qmt_connected ? 'success' : 'error'}>
                 {dataStatus?.qmt_connected ? '已连接' : '未连接'}
@@ -160,7 +160,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Database size={16} className="text-[#64d2ff]" />
-                <span className="text-sm text-[#fdfcfc]">缓存数据</span>
+                <span className="text-sm text-[#201d1d]">缓存数据</span>
               </div>
               <span className="text-sm text-[#9a9898]">
                 {dataStatus?.cache_count ?? 0} 品种 / {dataStatus?.cache_size ?? '0 B'}

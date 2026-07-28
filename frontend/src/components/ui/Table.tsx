@@ -32,12 +32,12 @@ function TableInner<T extends object>(
       {...props}
     >
       <thead>
-        <tr className="bg-[#302c2c]">
+        <tr className="bg-[#f8f7f7]">
           {columns.map((col) => (
             <th
               key={col.key}
-              className="border-b border-[#403b3b] px-3 py-2 text-left text-xs font-medium text-[#9a9898]"
-              style={{ width: col.width }}
+              className="px-3 py-2 text-left text-xs font-medium text-[#9a9898]"
+              style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)', width: col.width }}
             >
               {col.title}
             </th>
@@ -48,11 +48,12 @@ function TableInner<T extends object>(
         {dataSource.map((record, rowIndex) => (
           <tr
             key={getRowKey(record, rowIndex)}
-            className="border-b border-[#403b3b] transition-colors hover:bg-[#363131]"
+            className="transition-colors hover:bg-[#f1eeee]"
+            style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}
             {...onRow?.(record, rowIndex)}
           >
             {columns.map((col) => (
-              <td key={col.key} className="px-3 py-2 text-[#fdfcfc]">
+              <td key={col.key} className="px-3 py-2 text-[#201d1d]">
                 {col.render
                   ? col.render(record[col.dataIndex], record, rowIndex)
                   : String(record[col.dataIndex] ?? '')}

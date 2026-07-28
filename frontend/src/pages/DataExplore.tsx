@@ -18,7 +18,7 @@ export default function DataExplore() {
   return (
     <div className="flex flex-col h-full">
       <div className="mb-4">
-        <h1 className="text-xl font-semibold text-[#fdfcfc] mb-1">数据探索</h1>
+        <h1 className="text-xl font-semibold text-[#201d1d] mb-1">数据探索</h1>
         <p className="text-[13px] text-[#9a9898]">
           SQL 查询、市场扫描、横截面分析与异常检测
         </p>

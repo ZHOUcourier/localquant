@@ -25,10 +25,10 @@ const labelStyle: React.CSSProperties = {
 
 const fieldInputStyle: React.CSSProperties = {
   width: '100%',
-  background: '#201d1d',
-  border: '1px solid #403b3b',
+  background: '#f8f7f7',
+  border: '1px solid rgba(15,0,0,0.12)',
   borderRadius: 4,
-  color: '#fdfcfc',
+  color: '#201d1d',
   fontSize: 12,
   padding: '5px 8px',
   outline: 'none',
@@ -80,7 +80,7 @@ function ParamField({
           type="date"
           value={val}
           onChange={(e) => onChange(fieldKey, e.target.value)}
-          style={{ ...fieldInputStyle, colorScheme: 'dark' }}
+          style={fieldInputStyle}
         />
       </div>
     );
@@ -273,8 +273,8 @@ export function NodeConfig() {
         style={{
           width: 280,
           flexShrink: 0,
-          background: '#262222',
-          borderLeft: '1px solid #403b3b',
+          background: '#f1eeee',
+          borderLeft: '1px solid rgba(15,0,0,0.12)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -294,8 +294,8 @@ export function NodeConfig() {
       style={{
         width: 280,
         flexShrink: 0,
-        background: '#262222',
-        borderLeft: '1px solid #403b3b',
+        background: '#f1eeee',
+        borderLeft: '1px solid rgba(15,0,0,0.12)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -307,7 +307,7 @@ export function NodeConfig() {
           display: 'flex',
           alignItems: 'center',
           padding: '10px 12px',
-          borderBottom: '1px solid #403b3b',
+          borderBottom: '1px solid rgba(15,0,0,0.12)',
           gap: 8,
         }}
       >
@@ -322,7 +322,7 @@ export function NodeConfig() {
         />
         <span
           style={{
-            color: '#fdfcfc',
+            color: '#201d1d',
             fontSize: 13,
             fontWeight: 600,
             flex: 1,
@@ -371,7 +371,7 @@ export function NodeConfig() {
       <div
         style={{
           padding: '10px 14px',
-          borderTop: '1px solid #403b3b',
+          borderTop: '1px solid rgba(15,0,0,0.12)',
           flexShrink: 0,
         }}
       >

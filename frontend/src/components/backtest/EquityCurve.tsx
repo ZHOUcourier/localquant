@@ -51,13 +51,13 @@ function formatMoney(v: number) {
 const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string; color: string }>; label?: string }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded border border-[#403b3b] bg-[#262222] px-3 py-2 text-xs">
+    <div className="rounded border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-3 py-2 text-xs">
       <div className="mb-1 text-[#9a9898]">{label}</div>
       {payload.map((p, i) => (
         <div key={i} className="flex items-center gap-2">
           <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: p.color }} />
           <span className="text-[#9a9898]">{p.name}:</span>
-          <span className="font-mono text-[#fdfcfc]">
+          <span className="font-mono text-[#201d1d]">
             {p.name.includes('净值') ? formatMoney(p.value) : formatPct(p.value)}
           </span>
         </div>

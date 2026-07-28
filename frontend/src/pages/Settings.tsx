@@ -57,7 +57,7 @@ export default function Settings() {
   return (
     <div>
       <div className="mb-4">
-        <h1 className="text-xl font-semibold text-[#fdfcfc] mb-1">设置</h1>
+        <h1 className="text-xl font-semibold text-[#201d1d] mb-1">设置</h1>
         <p className="text-[13px] text-[#9a9898]">配置 QMT、AI 及服务参数</p>
       </div>
 
@@ -136,7 +136,7 @@ export default function Settings() {
               Object.entries(currentConfig).slice(0, 8).map(([key, value]) => (
                 <div key={key} className="flex items-center justify-between text-xs">
                   <span className="text-[#9a9898] font-mono">{key}</span>
-                  <span className="text-[#fdfcfc] font-mono truncate max-w-[200px] ml-2">
+                  <span className="text-[#201d1d] font-mono truncate max-w-[200px] ml-2">
                     {typeof value === 'string' && value.length > 30
                       ? value.slice(0, 30) + '...'
                       : value !== null && value !== undefined

@@ -90,13 +90,13 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
     <div className="flex flex-col gap-4 h-full">
       {/* 信号定义 */}
       <Card title="信号定义" className="flex-1 min-h-0 flex flex-col">
-        <div className="flex-1 min-h-[240px] rounded border border-[#403b3b] overflow-hidden">
+        <div className="flex-1 min-h-[240px] rounded border border-[rgba(15,0,0,0.12)] overflow-hidden">
           <Editor
             height="100%"
             defaultLanguage="python"
             value={signalCode}
             onChange={(v) => setSignalCode(v ?? '')}
-            theme="vs-dark"
+            theme="light"
             options={{
               minimap: { enabled: false },
               fontSize: 13,

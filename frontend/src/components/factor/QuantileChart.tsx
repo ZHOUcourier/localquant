@@ -41,7 +41,7 @@ const GROUP_COLORS = [
 function CumulativeCard({ label, value }: { label: string; value: string }) {
   const isPositive = parseFloat(value) > 0;
   return (
-    <div className="flex flex-col items-center rounded-[4px] border border-[#403b3b] bg-[#302c2c] px-3 py-2">
+    <div className="flex flex-col items-center rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2">
       <span className="text-xs text-[#9a9898]">{label}</span>
       <span className={`text-lg font-semibold font-mono ${isPositive ? 'text-[#30d158]' : 'text-[#ff3b30]'}`}>
         {value}
@@ -101,8 +101,8 @@ export default function QuantileChart({ data, stats, loading }: QuantileChartPro
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: '#262222',
-                border: '1px solid #403b3b',
+                backgroundColor: '#fdfcfc',
+                border: '1px solid rgba(15,0,0,0.12)',
                 borderRadius: 4,
                 fontSize: 12,
               }}

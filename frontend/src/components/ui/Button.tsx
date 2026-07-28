@@ -11,11 +11,10 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
-  // opencode 主按钮：深色背景 + 描边 + 浅色文字，hover 提亮背景
-  primary: 'bg-[#201d1d] text-[#fdfcfc] border border-[#646262] hover:bg-[#302c2c] hover:border-[#9a9898] disabled:bg-[#262222] disabled:border-[#403b3b] disabled:text-[#6e6e73]',
-  secondary: 'bg-[#302c2c] text-[#fdfcfc] border border-[#403b3b] hover:bg-[#363131] disabled:bg-[#262222] disabled:text-[#6e6e73] disabled:border-[#403b3b]',
-  ghost: 'bg-transparent text-[#fdfcfc] border border-transparent hover:bg-[#302c2c] disabled:text-[#6e6e73]',
-  danger: 'bg-[#ff3b30] text-[#fdfcfc] border border-[#ff3b30] hover:bg-[#d70015] disabled:bg-[#6e6e73] disabled:border-[#6e6e73] disabled:text-[#9a9898]',
+  primary: 'bg-[#201d1d] text-[#fdfcfc] border-none hover:bg-[#302c2c] disabled:bg-[#f1eeee] disabled:text-[#6e6e73]',
+  secondary: 'bg-transparent text-[#201d1d] border border-[#646262] hover:border-[#9a9898] hover:bg-[#f1eeee] disabled:border-[rgba(15,0,0,0.12)] disabled:text-[#6e6e73]',
+  ghost: 'bg-transparent text-[#201d1d] border border-transparent hover:bg-[#f1eeee] disabled:text-[#6e6e73]',
+  danger: 'bg-[#ff3b30] text-[#fdfcfc] border-none hover:bg-[#d70015] disabled:bg-[#6e6e73] disabled:text-[#fdfcfc]',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {

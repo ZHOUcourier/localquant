@@ -72,7 +72,7 @@ function WorkflowEditorInner() {
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: '#201d1d',
+        background: '#fdfcfc',
         overflow: 'hidden',
       }}
     >

@@ -15,7 +15,7 @@ export const ResultViewer: React.FC = () => {
     return (
       <div
         style={{
-          color: '#555',
+          color: '#9a9898',
           fontSize: 12,
           padding: 16,
           fontFamily: 'monospace',
@@ -38,7 +38,7 @@ export const ResultViewer: React.FC = () => {
     return (
       <div
         style={{
-          color: '#555',
+          color: '#9a9898',
           fontSize: 12,
           padding: 16,
           fontFamily: 'monospace',
@@ -73,11 +73,11 @@ export const ResultViewer: React.FC = () => {
                 style={{
                   padding: '4px 12px',
                   textAlign: 'left',
-                  borderBottom: '1px solid #403b3b',
+                  borderBottom: '1px solid rgba(15,0,0,0.12)',
                   color: '#9a9898',
                   fontWeight: 500,
                   whiteSpace: 'nowrap',
-                  background: '#262222',
+                  background: '#f1eeee',
                   position: 'sticky',
                   top: 0,
                 }}
@@ -95,8 +95,8 @@ export const ResultViewer: React.FC = () => {
                   key={col}
                   style={{
                     padding: '3px 12px',
-                    borderBottom: '1px solid #302c2c',
-                    color: '#d4d2d2',
+                    borderBottom: '1px solid rgba(15,0,0,0.12)',
+                    color: '#201d1d',
                     whiteSpace: 'nowrap',
                     maxWidth: 300,
                     overflow: 'hidden',

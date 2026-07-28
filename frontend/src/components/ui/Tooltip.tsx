@@ -45,9 +45,10 @@ export const Tooltip = React.forwardRef<HTMLDivElement, TooltipProps>(
         {visible && (
           <div
             className={cn(
-              'pointer-events-none absolute z-50 whitespace-nowrap rounded-[4px] border border-[#403b3b] bg-[#302c2c] px-2 py-1 text-xs text-[#fdfcfc]',
+              'pointer-events-none absolute z-50 whitespace-nowrap rounded-[4px] border bg-[#201d1d] px-2 py-1 text-xs text-[#fdfcfc]',
               placementStyles[placement]
             )}
+            style={{ borderColor: 'rgba(15, 0, 0, 0.12)' }}
           >
             {content}
           </div>

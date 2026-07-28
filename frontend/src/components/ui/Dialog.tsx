@@ -23,35 +23,40 @@ export const Dialog = React.forwardRef<HTMLDivElement, DialogProps>(
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center">
-        {/* 遮罩 */}
         <div
-          className="absolute inset-0 bg-black/60"
+          className="absolute inset-0 bg-black/40"
           onClick={onClose}
         />
-        {/* 内容 */}
         <div
           ref={ref}
           className={cn(
-            'relative z-10 min-w-[320px] max-w-[560px] rounded-[4px] border border-[#403b3b] bg-[#262222]',
+            'relative z-10 min-w-[320px] max-w-[560px] rounded-[4px] border bg-[#fdfcfc]',
             className
           )}
+          style={{ borderColor: 'rgba(15, 0, 0, 0.12)' }}
           {...props}
         >
           {title && (
-            <div className="flex items-center justify-between border-b border-[#403b3b] px-4 py-3">
-              <div className="text-sm font-medium text-[#fdfcfc]">{title}</div>
+            <div
+              className="flex items-center justify-between px-4 py-3"
+              style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}
+            >
+              <div className="text-sm font-medium text-[#201d1d]">{title}</div>
               <button
                 type="button"
-                className="text-[#9a9898] hover:text-[#fdfcfc] transition-colors cursor-pointer"
+                className="text-[#9a9898] hover:text-[#201d1d] transition-colors cursor-pointer"
                 onClick={onClose}
               >
                 ✕
               </button>
             </div>
           )}
-          <div className="px-4 py-3 text-sm text-[#fdfcfc]">{children}</div>
+          <div className="px-4 py-3 text-sm text-[#201d1d]">{children}</div>
           {footer && (
-            <div className="flex items-center justify-end gap-2 border-t border-[#403b3b] px-4 py-3">
+            <div
+              className="flex items-center justify-end gap-2 px-4 py-3"
+              style={{ borderTop: '1px solid rgba(15, 0, 0, 0.12)' }}
+            >
               {footer}
             </div>
           )}

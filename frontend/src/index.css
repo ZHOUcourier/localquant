@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg-primary: #201d1d;
-  --color-bg-panel: #262222;
-  --color-bg-element: #302c2c;
-  --color-bg-hover: #363131;
-  --color-text-primary: #fdfcfc;
+  --color-bg-primary: #fdfcfc;
+  --color-bg-panel: #f1eeee;
+  --color-bg-element: #f8f7f7;
+  --color-bg-hover: #f1eeee;
+  --color-text-primary: #201d1d;
   --color-text-muted: #9a9898;
   --color-text-disabled: #6e6e73;
   --color-accent: #007aff;
@@ -13,13 +13,12 @@
   --color-warning: #ff9f0a;
   --color-error: #ff3b30;
   --color-info: #64d2ff;
-  --color-border: #403b3b;
+  --color-border: rgba(15, 0, 0, 0.12);
   --color-border-focus: #007aff;
   --font-mono: 'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   --font-sans: 'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 
-/* 全局基础样式 — opencode: monospace 单一字体、暖黑背景、扁平无阴影 */
 html, body, #root {
   height: 100%;
   margin: 0;
@@ -31,14 +30,12 @@ html, body, #root {
   line-height: 1.5;
 }
 
-/* 链接默认下划线，呼应 opencode 文本为中心的风格 */
 a {
   color: var(--color-text-primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
-/* 滚动条样式 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -47,19 +44,17 @@ a {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #403b3b;
+  background: rgba(15, 0, 0, 0.12);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #9a9898;
 }
 
-/* 选中文字 */
 ::selection {
   background-color: rgba(0, 122, 255, 0.3);
 }
 
-/* React Flow 暗色主题适配 */
 .react-flow__edge-path {
   stroke: #9a9898;
   stroke-width: 1.5;
@@ -72,23 +67,23 @@ a {
   stroke: #007aff;
 }
 .react-flow__controls {
-  background: #262222 !important;
-  border: 1px solid #403b3b !important;
+  background: #f1eeee !important;
+  border: 1px solid rgba(15, 0, 0, 0.12) !important;
   border-radius: 4px !important;
   box-shadow: none !important;
 }
 .react-flow__controls-button {
-  background: #302c2c !important;
-  border-bottom: 1px solid #403b3b !important;
+  background: #f8f7f7 !important;
+  border-bottom: 1px solid rgba(15, 0, 0, 0.12) !important;
   fill: #9a9898 !important;
 }
 .react-flow__controls-button:hover {
-  background: #363131 !important;
-  fill: #fdfcfc !important;
+  background: #f1eeee !important;
+  fill: #201d1d !important;
 }
 .react-flow__minimap {
-  background: #262222 !important;
-  border: 1px solid #403b3b !important;
+  background: #f1eeee !important;
+  border: 1px solid rgba(15, 0, 0, 0.12) !important;
   border-radius: 4px !important;
 }
 .react-flow__handle {
@@ -98,7 +93,6 @@ a {
   outline: none;
 }
 
-/* 节点运行脉冲动画（用边框颜色变化代替阴影，保持扁平） */
 @keyframes node-pulse {
   0%, 100% { outline: 1px solid rgba(0, 122, 255, 0.25); }
   50% { outline: 1px solid rgba(0, 122, 255, 0.7); }
@@ -107,7 +101,6 @@ a {
   animation: node-pulse 1.5s ease-in-out infinite;
 }
 
-/* Loader2 旋转动画 */
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

@@ -69,7 +69,7 @@ export default function DataManagement() {
   return (
     <div>
       <div className="mb-4">
-        <h1 className="text-xl font-semibold text-[#fdfcfc] mb-1">数据管理</h1>
+        <h1 className="text-xl font-semibold text-[#201d1d] mb-1">数据管理</h1>
         <p className="text-[13px] text-[#9a9898]">管理 QMT 数据源连接与本地缓存</p>
       </div>
 
@@ -90,7 +90,7 @@ export default function DataManagement() {
                 )}
               </div>
               <span
-                className={`absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[#262222] ${
+                className={`absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[#f1eeee] ${
                   status?.qmt_connected ? 'bg-[#30d158]' : 'bg-[#ff3b30]'
                 }`}
               />
@@ -115,21 +115,21 @@ export default function DataManagement() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Database size={15} className="text-[#64d2ff]" />
-                <span className="text-sm text-[#fdfcfc]">已缓存品种</span>
+                <span className="text-sm text-[#201d1d]">已缓存品种</span>
               </div>
               <span className="text-sm font-mono text-[#007aff]">{status?.cache_count ?? 0}</span>
             </div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Database size={15} className="text-[#64d2ff]" />
-                <span className="text-sm text-[#fdfcfc]">数据总量</span>
+                <span className="text-sm text-[#201d1d]">数据总量</span>
               </div>
               <span className="text-sm font-mono text-[#007aff]">{status?.total_records?.toLocaleString() ?? '0'} 条</span>
             </div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Database size={15} className="text-[#64d2ff]" />
-                <span className="text-sm text-[#fdfcfc]">磁盘占用</span>
+                <span className="text-sm text-[#201d1d]">磁盘占用</span>
               </div>
               <span className="text-sm font-mono text-[#007aff]">{status?.cache_size ?? '0 MB'}</span>
             </div>

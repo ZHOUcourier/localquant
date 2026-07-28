@@ -26,24 +26,22 @@ export default function TopBar() {
       className="flex items-center justify-between px-4 shrink-0"
       style={{
         height: 40,
-        background: '#262222',
-        borderBottom: '1px solid #403b3b',
+        background: '#f1eeee',
+        borderBottom: '1px solid rgba(15, 0, 0, 0.12)',
       }}
     >
-      {/* Left: breadcrumb / title */}
       <div className="flex items-center gap-2">
         {location.pathname !== '/' && (
           <span className="text-[#9a9898] text-[13px]">
-            <Link to="/" className="text-[#9a9898] no-underline hover:text-[#fdfcfc]">
+            <Link to="/" className="text-[#9a9898] no-underline hover:text-[#201d1d]">
               工作台
             </Link>
             <span className="mx-1">/</span>
           </span>
         )}
-        <span className="text-[13px] text-[#fdfcfc]">{title}</span>
+        <span className="text-[13px] text-[#201d1d]">{title}</span>
       </div>
 
-      {/* Right: QMT connection status */}
       <div className="flex items-center gap-1.5">
         <span
           className="inline-block rounded-full"

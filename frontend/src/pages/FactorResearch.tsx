@@ -44,7 +44,7 @@ interface CorrData {
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="flex h-[280px] items-center justify-center rounded-[4px] border border-[#403b3b]">
+    <div className="flex h-[280px] items-center justify-center rounded-[4px] border border-[rgba(15,0,0,0.12)]">
       <span className="font-mono text-xs text-[#9a9898]">{text}</span>
     </div>
   );
@@ -229,7 +229,7 @@ export default function FactorResearch() {
 
   return (
     <div className="flex flex-col gap-4 p-4 h-full overflow-auto">
-      <h1 className="text-xl font-semibold text-[#fdfcfc]">因子研究</h1>
+      <h1 className="text-xl font-semibold text-[#201d1d]">因子研究</h1>
 
       {/* 上半部分: 因子构建器 + 因子评估 */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -261,7 +261,7 @@ export default function FactorResearch() {
             )}
             {evalTab === 'correlation' && (
               corrData && corrOption ? (
-                <div className="rounded-[4px] border border-[#403b3b] p-2">
+                <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] p-2">
                   <ReactEChartsCore
                     echarts={echarts}
                     option={corrOption}

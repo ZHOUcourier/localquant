@@ -27,14 +27,13 @@ export default function Sidebar() {
       className="flex flex-col h-full shrink-0"
       style={{
         width: 200,
-        background: '#262222',
-        borderRight: '1px solid #403b3b',
+        background: '#f1eeee',
+        borderRight: '1px solid rgba(15, 0, 0, 0.12)',
       }}
     >
-      {/* Logo */}
       <div
         className="flex items-center h-10 px-4 shrink-0"
-        style={{ borderBottom: '1px solid #403b3b' }}
+        style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}
       >
         <span
           className="text-base font-bold tracking-wide"
@@ -44,7 +43,6 @@ export default function Sidebar() {
         </span>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 py-2 overflow-y-auto">
         {navItems.map(({ to, icon: Icon, label, end }) => (
           <NavLink
@@ -54,8 +52,8 @@ export default function Sidebar() {
             className={({ isActive }) =>
               `relative flex items-center gap-2 px-4 no-underline transition-colors duration-100 ${
                 isActive
-                  ? 'text-[#fdfcfc] bg-[#302c2c]'
-                  : 'text-[#9a9898] hover:text-[#fdfcfc] hover:bg-[#302c2c]'
+                  ? 'text-[#201d1d] bg-[#f8f7f7]'
+                  : 'text-[#9a9898] hover:text-[#201d1d] hover:bg-[#f8f7f7]'
               }`
             }
             style={{ height: 36 }}
@@ -79,10 +77,9 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Version */}
       <div
         className="shrink-0 px-4 py-2 text-[11px]"
-        style={{ color: '#6e6e73', borderTop: '1px solid #403b3b' }}
+        style={{ color: '#6e6e73', borderTop: '1px solid rgba(15, 0, 0, 0.12)' }}
       >
         v0.1.0
       </div>

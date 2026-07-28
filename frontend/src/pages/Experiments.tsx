@@ -184,7 +184,7 @@ export default function Experiments() {
           <div className="flex gap-2 flex-wrap">
             {Object.entries(m).slice(0, 3).map(([k, v]) => (
               <span key={k} className="text-xs text-[#9a9898]">
-                {k}: <span className="text-[#fdfcfc]">{typeof v === 'number' ? v.toFixed(4) : String(v)}</span>
+                {k}: <span className="text-[#201d1d]">{typeof v === 'number' ? v.toFixed(4) : String(v)}</span>
               </span>
             ))}
           </div>
@@ -207,7 +207,7 @@ export default function Experiments() {
                 autoFocus
               />
               <button onClick={saveNote} className="text-[#30d158] hover:text-[#28b04a] cursor-pointer"><Check size={14} /></button>
-              <button onClick={() => setNoteEditId(null)} className="text-[#9a9898] hover:text-[#fdfcfc] cursor-pointer"><X size={14} /></button>
+              <button onClick={() => setNoteEditId(null)} className="text-[#9a9898] hover:text-[#201d1d] cursor-pointer"><X size={14} /></button>
             </div>
           );
         }
@@ -230,7 +230,7 @@ export default function Experiments() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-xl font-semibold text-[#fdfcfc] mb-1">实验管理</h1>
+          <h1 className="text-xl font-semibold text-[#201d1d] mb-1">实验管理</h1>
           <p className="text-[13px] text-[#9a9898]">共 {experiments.length} 条实验记录</p>
         </div>
         <Button
@@ -264,14 +264,14 @@ export default function Experiments() {
           <div className="space-y-4 max-h-[60vh] overflow-auto">
             {/* 参数差异 */}
             <div>
-              <h3 className="text-sm font-medium text-[#fdfcfc] mb-2">参数差异</h3>
+              <h3 className="text-sm font-medium text-[#201d1d] mb-2">参数差异</h3>
               {Object.keys(compareResult.param_diffs).length === 0 ? (
                 <p className="text-xs text-[#6e6e73]">无参数差异</p>
               ) : (
-                <div className="rounded border border-[#403b3b] overflow-hidden">
+                <div className="rounded border border-[rgba(15,0,0,0.12)] overflow-hidden">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="bg-[#302c2c]">
+                      <tr className="bg-[#f8f7f7]">
                         <th className="px-2 py-1.5 text-left text-[#9a9898] font-medium">参数</th>
                         {compareResult.experiments.map(e => (
                           <th key={e.id} className="px-2 py-1.5 text-left text-[#9a9898] font-medium truncate max-w-[120px]">
@@ -282,7 +282,7 @@ export default function Experiments() {
                     </thead>
                     <tbody>
                       {Object.entries(compareResult.param_diffs).map(([key, vals]) => (
-                        <tr key={key} className="border-t border-[#403b3b]">
+                        <tr key={key} className="border-t border-[rgba(15,0,0,0.12)]">
                           <td className="px-2 py-1 text-[#007aff] font-mono">{key}</td>
                           {compareResult.experiments.map(e => {
                             const v = (vals as Record<string, unknown>)[e.id];
@@ -291,7 +291,7 @@ export default function Experiments() {
                             return (
                               <td
                                 key={e.id}
-                                className={`px-2 py-1 font-mono ${isDiff ? 'bg-[#007aff]/10 text-[#007aff]' : 'text-[#fdfcfc]'}`}
+                                className={`px-2 py-1 font-mono ${isDiff ? 'bg-[#007aff]/10 text-[#007aff]' : 'text-[#201d1d]'}`}
                               >
                                 {v !== undefined ? JSON.stringify(v) : '-'}
                               </td>
@@ -307,14 +307,14 @@ export default function Experiments() {
 
             {/* 指标对比 */}
             <div>
-              <h3 className="text-sm font-medium text-[#fdfcfc] mb-2">指标对比</h3>
+              <h3 className="text-sm font-medium text-[#201d1d] mb-2">指标对比</h3>
               {Object.keys(compareResult.metric_comparison).length === 0 ? (
                 <p className="text-xs text-[#6e6e73]">无指标数据</p>
               ) : (
-                <div className="rounded border border-[#403b3b] overflow-hidden">
+                <div className="rounded border border-[rgba(15,0,0,0.12)] overflow-hidden">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="bg-[#302c2c]">
+                      <tr className="bg-[#f8f7f7]">
                         <th className="px-2 py-1.5 text-left text-[#9a9898] font-medium">指标</th>
                         {compareResult.experiments.map(e => (
                           <th key={e.id} className="px-2 py-1.5 text-left text-[#9a9898] font-medium truncate max-w-[120px]">
@@ -325,12 +325,12 @@ export default function Experiments() {
                     </thead>
                     <tbody>
                       {Object.entries(compareResult.metric_comparison).map(([key, vals]) => (
-                        <tr key={key} className="border-t border-[#403b3b]">
+                        <tr key={key} className="border-t border-[rgba(15,0,0,0.12)]">
                           <td className="px-2 py-1 text-[#64d2ff] font-medium">{key}</td>
                           {compareResult.experiments.map(e => {
                             const v = (vals as Record<string, unknown>)[e.id];
                             return (
-                              <td key={e.id} className="px-2 py-1 font-mono text-[#fdfcfc]">
+                              <td key={e.id} className="px-2 py-1 font-mono text-[#201d1d]">
                                 {v !== undefined ? (typeof v === 'number' ? v.toFixed(6) : JSON.stringify(v)) : '-'}
                               </td>
                             );

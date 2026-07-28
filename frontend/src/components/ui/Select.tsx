@@ -55,10 +55,11 @@ export const Select = React.forwardRef<HTMLDivElement, SelectProps>(
         <button
           type="button"
           className={cn(
-            'flex w-full items-center justify-between rounded-[4px] border border-[#403b3b] bg-[#302c2c] px-3 py-1.5 text-sm text-[#fdfcfc] transition-colors cursor-pointer',
+            'flex w-full items-center justify-between rounded-[6px] border bg-[#f8f7f7] px-3 py-1.5 text-sm text-[#201d1d] transition-colors cursor-pointer',
             open && 'border-[#007aff]',
             disabled && 'opacity-50 cursor-not-allowed'
           )}
+          style={{ borderColor: open ? '#007aff' : 'rgba(15, 0, 0, 0.12)' }}
           disabled={disabled}
           onClick={() => setOpen(!open)}
         >
@@ -68,7 +69,10 @@ export const Select = React.forwardRef<HTMLDivElement, SelectProps>(
           <span className="ml-2 text-[#9a9898]">▾</span>
         </button>
         {open && (
-          <div className="absolute z-50 mt-1 w-full rounded-[4px] border border-[#403b3b] bg-[#262222] py-1">
+          <div
+            className="absolute z-50 mt-1 w-full rounded-[4px] border bg-[#fdfcfc] py-1"
+            style={{ borderColor: 'rgba(15, 0, 0, 0.12)' }}
+          >
             {options.map((option) => (
               <div
                 key={option.value}
@@ -77,8 +81,8 @@ export const Select = React.forwardRef<HTMLDivElement, SelectProps>(
                   option.disabled
                     ? 'text-[#6e6e73] cursor-not-allowed'
                     : option.value === currentValue
-                    ? 'bg-[#363131] text-[#007aff]'
-                    : 'text-[#fdfcfc] hover:bg-[#363131]'
+                    ? 'bg-[#f1eeee] text-[#007aff]'
+                    : 'text-[#201d1d] hover:bg-[#f1eeee]'
                 )}
                 onClick={() => handleSelect(option.value, option.disabled)}
               >

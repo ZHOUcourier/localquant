@@ -175,7 +175,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
                 className={`rounded-[4px] border px-2 py-1 text-xs cursor-pointer transition-colors ${
                   category === c
                     ? 'border-[#007aff] bg-[#007aff]/10 text-[#007aff]'
-                    : 'border-[#403b3b] bg-[#302c2c] text-[#9a9898] hover:text-[#fdfcfc]'
+                    : 'border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] text-[#9a9898] hover:text-[#201d1d]'
                 }`}
                 onClick={() => setCategory(c)}
               >
@@ -189,11 +189,11 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
         <ScrollArea maxHeight={400}>
           <table className="w-full border-collapse text-sm">
             <thead>
-              <tr className="bg-[#302c2c]">
+              <tr className="bg-[#f8f7f7]">
                 {columns.map((col) => (
                   <th
                     key={col.key}
-                    className="border-b border-[#403b3b] px-3 py-2 text-left text-xs font-medium text-[#9a9898]"
+                    className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898]"
                     style={{ width: col.width }}
                   >
                     {col.title}
@@ -210,9 +210,9 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
                 </tr>
               ) : (
                 filtered.map((record, idx) => (
-                  <tr key={record.id ?? idx} className="border-b border-[#403b3b] transition-colors hover:bg-[#363131]">
+                  <tr key={record.id ?? idx} className="border-b border-[rgba(15,0,0,0.12)] transition-colors hover:bg-[#f1eeee]">
                     {columns.map((col) => (
-                      <td key={col.key} className="px-3 py-2 text-[#fdfcfc]">
+                      <td key={col.key} className="px-3 py-2 text-[#201d1d]">
                         {col.render
                           ? col.render(record)
                           : String((record as unknown as Record<string, unknown>)[col.dataIndex] ?? '')}
@@ -261,7 +261,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
                   className={`rounded-[4px] border px-2 py-1 text-xs cursor-pointer transition-colors ${
                     form.category === c
                       ? 'border-[#007aff] bg-[#007aff]/10 text-[#007aff]'
-                      : 'border-[#403b3b] bg-[#302c2c] text-[#9a9898] hover:text-[#fdfcfc]'
+                      : 'border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] text-[#9a9898] hover:text-[#201d1d]'
                   }`}
                   onClick={() => setForm({ ...form, category: c })}
                 >
