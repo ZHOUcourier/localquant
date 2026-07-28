@@ -33,7 +33,7 @@ class ICOutput(BaseModel):
 
 @work_node(
     name="IC 计算",
-    group="05-因子分析",
+    group="06-因子分析",
     box_color="#FF9800",
     description="计算因子IC/RankIC，评估因子预测能力",
 )
@@ -122,7 +122,7 @@ class GroupReturnOutput(BaseModel):
 
 @work_node(
     name="分组收益",
-    group="05-因子分析",
+    group="06-因子分析",
     box_color="#FF9800",
     description="按因子值分组计算各组收益率，分析因子单调性",
 )
@@ -201,7 +201,7 @@ class FactorCorrelationOutput(BaseModel):
 
 @work_node(
     name="因子相关性",
-    group="05-因子分析",
+    group="06-因子分析",
     box_color="#FF9800",
     description="计算多因子间的相关性矩阵，辅助因子筛选",
 )
@@ -256,7 +256,7 @@ class FactorDecayOutput(BaseModel):
 
 @work_node(
     name="因子衰减",
-    group="05-因子分析",
+    group="06-因子分析",
     box_color="#FF9800",
     description="分析因子IC随时间衰减速率，确定调仓周期",
 )
@@ -341,7 +341,7 @@ class FactorCombineOutput(BaseModel):
 
 @work_node(
     name="多因子合成",
-    group="05-因子分析",
+    group="06-因子分析",
     box_color="#FF9800",
     description="将多个因子按权重合成为综合因子",
 )

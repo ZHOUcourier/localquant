@@ -27,6 +27,8 @@ export interface PluginNodeSchema {
   type_name: string;
   description: string;
   box_color: string;
+  is_custom?: boolean;
+  base_name?: string;
   input_schema: {
     properties: Record<string, SchemaProperty>;
     required?: string[];

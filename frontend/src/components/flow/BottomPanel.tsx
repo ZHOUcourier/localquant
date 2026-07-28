@@ -23,7 +23,7 @@ export const BottomPanel: React.FC = () => {
         borderTop: '1px solid rgba(15,0,0,0.12)',
         display: 'flex',
         flexDirection: 'column',
-        height: expanded ? 250 : 40,
+        height: expanded ? (activeTab === 'output' ? 400 : 250) : 40,
         transition: 'height 0.2s ease',
         overflow: 'hidden',
       }}

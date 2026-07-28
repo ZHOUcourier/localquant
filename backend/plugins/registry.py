@@ -10,7 +10,7 @@ ALL_WORK_NODES: dict[str, Type[BaseWorkNode]] = {}
 
 def work_node(
     name: Optional[str] = None,
-    group: str = "自定义节点",
+    group: str = "99-自定义节点",
     type: str = "general",
     box_color: str = "black",
     description: str = "",
@@ -18,7 +18,7 @@ def work_node(
     """装饰器 — 注册工作流节点到全局注册表
 
     用法：
-        @work_node(name="因子构建", group="04-因子构建", box_color="green")
+        @work_node(name="因子构建", group="05-因子构建", box_color="green")
         class FactorBuildNode(BaseWorkNode):
             ...
     """

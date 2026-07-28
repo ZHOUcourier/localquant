@@ -312,7 +312,30 @@ async def run_stream(workflow_id: str) -> AsyncGenerator[str, None]:
 
 
 async def import_workflow(data: dict[str, Any]) -> dict[str, Any]:
-    """从 JSON 数据导入工作流"""
+    """从 JSON 数据导入工作流
+
+    支持两种格式：
+    - 单个工作流 {name, description, nodes, links}
+    - 批量导出文件 {workflows: [{...}, ...]}（返回第一个，附 imported_count）
+    """
+    if isinstance(data.get("workflows"), list):
+        created = []
+        for item in data["workflows"]:
+            if not isinstance(item, dict):
+                continue
+            wf = await create_workflow(
+                name=item.get("name", "导入的工作流"),
+                description=item.get("description", ""),
+                nodes=item.get("nodes", []),
+                links=item.get("links", []),
+            )
+            created.append(wf)
+        if not created:
+            raise ValueError("批量导入文件中没有有效的工作流")
+        first = created[0]
+        first["imported_count"] = len(created)
+        return first
+
     name = data.get("name", "导入的工作流")
     description = data.get("description", "")
     nodes = data.get("nodes", [])
@@ -396,3 +419,141 @@ async def list_runs(workflow_id: str) -> list[dict[str, Any]]:
         return results
     finally:
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# 节点输出预览（供前端富媒体展示：表格/曲线/指标卡/图片）
+# ---------------------------------------------------------------------------
+
+
+def _df_preview(df, max_rows: int = 200) -> dict[str, Any]:
+    """DataFrame → 表格预览（含索引列，NaN → None）"""
+    import pandas as pd  # noqa: F401
+
+    head = df.head(max_rows).reset_index()
+    rows = json.loads(
+        head.to_json(orient="records", force_ascii=False, date_format="iso")
+    )
+    return {
+        "kind": "table",
+        "columns": [str(c) for c in head.columns],
+        "rows": rows,
+        "shape": [int(df.shape[0]), int(df.shape[1])],
+    }
+
+
+def _is_number(v: Any) -> bool:
+    import numpy as np
+
+    return isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(
+        v, bool
+    )
+
+
+def _keys_look_like_dates(keys: list) -> bool:
+    """采样判断 dict 键是否为日期/时间类型（用于识别时间序列）"""
+    import pandas as pd
+
+    sample = [str(k) for k in keys[:5]]
+    if not sample:
+        return False
+    for k in sample:
+        try:
+            pd.to_datetime(k)
+        except Exception:
+            return False
+    return True
+
+
+def _field_preview(value: Any) -> dict[str, Any]:
+    """将单个输出字段转为前端可渲染的预览结构
+
+    kind:
+      - table   表格 {columns, rows, shape}
+      - series  数值序列 {x, y}（如净值/回撤曲线）
+      - metrics 指标字典 {data}
+      - image   base64 图片 {data}
+      - scalar  标量 {data}
+      - json    其他 {data}
+    """
+    import pandas as pd
+
+    if isinstance(value, pd.DataFrame):
+        return _df_preview(value)
+    if isinstance(value, pd.Series):
+        return _df_preview(value.to_frame())
+    if isinstance(value, str):
+        if value.startswith("data:image"):
+            return {"kind": "image", "data": value}
+        return {"kind": "scalar", "data": value}
+    if isinstance(value, bool) or _is_number(value):
+        return {"kind": "scalar", "data": float(value) if _is_number(value) else value}
+    if isinstance(value, dict):
+        if not value:
+            return {"kind": "json", "data": {}}
+        vals = list(value.values())
+        # dict of dict → 表格（如 positions）
+        if all(isinstance(v, dict) for v in vals):
+            try:
+                return _df_preview(pd.DataFrame(value).T)
+            except Exception:
+                pass
+        # 纯数值 dict：日期键长序列 → 曲线，否则 → 指标卡/曲线兜底
+        if all(_is_number(v) for v in vals):
+            keys = list(value.keys())
+            if len(value) >= 8 and (_keys_look_like_dates(keys) or len(value) >= 50):
+                return {
+                    "kind": "series",
+                    "x": [str(k) for k in keys],
+                    "y": [float(v) for v in vals],
+                }
+            return {
+                "kind": "metrics",
+                "data": {str(k): float(v) for k, v in value.items()},
+            }
+        return {
+            "kind": "json",
+            "data": json.loads(json.dumps(value, ensure_ascii=False, default=str)),
+        }
+    if isinstance(value, list):
+        if value and all(isinstance(v, dict) for v in value):
+            try:
+                return _df_preview(pd.DataFrame(value))
+            except Exception:
+                pass
+        # base64 图片列表
+        if value and all(
+            isinstance(v, str) and v.startswith("data:image") for v in value
+        ):
+            return {"kind": "images", "data": value[:10]}
+        return {
+            "kind": "json",
+            "data": json.loads(
+                json.dumps(value[:500], ensure_ascii=False, default=str)
+            ),
+        }
+    return {"kind": "json", "data": str(value)[:2000]}
+
+
+async def get_node_output_preview(run_id: str, node_uuid: str) -> dict[str, Any] | None:
+    """读取运行产物 pkl，转为逐字段的预览结构；产物不存在返回 None"""
+    import pickle
+
+    pkl_path = settings.output_dir / run_id / f"{node_uuid}.pkl"
+    if not pkl_path.exists():
+        return None
+    with open(pkl_path, "rb") as f:
+        output: dict[str, Any] = pickle.load(f)
+    if not isinstance(output, dict):
+        output = {"output": output}
+
+    fields = []
+    for key, value in output.items():
+        try:
+            preview = _field_preview(value)
+        except Exception as e:
+            preview = {"kind": "json", "data": f"<无法预览: {e}>"}
+        preview["name"] = str(key)
+        fields.append(preview)
+
+    return {"run_id": run_id, "node_uuid": node_uuid, "fields": fields}

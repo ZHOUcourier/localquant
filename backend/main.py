@@ -47,6 +47,7 @@ app.add_middleware(
 
 # 路由注册
 from backend.routes import (
+    ai,
     backtest,
     data,
     experiment,
@@ -67,6 +68,7 @@ app.include_router(factor.router, prefix="/api/factor", tags=["factor"])
 app.include_router(backtest.router, prefix="/api/backtest", tags=["backtest"])
 app.include_router(experiment.router, prefix="/api/experiment", tags=["experiment"])
 app.include_router(settings_routes.router, prefix="/api/config", tags=["config"])
+app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 
 
 @app.get("/", include_in_schema=False)

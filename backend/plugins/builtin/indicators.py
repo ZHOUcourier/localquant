@@ -39,7 +39,7 @@ class MAOutput(BaseModel):
 
 @work_node(
     name="MA/EMA 均线",
-    group="03-技术指标",
+    group="04-技术指标",
     box_color="#2196F3",
     description="计算移动平均线(MA)和指数移动平均线(EMA)",
 )
@@ -103,7 +103,7 @@ class MACDOutput(BaseModel):
 
 @work_node(
     name="MACD",
-    group="03-技术指标",
+    group="04-技术指标",
     box_color="#2196F3",
     description="计算MACD指标，包括DIF、DEA和柱状图",
 )
@@ -160,7 +160,7 @@ class RSIOutput(BaseModel):
 
 @work_node(
     name="RSI",
-    group="03-技术指标",
+    group="04-技术指标",
     box_color="#2196F3",
     description="计算相对强弱指标(RSI)，衡量价格涨跌力度",
 )
@@ -212,7 +212,7 @@ class KDJOutput(BaseModel):
 
 @work_node(
     name="KDJ",
-    group="03-技术指标",
+    group="04-技术指标",
     box_color="#2196F3",
     description="计算KDJ随机指标，判断超买超卖信号",
 )
@@ -286,7 +286,7 @@ class BOLLOutput(BaseModel):
 
 @work_node(
     name="BOLL 布林带",
-    group="03-技术指标",
+    group="04-技术指标",
     box_color="#2196F3",
     description="计算布林带指标，包括上轨、中轨、下轨",
 )
@@ -342,7 +342,7 @@ class ATROutput(BaseModel):
 
 @work_node(
     name="ATR",
-    group="03-技术指标",
+    group="04-技术指标",
     box_color="#2196F3",
     description="计算平均真实波幅(ATR)，衡量市场波动性",
 )
@@ -395,7 +395,7 @@ class CustomFormulaOutput(BaseModel):
 
 @work_node(
     name="自定义公式指标",
-    group="03-技术指标",
+    group="04-技术指标",
     box_color="#2196F3",
     description="用自定义公式表达式计算技术指标",
 )

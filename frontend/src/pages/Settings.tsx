@@ -9,6 +9,8 @@ interface ConfigData {
   openai_api_key_masked: string;
   openai_api_key_set: boolean;
   openai_base_url: string;
+  ai_provider: string;
+  ai_model: string;
   factor_service_url: string;
   backend_port: number;
   frontend_port: number;
@@ -26,6 +28,16 @@ interface DataStatus {
   [key: string]: unknown;
 }
 
+// 主流厂商预置（均为 OpenAI 兼容接口）；选择后自动填入 Base URL 与默认模型
+const AI_PROVIDERS: { key: string; label: string; baseUrl: string; model: string }[] = [
+  { key: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  { key: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  { key: 'moonshot', label: '月之暗面 Kimi', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  { key: 'qwen', label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  { key: 'zhipu', label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+  { key: 'custom', label: '自定义', baseUrl: '', model: '' },
+];
+
 export default function Settings() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState({
@@ -33,6 +45,8 @@ export default function Settings() {
     qmt_data_dir: '',
     openai_api_key: '', // 留空表示不修改
     openai_base_url: '',
+    ai_provider: 'openai',
+    ai_model: '',
     factor_service_url: '',
     backend_port: 8000,
     frontend_port: 5173,
@@ -55,6 +69,8 @@ export default function Settings() {
         qmt_path: config.qmt_path ?? '',
         qmt_data_dir: config.qmt_data_dir ?? '',
         openai_base_url: config.openai_base_url ?? '',
+        ai_provider: config.ai_provider ?? 'openai',
+        ai_model: config.ai_model ?? '',
         factor_service_url: config.factor_service_url ?? '',
         backend_port: config.backend_port ?? 8000,
         frontend_port: config.frontend_port ?? 5173,
@@ -69,6 +85,8 @@ export default function Settings() {
         qmt_path: form.qmt_path,
         qmt_data_dir: form.qmt_data_dir,
         openai_base_url: form.openai_base_url,
+        ai_provider: form.ai_provider,
+        ai_model: form.ai_model,
         factor_service_url: form.factor_service_url,
         backend_port: form.backend_port,
         frontend_port: form.frontend_port,
@@ -95,6 +113,18 @@ export default function Settings() {
 
   const updateField = (key: string, value: string | number) => {
     setForm(prev => ({ ...prev, [key]: value }));
+    saveMutation.reset();
+  };
+
+  // 切换厂商预置：自动填入对应 Base URL 与默认模型
+  const selectProvider = (key: string) => {
+    const preset = AI_PROVIDERS.find(p => p.key === key);
+    setForm(prev => ({
+      ...prev,
+      ai_provider: key,
+      openai_base_url: preset?.baseUrl ?? prev.openai_base_url,
+      ai_model: preset?.model ?? prev.ai_model,
+    }));
     saveMutation.reset();
   };
 
@@ -142,6 +172,25 @@ export default function Settings() {
         <Card title="AI 配置">
           <div className="space-y-3">
             <div>
+              <label className="block text-xs text-[#646262] mb-1">服务商</label>
+              <div className="flex flex-wrap gap-1.5">
+                {AI_PROVIDERS.map(p => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => selectProvider(p.key)}
+                    className={`rounded-[4px] px-2.5 py-1 text-xs transition-colors cursor-pointer ${
+                      form.ai_provider === p.key
+                        ? 'bg-[#201d1d] text-[#fdfcfc]'
+                        : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
               <label className="block text-xs text-[#646262] mb-1">
                 API Key
                 {config?.openai_api_key_set && (
@@ -157,13 +206,29 @@ export default function Settings() {
                 placeholder={config?.openai_api_key_set ? '留空则保持不变' : 'sk-...'}
               />
             </div>
-            <div>
-              <label className="block text-xs text-[#646262] mb-1">Base URL</label>
-              <Input
-                value={form.openai_base_url}
-                onChange={e => updateField('openai_base_url', e.target.value)}
-                placeholder="如: https://api.openai.com/v1"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-[#646262] mb-1">Base URL</label>
+                <Input
+                  value={form.openai_base_url}
+                  onChange={e => updateField('openai_base_url', e.target.value)}
+                  placeholder="如: https://api.openai.com/v1"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-[#646262] mb-1">模型</label>
+                <Input
+                  value={form.ai_model}
+                  onChange={e => updateField('ai_model', e.target.value)}
+                  placeholder="如: gpt-4o-mini"
+                />
+              </div>
+            </div>
+            <div className="flex items-start gap-1.5 pt-1">
+              <Info size={13} className="mt-0.5 shrink-0 text-[#9a9898]" />
+              <span className="text-xs text-[#9a9898]">
+                用于工作流编辑器的“AI 生成工作流”与节点代码 AI 修改；均走 OpenAI 兼容接口，自建服务选“自定义”并填入地址
+              </span>
             </div>
           </div>
         </Card>

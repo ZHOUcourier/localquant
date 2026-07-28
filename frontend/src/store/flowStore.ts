@@ -25,6 +25,7 @@ interface FlowState {
   // 运行状态
   isRunning: boolean;
   nodeStatuses: Record<string, NodeStatus>;
+  currentRunId: string | null;
 
   // 脏状态追踪
   isDirty: boolean;
@@ -40,6 +41,7 @@ interface FlowState {
   setNodeStatus: (nodeId: string, status: NodeStatus) => void;
   resetStatuses: () => void;
   setRunning: (running: boolean) => void;
+  setCurrentRunId: (runId: string | null) => void;
 
   // 脏状态操作
   markDirty: () => void;
@@ -62,6 +64,7 @@ export const useFlowStore = create<FlowState>((set) => ({
 
   isRunning: false,
   nodeStatuses: {},
+  currentRunId: null,
 
   isDirty: false,
 
@@ -92,6 +95,8 @@ export const useFlowStore = create<FlowState>((set) => ({
 
   setRunning: (running) => set({ isRunning: running }),
 
+  setCurrentRunId: (runId) => set({ currentRunId: runId }),
+
   markDirty: () => set({ isDirty: true }),
 
   markClean: () => set({ isDirty: false }),
@@ -105,6 +110,7 @@ export const useFlowStore = create<FlowState>((set) => ({
       selectedNodeId: null,
       isRunning: false,
       nodeStatuses: {},
+      currentRunId: null,
       isDirty: false,
     }),
 

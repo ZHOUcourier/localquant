@@ -19,6 +19,8 @@ EDITABLE_KEYS = {
     "QMT_DATA_DIR": "qmt_data_dir",
     "OPENAI_API_KEY": "openai_api_key",
     "OPENAI_BASE_URL": "openai_base_url",
+    "AI_PROVIDER": "ai_provider",
+    "AI_MODEL": "ai_model",
     "FACTOR_SERVICE_URL": "factor_service_url",
     "BACKEND_PORT": "backend_port",
     "FRONTEND_PORT": "frontend_port",
@@ -30,6 +32,8 @@ class ConfigUpdate(BaseModel):
     qmt_data_dir: Optional[str] = None
     openai_api_key: Optional[str] = None
     openai_base_url: Optional[str] = None
+    ai_provider: Optional[str] = None
+    ai_model: Optional[str] = None
     factor_service_url: Optional[str] = None
     backend_port: Optional[int] = None
     frontend_port: Optional[int] = None
@@ -53,6 +57,8 @@ async def get_config():
         "openai_api_key_masked": _mask_key(settings.openai_api_key),
         "openai_api_key_set": bool(settings.openai_api_key),
         "openai_base_url": settings.openai_base_url,
+        "ai_provider": settings.ai_provider,
+        "ai_model": settings.ai_model,
         "factor_service_url": settings.factor_service_url,
         "backend_port": settings.backend_port,
         "frontend_port": settings.frontend_port,

@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useFlowStore } from '@/store/flowStore';
 
 export function useExecution() {
-  const { setNodeStatus, resetStatuses, setRunning } = useFlowStore();
+  const { setNodeStatus, resetStatuses, setRunning, setCurrentRunId } = useFlowStore();
   const abortRef = useRef<AbortController | null>(null);
 
   const runWorkflow = useCallback(
@@ -64,6 +64,10 @@ export function useExecution() {
 
               // 根据 event 类型更新节点状态
               switch (eventType) {
+                case 'execution_order':
+                  // 记录本次运行 id，供节点输出预览拉取产物
+                  if (data.run_id) setCurrentRunId(data.run_id);
+                  break;
                 case 'node_start':
                   if (data.node_uuid) setNodeStatus(data.node_uuid, 'running');
                   break;
@@ -91,7 +95,7 @@ export function useExecution() {
         abortRef.current = null;
       }
     },
-    [setNodeStatus, resetStatuses, setRunning],
+    [setNodeStatus, resetStatuses, setRunning, setCurrentRunId],
   );
 
   const stopExecution = useCallback(() => {

@@ -38,7 +38,7 @@ class FactorFormulaOutput(BaseModel):
 
 @work_node(
     name="因子构建（公式）",
-    group="04-因子构建",
+    group="05-因子构建",
     box_color="#4CAF50",
     description="通过公式表达式构建因子，自动生成截面因子值",
 )
@@ -129,7 +129,7 @@ class FactorCodeOutput(BaseModel):
 
 @work_node(
     name="因子构建（代码）",
-    group="04-因子构建",
+    group="05-因子构建",
     box_color="#4CAF50",
     description="通过自定义Python代码构建复杂因子逻辑",
 )
@@ -228,7 +228,7 @@ class FactorStandardizeOutput(BaseModel):
 
 @work_node(
     name="因子标准化",
-    group="04-因子构建",
+    group="05-因子构建",
     box_color="#4CAF50",
     description="对因子值进行Z-Score等标准化处理，消除量纲差异",
 )
@@ -300,7 +300,7 @@ class FactorNeutralizeOutput(BaseModel):
 
 @work_node(
     name="因子中性化",
-    group="04-因子构建",
+    group="05-因子构建",
     box_color="#4CAF50",
     description="对因子做行业/市值中性化回归，剥离风格暴露",
 )

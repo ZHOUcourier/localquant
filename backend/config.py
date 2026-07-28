@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from pydantic_settings import BaseSettings
 
 
@@ -28,6 +29,8 @@ class Settings(BaseSettings):
     # AI
     openai_api_key: str = ""
     openai_base_url: str = ""
+    ai_provider: str = "openai"  # openai/deepseek/moonshot/qwen/zhipu/custom
+    ai_model: str = ""
 
     # 因子研究服务
     factor_service_url: str = "http://localhost:8001"
@@ -41,6 +44,11 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # 确保数据目录存在
-for d in [settings.cache_dir, settings.output_dir, settings.workflow_dir,
-          settings.experiment_dir, settings.custom_nodes_dir]:
+for d in [
+    settings.cache_dir,
+    settings.output_dir,
+    settings.workflow_dir,
+    settings.experiment_dir,
+    settings.custom_nodes_dir,
+]:
     d.mkdir(parents=True, exist_ok=True)

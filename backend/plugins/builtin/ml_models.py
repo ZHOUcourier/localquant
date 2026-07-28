@@ -99,7 +99,7 @@ class MLPInput(BaseModel):
 
 @work_node(
     name="MLP模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="多层感知机神经网络，适用于非线性回归与分类任务",
 )
@@ -181,7 +181,7 @@ class RFInput(BaseModel):
 
 @work_node(
     name="随机森林模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="基于集成学习的随机森林，抗过拟合能力强",
 )
@@ -265,7 +265,7 @@ class LGBMInput(BaseModel):
 
 @work_node(
     name="LightGBM模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="基于梯度提升树的高效模型，训练速度快",
 )
@@ -349,7 +349,7 @@ class XGBInput(BaseModel):
 
 @work_node(
     name="XGBoost模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="极端梯度提升树，量化投资常用模型",
 )
@@ -439,7 +439,7 @@ class GRUInput(BaseModel):
 
 @work_node(
     name="GRU模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="门控循环单元，适合时序数据建模",
 )
@@ -563,7 +563,7 @@ class SVMInput(BaseModel):
 
 @work_node(
     name="SVM模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="支持向量机，适合小样本分类与回归",
 )
@@ -641,7 +641,7 @@ class LSTMInput(BaseModel):
 
 @work_node(
     name="LSTM模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="长短期记忆网络，捕捉时序长期依赖",
 )
@@ -763,7 +763,7 @@ class CNNInput(BaseModel):
 
 @work_node(
     name="CNN模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="卷积神经网络，可提取局部时序模式特征",
 )
@@ -892,7 +892,7 @@ class TransformerInput(BaseModel):
 
 @work_node(
     name="Transformer模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="基于自注意力机制的深度学习模型",
 )
@@ -1022,7 +1022,7 @@ class GNNInput(BaseModel):
 
 @work_node(
     name="GNN模型",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="图神经网络，用于股票关联关系建模",
 )
@@ -1164,7 +1164,7 @@ class OptunaSearchOutput(BaseModel):
 
 @work_node(
     name="超参数搜索(Optuna)",
-    group="03-机器学习",
+    group="07-机器学习",
     box_color="#E91E63",
     description="使用Optuna进行模型超参数自动搜索优化",
 )

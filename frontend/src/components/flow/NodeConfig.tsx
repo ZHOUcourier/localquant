@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Editor from '@monaco-editor/react';
+import { useQueryClient } from '@tanstack/react-query';
 import { usePlugins, type PluginNodeSchema, type SchemaProperty } from '../../hooks/usePlugins';
 import { useFlowStore } from '../../store/flowStore';
+import { buildWidgets, buildPorts } from '../../lib/nodeSchema';
+import { Dialog } from '../ui/Dialog';
+import { Button } from '../ui/Button';
 
 const COLOR_MAP: Record<string, string> = {
   orange: '#007aff',
@@ -219,12 +223,43 @@ function ParamField({
   );
 }
 
+interface SourceMeta {
+  is_custom: boolean;
+  class_name: string;
+}
+
 export function NodeConfig() {
   const { data: groups } = usePlugins();
+  const queryClient = useQueryClient();
   const selectedNodeId = useFlowStore((s) => s.selectedNodeId);
   const nodes = useFlowStore((s) => s.nodes);
   const updateNodeData = useFlowStore((s) => s.updateNodeData);
   const selectNode = useFlowStore((s) => s.selectNode);
+
+  // 面板当前展示的节点（与画布选中态解耦，便于处理未保存拦截）
+  const [displayedNodeId, setDisplayedNodeId] = useState<string | null>(null);
+  // 参数草稿：仅在点保存后才写回节点数据
+  const [draftValues, setDraftValues] = useState<Record<string, unknown>>({});
+  // Tab / 源码状态
+  const [activeTab, setActiveTab] = useState<'params' | 'source'>('params');
+  const [sourceCode, setSourceCode] = useState('');
+  const [originalSource, setOriginalSource] = useState('');
+  const [sourceMeta, setSourceMeta] = useState<SourceMeta | null>(null);
+  const [sourceLoaded, setSourceLoaded] = useState(false);
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  // 保存状态
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // AI 修改节点代码
+  const [showNodeAI, setShowNodeAI] = useState(false);
+  const [nodeAiInstruction, setNodeAiInstruction] = useState('');
+  const [nodeAiLoading, setNodeAiLoading] = useState(false);
+  const [nodeAiError, setNodeAiError] = useState<string | null>(null);
+  // fork 后 plugins 列表刷新前的临时 schema
+  const [schemaOverride, setSchemaOverride] = useState<PluginNodeSchema | null>(null);
+  // 未保存拦截：待切换的目标节点（null 表示关闭面板）
+  const [pendingSwitch, setPendingSwitch] = useState<{ target: string | null } | null>(null);
 
   // 构建节点类型 → schema 映射
   const schemaMap = useMemo(() => {
@@ -239,41 +274,62 @@ export function NodeConfig() {
     return map;
   }, [groups]);
 
-  const selectedNode = nodes.find((n) => n.id === selectedNodeId);
-  const nodeType = selectedNode?.data?.nodeType as string | undefined;
-  const schema = nodeType ? schemaMap[nodeType] : null;
-  const boxColor = resolveColor((selectedNode?.data?.box_color as string) || 'orange');
+  const displayedNode = nodes.find((n) => n.id === displayedNodeId);
+  const nodeType = displayedNode?.data?.nodeType as string | undefined;
+  const schema: PluginNodeSchema | null =
+    (nodeType ? schemaMap[nodeType] : null) ||
+    (schemaOverride && schemaOverride.name === nodeType ? schemaOverride : null);
+  const boxColor = resolveColor((displayedNode?.data?.box_color as string) || 'orange');
+  const nodeLabel = (displayedNode?.data?.label as string) || schema?.display_name || '';
 
-  // 从 widgets 中取当前值
-  const widgets = (selectedNode?.data?.widgets as Array<{ name: string; value?: unknown }>) || [];
+  // 从 widgets 中取当前已保存值
+  const widgets = (displayedNode?.data?.widgets as Array<{ name: string; value?: unknown }>) || [];
   const widgetMap = useMemo(() => {
     const m: Record<string, unknown> = {};
     for (const w of widgets) m[w.name] = w.value;
     return m;
   }, [widgets]);
 
-  const handleChange = useCallback(
-    (key: string, val: unknown) => {
-      if (!selectedNodeId) return;
-      const updated = widgets.map((w) =>
-        w.name === key ? { ...w, value: val } : w
-      );
-      updateNodeData(selectedNodeId, { widgets: updated });
-    },
-    [selectedNodeId, widgets, updateNodeData]
+  // 脏状态：参数草稿与已保存值不一致 / 源码被修改
+  const paramsDirty = useMemo(
+    () =>
+      Object.entries(draftValues).some(
+        ([k, v]) => String(v ?? '') !== String(widgetMap[k] ?? '')
+      ),
+    [draftValues, widgetMap]
   );
+  const codeDirty = sourceLoaded && sourceCode !== originalSource;
+  const isDirtyLocal = paramsDirty || codeDirty;
 
-  // Tab 切换状态
-  const [activeTab, setActiveTab] = useState<'params' | 'source'>('params');
-  const [sourceCode, setSourceCode] = useState<string>('');
-  const [sourceLoading, setSourceLoading] = useState(false);
-  const [sourceError, setSourceError] = useState<string | null>(null);
+  // 切换展示节点并重置所有草稿
+  const resetTo = useCallback((id: string | null) => {
+    setDisplayedNodeId(id);
+    setDraftValues({});
+    setSourceCode('');
+    setOriginalSource('');
+    setSourceMeta(null);
+    setSourceLoaded(false);
+    setSourceError(null);
+    setSaveError(null);
+    setActiveTab('params');
+  }, []);
 
-  // 获取节点源码
+  // 画布选中变化：有未保存修改时弹窗拦截
   useEffect(() => {
-    if (activeTab !== 'source' || !nodeType) {
-      return;
+    if (selectedNodeId === displayedNodeId) return;
+    if (isDirtyLocal) {
+      setPendingSwitch({ target: selectedNodeId });
+    } else {
+      resetTo(selectedNodeId);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNodeId]);
+
+  // 获取节点源码（打开代码 Tab 时懒加载）
+  // 注意：sourceLoading 不能进依赖数组，否则 setSourceLoading(true) 会触发
+  // 上一次 effect 的 cleanup（cancelled=true），导致请求结果被丢弃、永远停在加载中
+  useEffect(() => {
+    if (activeTab !== 'source' || !nodeType || sourceLoaded) return;
     let cancelled = false;
     setSourceLoading(true);
     setSourceError(null);
@@ -285,6 +341,12 @@ export function NodeConfig() {
       .then((data) => {
         if (!cancelled) {
           setSourceCode(data.source || '');
+          setOriginalSource(data.source || '');
+          setSourceMeta({
+            is_custom: !!data.is_custom,
+            class_name: data.class_name || nodeType,
+          });
+          setSourceLoaded(true);
           setSourceLoading(false);
         }
       })
@@ -295,14 +357,139 @@ export function NodeConfig() {
         }
       });
     return () => { cancelled = true; };
-  }, [activeTab, nodeType]);
+  }, [activeTab, nodeType, sourceLoaded]);
+
+  const handleChange = useCallback((key: string, val: unknown) => {
+    setDraftValues((prev) => ({ ...prev, [key]: val }));
+  }, []);
+
+  // AI 修改节点代码：结果写入源码草稿（codeDirty），由用户审阅后点保存生效
+  const handleNodeAI = useCallback(async () => {
+    if (!nodeAiInstruction.trim() || !sourceLoaded) return;
+    setNodeAiLoading(true);
+    setNodeAiError(null);
+    try {
+      const res = await fetch('/api/ai/node-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: sourceCode,
+          instruction: nodeAiInstruction,
+          node_name: nodeLabel,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setSourceCode(data.source || sourceCode);
+      setShowNodeAI(false);
+      setNodeAiInstruction('');
+    } catch (e) {
+      setNodeAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNodeAiLoading(false);
+    }
+  }, [nodeAiInstruction, sourceLoaded, sourceCode, nodeLabel]);
+
+  // 保存：参数写回节点；代码修改则 fork 为新的自定义节点（不改内置源码）
+  const doSave = useCallback(async () => {
+    if (!displayedNodeId || !displayedNode) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      if (codeDirty) {
+        const isCustom = !!sourceMeta?.is_custom;
+        const url = isCustom ? `/api/plugins/custom/${nodeType}` : '/api/plugins/custom';
+        const body = isCustom
+          ? { source: sourceCode }
+          : { source: sourceCode, base_name: sourceMeta?.class_name || nodeType };
+        const res = await fetch(url, {
+          method: isCustom ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          throw new Error(err?.detail || `HTTP ${res.status}`);
+        }
+        const newSchema: PluginNodeSchema = await res.json();
+        // 用新 schema 重建 widgets/端口，保留草稿参数值
+        const rebuilt = buildWidgets(newSchema).map((w) => {
+          const v = draftValues[w.name] ?? widgetMap[w.name];
+          return v !== undefined ? { ...w, value: v } : w;
+        });
+        updateNodeData(displayedNodeId, {
+          nodeType: newSchema.name,
+          label: newSchema.display_name,
+          box_color: newSchema.box_color,
+          inputs: buildPorts(newSchema, 'input'),
+          outputs: buildPorts(newSchema, 'output'),
+          widgets: rebuilt,
+        });
+        setSchemaOverride(newSchema);
+        setSourceMeta({ is_custom: true, class_name: sourceMeta?.class_name || nodeType || '' });
+        setOriginalSource(sourceCode);
+        setDraftValues({});
+        queryClient.invalidateQueries({ queryKey: ['plugins'] });
+      } else if (paramsDirty) {
+        const updated = widgets.map((w) =>
+          w.name in draftValues ? { ...w, value: draftValues[w.name] } : w
+        );
+        updateNodeData(displayedNodeId, { widgets: updated });
+        setDraftValues({});
+      }
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    displayedNodeId, displayedNode, codeDirty, paramsDirty, sourceMeta, nodeType,
+    sourceCode, draftValues, widgetMap, widgets, updateNodeData, queryClient,
+  ]);
+
+  const handleSaveClick = useCallback(async () => {
+    try {
+      await doSave();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    }
+  }, [doSave]);
 
   const handleClose = useCallback(() => {
     selectNode(null);
   }, [selectNode]);
 
+  // 未保存弹窗操作
+  const handleDiscardAndSwitch = useCallback(() => {
+    if (!pendingSwitch) return;
+    resetTo(pendingSwitch.target);
+    setPendingSwitch(null);
+  }, [pendingSwitch, resetTo]);
+
+  const handleSaveAndSwitch = useCallback(async () => {
+    if (!pendingSwitch) return;
+    try {
+      await doSave();
+      resetTo(pendingSwitch.target);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+      // 保存失败：留在当前节点
+      selectNode(displayedNodeId);
+    }
+    setPendingSwitch(null);
+  }, [pendingSwitch, doSave, resetTo, selectNode, displayedNodeId]);
+
+  const handleCancelSwitch = useCallback(() => {
+    // 继续编辑：恢复画布选中态
+    selectNode(displayedNodeId);
+    setPendingSwitch(null);
+  }, [selectNode, displayedNodeId]);
+
+  const panelWidth = activeTab === 'source' ? 460 : 280;
+
   // 未选中节点
-  if (!selectedNode || !schema) {
+  if (!displayedNode || !schema) {
     return (
       <div
         style={{
@@ -316,8 +503,16 @@ export function NodeConfig() {
         }}
       >
         <span style={{ color: '#646262', fontSize: 12 }}>
-          {selectedNode ? '加载中...' : '选择节点查看配置'}
+          {displayedNode ? '加载中...' : '选择节点查看配置'}
         </span>
+        {/* 弹窗在无节点时也需渲染（如关闭面板触发） */}
+        <UnsavedDialog
+          open={!!pendingSwitch}
+          saving={saving}
+          onDiscard={handleDiscardAndSwitch}
+          onSave={handleSaveAndSwitch}
+          onCancel={handleCancelSwitch}
+        />
       </div>
     );
   }
@@ -327,16 +522,17 @@ export function NodeConfig() {
   return (
     <div
       style={{
-        width: 280,
+        width: panelWidth,
         flexShrink: 0,
         background: '#f1eeee',
         borderLeft: '1px solid rgba(15,0,0,0.12)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
+        transition: 'width 0.15s ease',
       }}
     >
-      {/* 顶部：节点名称 + 色条 + 关闭 */}
+      {/* 顶部：节点名称 + 色条 + 保存 + 关闭 */}
       <div
         style={{
           display: 'flex',
@@ -365,9 +561,44 @@ export function NodeConfig() {
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}
+          title={nodeLabel}
         >
-          {schema.display_name}
+          {nodeLabel}
         </span>
+        {schema.is_custom && (
+          <span
+            style={{
+              fontSize: 10,
+              color: '#007aff',
+              border: '1px solid #007aff',
+              borderRadius: 3,
+              padding: '0 4px',
+              flexShrink: 0,
+            }}
+          >
+            自定义
+          </span>
+        )}
+        {isDirtyLocal && (
+          <button
+            onClick={handleSaveClick}
+            disabled={saving}
+            style={{
+              background: '#007aff',
+              border: 'none',
+              borderRadius: 4,
+              color: '#fff',
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '3px 10px',
+              cursor: saving ? 'not-allowed' : 'pointer',
+              flexShrink: 0,
+            }}
+            title={codeDirty ? '保存（代码已修改，将生成新的自定义节点）' : '保存参数修改'}
+          >
+            {saving ? '保存中...' : '保存'}
+          </button>
+        )}
         <button
           onClick={handleClose}
           style={{
@@ -394,8 +625,8 @@ export function NodeConfig() {
         }}
       >
         {([
-          { key: 'params' as const, label: '参数配置' },
-          { key: 'source' as const, label: '节点代码' },
+          { key: 'params' as const, label: `参数配置${paramsDirty ? ' ●' : ''}` },
+          { key: 'source' as const, label: `节点代码${codeDirty ? ' ●' : ''}` },
         ]).map((tab) => (
           <button
             key={tab.key}
@@ -417,7 +648,48 @@ export function NodeConfig() {
             {tab.label}
           </button>
         ))}
+        <div style={{ flex: 1 }} />
+        {/* AI 改代码小按钮 */}
+        <button
+          onClick={() => {
+            setActiveTab('source'); // 触发源码懒加载
+            setShowNodeAI(true);
+          }}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: '#7c3aed',
+            fontSize: 11,
+            fontWeight: 600,
+            padding: '8px 10px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 3,
+          }}
+          title="用 AI 修改该节点代码（需先在设置中配置 AI）"
+        >
+          ✦ AI
+        </button>
       </div>
+
+      {/* 保存错误提示 */}
+      {saveError && (
+        <div
+          style={{
+            color: '#ff3b30',
+            fontSize: 11,
+            padding: '6px 12px',
+            borderBottom: '1px solid rgba(15,0,0,0.12)',
+            fontFamily: "var(--font-mono, monospace)",
+            whiteSpace: 'pre-wrap',
+            maxHeight: 80,
+            overflowY: 'auto',
+          }}
+        >
+          保存失败: {saveError}
+        </div>
+      )}
 
       {/* 中间：参数表单 或 源码 */}
       {activeTab === 'params' ? (
@@ -430,7 +702,7 @@ export function NodeConfig() {
                 key={key}
                 fieldKey={key}
                 prop={prop}
-                value={widgetMap[key]}
+                value={key in draftValues ? draftValues[key] : widgetMap[key]}
                 onChange={handleChange}
               />
             ))
@@ -451,55 +723,43 @@ export function NodeConfig() {
               加载失败: {sourceError}
             </div>
           )}
-          {!sourceLoading && !sourceError && (
-            <div style={{ flex: 1, borderTop: '1px solid rgba(15,0,0,0.12)' }}>
-              <Editor
-                height="100%"
-                language="python"
-                theme="light"
-                value={sourceCode}
-                options={{
-                  readOnly: true,
-                  minimap: { enabled: false },
-                  fontSize: 12,
-                  lineNumbers: 'on',
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  tabSize: 4,
-                  wordWrap: 'on',
-                  padding: { top: 8 },
-                  renderValidationDecorations: 'on',
+          {!sourceLoading && !sourceError && sourceLoaded && (
+            <>
+              <div
+                style={{
+                  color: '#646262',
+                  fontSize: 10,
+                  padding: '6px 12px',
+                  borderBottom: '1px solid rgba(15,0,0,0.12)',
+                  lineHeight: 1.5,
                 }}
-                onMount={(editor, monaco) => {
-                  // Monaco 对 Python 提供语法高亮，
-                  // 通过 setModelMarkers API 可展示行内错误标记
-                  const model = editor.getModel();
-                  if (model) {
-                    // 尝试基本语法检查：检测缩进问题
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const markers: any[] = [];
-                    const lines = model.getLinesContent();
-                    for (let i = 0; i < lines.length; i++) {
-                      const line = lines[i];
-                      // 检测 Tab 和空格混用
-                      if (/^\t+ /.test(line) || /^ +\t/.test(line)) {
-                        markers.push({
-                          severity: monaco.MarkerSeverity.Error,
-                          message: 'Tab 和空格缩进混用',
-                          startLineNumber: i + 1,
-                          startColumn: 1,
-                          endLineNumber: i + 1,
-                          endColumn: line.length + 1,
-                        });
-                      }
-                    }
-                    if (markers.length > 0) {
-                      monaco.editor.setModelMarkers(model, 'python', markers);
-                    }
-                  }
-                }}
-              />
-            </div>
+              >
+                {sourceMeta?.is_custom
+                  ? '自定义节点：保存后直接更新该节点代码'
+                  : '内置节点：修改代码保存后会生成一个新的自定义节点（原节点不受影响）'}
+              </div>
+              <div style={{ flex: 1 }}>
+                <Editor
+                  height="100%"
+                  language="python"
+                  theme="light"
+                  value={sourceCode}
+                  onChange={(v) => setSourceCode(v ?? '')}
+                  options={{
+                    readOnly: false,
+                    minimap: { enabled: false },
+                    fontSize: 12,
+                    lineNumbers: 'on',
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                    tabSize: 4,
+                    wordWrap: 'on',
+                    padding: { top: 8 },
+                    renderValidationDecorations: 'on',
+                  }}
+                />
+              </div>
+            </>
           )}
         </div>
       )}
@@ -531,6 +791,120 @@ export function NodeConfig() {
           )}
         </div>
       </div>
+
+      {/* 未保存修改确认弹窗 */}
+      <UnsavedDialog
+        open={!!pendingSwitch}
+        saving={saving}
+        onDiscard={handleDiscardAndSwitch}
+        onSave={handleSaveAndSwitch}
+        onCancel={handleCancelSwitch}
+      />
+
+      {/* AI 修改节点代码弹窗 */}
+      <Dialog
+        open={showNodeAI}
+        onClose={() => !nodeAiLoading && setShowNodeAI(false)}
+        title={`AI 修改节点代码 — ${nodeLabel}`}
+        className="w-[520px]"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setShowNodeAI(false)} disabled={nodeAiLoading}>
+              取消
+            </Button>
+            <Button
+              onClick={handleNodeAI}
+              loading={nodeAiLoading}
+              disabled={!nodeAiInstruction.trim() || !sourceLoaded}
+            >
+              {nodeAiLoading ? '生成中...' : '生成修改'}
+            </Button>
+          </>
+        }
+      >
+        <div style={{ fontSize: 11, color: '#646262', marginBottom: 8, lineHeight: 1.6 }}>
+          描述要如何修改该节点（如“给回测加一个印花税参数，卖出时扣除”）。
+          AI 修改后的代码会填入“节点代码”编辑器，
+          <span style={{ color: '#ff9f0a' }}>你审阅确认后点“保存”才会生效（内置节点会 fork 为新的自定义节点，不动原节点）</span>。
+        </div>
+        {!sourceLoaded && (
+          <div style={{ fontSize: 11, color: '#9a9898', marginBottom: 8 }}>正在加载节点源码...</div>
+        )}
+        {nodeAiError && (
+          <div
+            style={{
+              color: '#ff3b30',
+              fontSize: 11,
+              marginBottom: 8,
+              fontFamily: 'var(--font-mono, monospace)',
+              whiteSpace: 'pre-wrap',
+              maxHeight: 80,
+              overflowY: 'auto',
+            }}
+          >
+            {nodeAiError}
+          </div>
+        )}
+        <textarea
+          value={nodeAiInstruction}
+          onChange={(e) => setNodeAiInstruction(e.target.value)}
+          placeholder={'例如：\n・增加一个“最大持仓比例”参数，限制单只股票仓位\n・输出里加一个月度收益统计\n・把手续费改成双边收取'}
+          rows={5}
+          autoFocus
+          style={{
+            width: '100%',
+            background: '#f8f7f7',
+            border: '1px solid rgba(15,0,0,0.12)',
+            borderRadius: 4,
+            color: '#201d1d',
+            fontSize: 12,
+            padding: '8px 10px',
+            outline: 'none',
+            resize: 'vertical',
+            lineHeight: 1.6,
+            boxSizing: 'border-box',
+            fontFamily: 'inherit',
+          }}
+        />
+      </Dialog>
     </div>
+  );
+}
+
+/** 未保存修改确认弹窗 */
+function UnsavedDialog({
+  open,
+  saving,
+  onDiscard,
+  onSave,
+  onCancel,
+}: {
+  open: boolean;
+  saving: boolean;
+  onDiscard: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Dialog
+      open={open}
+      onClose={onCancel}
+      title="未保存的节点修改"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onCancel}>
+            继续编辑
+          </Button>
+          <Button variant="danger" onClick={onDiscard}>
+            放弃修改
+          </Button>
+          <Button onClick={onSave} disabled={saving}>
+            {saving ? '保存中...' : '保存修改'}
+          </Button>
+        </>
+      }
+    >
+      当前节点的参数或代码有未保存的修改，是否保存？
+    </Dialog>
   );
 }

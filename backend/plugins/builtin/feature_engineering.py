@@ -50,7 +50,7 @@ class FeatureEngineeringOutput(BaseModel):
 
 @work_node(
     name="特征工程构建",
-    group="02-特征工程",
+    group="03-特征工程",
     box_color="#9C27B0",
     description="基于原始数据自动构建多类特征因子，包括技术指标、统计量、时序特征等",
 )

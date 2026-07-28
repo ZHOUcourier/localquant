@@ -45,7 +45,7 @@ class OutputOutput(BaseModel):
 
 @work_node(
     name="输出",
-    group="06-输出",
+    group="09-输出",
     box_color="purple",
     description="将数据输出到指定目标，支持文件/数据库等",
 )
@@ -137,7 +137,7 @@ class StockRankOutput(BaseModel):
 
 @work_node(
     name="股票排名",
-    group="06-输出",
+    group="09-输出",
     box_color="purple",
     description="根据因子值对股票进行排名筛选输出",
 )

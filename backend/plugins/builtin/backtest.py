@@ -40,14 +40,15 @@ class BacktestOutput(BaseModel):
 
     equity_curve: dict  # {index: value}
     strategy_returns: dict  # {index: value}
+    drawdown_curve: dict = {}  # {index: value} 回撤曲线
     positions: dict  # {index: value}
-    metrics: dict = {}  # 绩效指标: 总收益/年化/波动/夏普/最大回撤
+    metrics: dict = {}  # 绩效指标: 总收益/年化/波动/夏普/最大回撤等
     initial_capital: float = 0.0
 
 
 @work_node(
     name="回测",
-    group="05-回测",
+    group="08-回测",
     box_color="red",
     description="执行策略回测，模拟交易并生成绩效报告",
 )
@@ -83,9 +84,10 @@ class BacktestNode(BaseWorkNode):
         strategy_returns = result["strategy_returns"]
         positions = result["positions"]
 
-        # 绩效指标
+        # 绩效指标 + 回撤曲线
         ret_series = pd.Series(strategy_returns)
         metrics: dict = {}
+        drawdown_curve: dict = {}
         if len(ret_series) > 1:
             metrics["total_return"] = float((1 + ret_series).prod() - 1)
             metrics["annual_return"] = float(ret_series.mean() * 252)
@@ -96,11 +98,24 @@ class BacktestNode(BaseWorkNode):
                 else 0.0
             )
             cum_nav = (1 + ret_series).cumprod()
-            metrics["max_drawdown"] = float((cum_nav / cum_nav.cummax() - 1).min())
+            drawdown = cum_nav / cum_nav.cummax() - 1
+            metrics["max_drawdown"] = float(drawdown.min())
+            metrics["calmar_ratio"] = (
+                float(metrics["annual_return"] / abs(metrics["max_drawdown"]))
+                if metrics["max_drawdown"] != 0
+                else 0.0
+            )
+            active_days = ret_series[ret_series != 0]
+            metrics["win_rate"] = (
+                float((active_days > 0).mean()) if len(active_days) > 0 else 0.0
+            )
+            metrics["trading_days"] = int(len(ret_series))
+            drawdown_curve = {str(k): float(v) for k, v in drawdown.items()}
 
         return BacktestOutput(
             equity_curve={str(k): float(v) for k, v in equity_curve.items()},
             strategy_returns={str(k): float(v) for k, v in strategy_returns.items()},
+            drawdown_curve=drawdown_curve,
             positions={
                 str(k): {c: float(v) for c, v in row.items()}
                 if hasattr(row, "items")

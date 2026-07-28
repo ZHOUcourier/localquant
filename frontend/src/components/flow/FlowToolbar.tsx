@@ -1,27 +1,42 @@
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Square, Save, Circle, Loader2, Check, ArrowLeft, Download, Upload } from 'lucide-react';
+import { Play, Square, Save, Circle, Loader2, Check, ArrowLeft, Download, Upload, Maximize2, Minimize2, Sparkles } from 'lucide-react';
+import type { Node, Edge } from '@xyflow/react';
 import { useFlowStore } from '../../store/flowStore';
 import { useExecution } from '../../hooks/useExecution';
 import { useSaveWorkflow } from '../../hooks/useWorkflow';
-import { extractStaticInputData } from '../../lib/nodeSchema';
+import { usePlugins } from '../../hooks/usePlugins';
+import { extractStaticInputData, buildSchemaMap, buildNodeData } from '../../lib/nodeSchema';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
 
 interface FlowToolbarProps {
   onSave?: () => void;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
-export function FlowToolbar({ onSave }: FlowToolbarProps) {
+const AI_FLOW_PLACEHOLDER = `描述你想要的工作流，例如：
+・拉取沪深300成分股日线数据，计算 20 日动量因子，做 IC 分析和分组收益
+・在当前工作流基础上，因子标准化之后加一步行业中性化
+・用 MACD 金叉作为信号跑一个回测，结果推送到钉钉`;
+
+export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowToolbarProps) {
   const navigate = useNavigate();
-  const { workflowId, workflowName, nodes, edges, setWorkflowName, setWorkflow, isRunning, nodeStatuses, isDirty, markClean } = useFlowStore();
+  const { workflowId, workflowName, nodes, edges, setWorkflowName, setWorkflow, isRunning, nodeStatuses, isDirty, markClean, markDirty } = useFlowStore();
   const { runWorkflow, stopExecution } = useExecution();
+  const { data: pluginGroups } = usePlugins();
   const saveMutation = useSaveWorkflow();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workflowName);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [importing, setImporting] = useState(false);
+  // AI 生成工作流
+  const [showAI, setShowAI] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
   const fileInputRef = useCallback(() => document.getElementById('workflow-import-input') as HTMLInputElement | null, []);
 
   const handleBack = useCallback(() => {
@@ -89,9 +104,11 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         links: backendLinks,
       });
 
-      // 如果是新建，更新 store 中的 workflowId
+      // 如果是新建，更新 store 中的 workflowId 并跳到正式地址
+      // （setTimeout 等 isDirty=false 刷新完成，避免 useBlocker 用旧状态拦截）
       if (!workflowId && result?.id) {
         setWorkflow(result.id, workflowName, nodes, edges);
+        setTimeout(() => navigate(`/workflow/${result.id}`, { replace: true }), 0);
       }
 
       setSaveStatus('saved');
@@ -101,7 +118,79 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
       setSaveStatus('error');
       setTimeout(() => setSaveStatus('idle'), 2000);
     }
-  }, [onSave, nodes, edges, workflowId, workflowName, saveMutation, setWorkflow, markClean]);
+  }, [onSave, nodes, edges, workflowId, workflowName, saveMutation, setWorkflow, markClean, navigate]);
+
+  // AI 生成/修改工作流 → 应用到画布（需手动保存）
+  const handleAIGenerate = useCallback(async () => {
+    if (!aiInstruction.trim() || !pluginGroups) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const currentWorkflow = nodes.length > 0 ? {
+        nodes: nodes.map(n => {
+          const data = (n.data || {}) as Record<string, unknown>;
+          return {
+            uuid: n.id,
+            name: (data.nodeType as string) || '',
+            title: (data.label as string) || n.id,
+            positionX: n.position?.x ?? 0,
+            positionY: n.position?.y ?? 0,
+            static_input_data: extractStaticInputData(data),
+          };
+        }),
+        links: edges.map((e, i) => ({
+          uuid: e.id || `l${i}`,
+          previous_node_uuid: e.source,
+          output_field_name: (e.sourceHandle as string) || 'output',
+          next_node_uuid: e.target,
+          input_field_name: (e.targetHandle as string) || 'input',
+        })),
+      } : null;
+
+      const res = await fetch('/api/ai/workflow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instruction: aiInstruction, current_workflow: currentWorkflow }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.detail || `HTTP ${res.status}`);
+      }
+      const wf = await res.json();
+
+      // 后端格式 → ReactFlow 画布
+      const schemaMap = buildSchemaMap(pluginGroups);
+      const rfNodes: Node[] = (wf.nodes || []).map((n: Record<string, unknown>) => ({
+        id: String(n.uuid),
+        position: { x: Number(n.positionX) || 0, y: Number(n.positionY) || 0 },
+        type: 'workNode',
+        data: buildNodeData(
+          String(n.name),
+          String(n.title || n.name),
+          (n.static_input_data as Record<string, unknown>) || {},
+          schemaMap[String(n.name)],
+        ),
+      }));
+      const rfEdges: Edge[] = (wf.links || []).map((l: Record<string, unknown>, i: number) => ({
+        id: String(l.uuid || `l${i}`),
+        source: String(l.previous_node_uuid),
+        sourceHandle: String(l.output_field_name || 'output'),
+        target: String(l.next_node_uuid),
+        targetHandle: String(l.input_field_name || 'input'),
+        animated: false,
+      }));
+
+      // 保留当前 workflowId 与名称（新建时采用 AI 给的名字），应用后标脏，由用户确认保存
+      setWorkflow(workflowId || '', workflowId ? workflowName : (wf.name || workflowName), rfNodes, rfEdges);
+      markDirty();
+      setShowAI(false);
+      setAiInstruction('');
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiInstruction, pluginGroups, nodes, edges, workflowId, workflowName, setWorkflow, markDirty]);
 
   const handleRunClick = useCallback(() => {
     if (!workflowId) return;
@@ -317,6 +406,54 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         <span style={{ color: statusColor, fontSize: 12 }}>{statusText}</span>
       </div>
 
+      {/* AI 生成工作流 */}
+      <button
+        onClick={() => setShowAI(true)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '4px 10px',
+          background: 'transparent',
+          border: '1px solid rgba(15,0,0,0.12)',
+          borderRadius: 4,
+          color: '#7c3aed',
+          fontSize: 12,
+          fontWeight: 500,
+          cursor: 'pointer',
+          transition: 'background 0.15s ease',
+        }}
+        title="AI 生成/修改工作流（需先在设置中配置 AI）"
+      >
+        <Sparkles size={13} />
+        AI 生成
+      </button>
+
+      {/* 全屏切换 */}
+      {onToggleFullscreen && (
+        <button
+          onClick={onToggleFullscreen}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '4px 10px',
+            background: 'transparent',
+            border: '1px solid rgba(15,0,0,0.12)',
+            borderRadius: 4,
+            color: '#646262',
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: 'pointer',
+            transition: 'background 0.15s ease',
+          }}
+          title={fullscreen ? '退出全屏 (Esc)' : '全屏编辑（隐藏其他界面）'}
+        >
+          {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          {fullscreen ? '退出全屏' : '全屏'}
+        </button>
+      )}
+
       {/* 导出按钮 */}
       <button
         onClick={handleExport}
@@ -436,6 +573,66 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         }
       >
         工作流有未保存的更改，确定要离开吗？
+      </Dialog>
+
+      {/* AI 生成工作流弹窗 */}
+      <Dialog
+        open={showAI}
+        onClose={() => !aiLoading && setShowAI(false)}
+        title="AI 生成 / 修改工作流"
+        className="w-[560px]"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setShowAI(false)} disabled={aiLoading}>
+              取消
+            </Button>
+            <Button onClick={handleAIGenerate} loading={aiLoading} disabled={!aiInstruction.trim()}>
+              {aiLoading ? '生成中（可能需要几十秒）...' : '生成并应用到画布'}
+            </Button>
+          </>
+        }
+      >
+        <div style={{ fontSize: 11, color: '#646262', marginBottom: 8, lineHeight: 1.6 }}>
+          用自然语言描述需求，AI 会基于平台全部可用节点生成工作流。
+          画布上已有节点时，会在现有基础上修改。
+          <span style={{ color: '#ff9f0a' }}>生成结果会替换当前画布，确认无误后请点“保存”。</span>
+        </div>
+        {aiError && (
+          <div
+            style={{
+              color: '#ff3b30',
+              fontSize: 11,
+              marginBottom: 8,
+              fontFamily: 'var(--font-mono, monospace)',
+              whiteSpace: 'pre-wrap',
+              maxHeight: 80,
+              overflowY: 'auto',
+            }}
+          >
+            {aiError}
+          </div>
+        )}
+        <textarea
+          value={aiInstruction}
+          onChange={(e) => setAiInstruction(e.target.value)}
+          placeholder={AI_FLOW_PLACEHOLDER}
+          rows={7}
+          autoFocus
+          style={{
+            width: '100%',
+            background: '#f8f7f7',
+            border: '1px solid rgba(15,0,0,0.12)',
+            borderRadius: 4,
+            color: '#201d1d',
+            fontSize: 12,
+            padding: '8px 10px',
+            outline: 'none',
+            resize: 'vertical',
+            lineHeight: 1.6,
+            boxSizing: 'border-box',
+            fontFamily: 'inherit',
+          }}
+        />
       </Dialog>
     </div>
   );

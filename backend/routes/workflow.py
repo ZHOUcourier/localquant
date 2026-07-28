@@ -69,6 +69,15 @@ async def create_or_update_workflow(body: WorkflowCreate):
     )
 
 
+@router.get("/runs/{run_id}/nodes/{node_uuid}/output")
+async def get_node_output(run_id: str, node_uuid: str):
+    """获取单个节点的运行输出预览（表格/曲线/指标/图片）"""
+    result = await workflow_service.get_node_output_preview(run_id, node_uuid)
+    if result is None:
+        raise HTTPException(status_code=404, detail="节点输出不存在，请先运行工作流")
+    return result
+
+
 @router.get("/{workflow_id}")
 async def get_workflow(workflow_id: str):
     wf = await workflow_service.get_workflow(workflow_id)

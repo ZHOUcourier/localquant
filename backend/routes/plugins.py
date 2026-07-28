@@ -2,17 +2,69 @@
 
 import inspect
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
-from backend.services import plugin_service
+from backend.services import custom_node_service, plugin_service
 
 router = APIRouter()
+
+
+class CustomNodeCreate(BaseModel):
+    source: str
+    base_name: Optional[str] = None  # fork 时传原节点类名
+    display_name: Optional[str] = None
+    group: Optional[str] = None
+
+
+class CustomNodeUpdate(BaseModel):
+    source: str
+    display_name: Optional[str] = None
 
 
 @router.get("/")
 async def list_plugins():
     return plugin_service.list_plugins()
+
+
+@router.post("/custom")
+async def create_custom_node(body: CustomNodeCreate):
+    """创建自定义节点（fork 内置节点 或 全新节点），不修改原节点源码"""
+    try:
+        return custom_node_service.create_custom_node(
+            source=body.source,
+            base_name=body.base_name,
+            display_name=body.display_name,
+            group=body.group,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"节点代码执行失败: {e}")
+
+
+@router.put("/custom/{name}")
+async def update_custom_node(name: str, body: CustomNodeUpdate):
+    """更新自定义节点源码（保持注册名不变）"""
+    try:
+        return custom_node_service.update_custom_node(
+            name, source=body.source, display_name=body.display_name
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"节点代码执行失败: {e}")
+
+
+@router.delete("/custom/{name}")
+async def delete_custom_node(name: str):
+    """删除自定义节点"""
+    ok = custom_node_service.delete_custom_node(name)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"自定义节点 '{name}' 不存在")
+    return {"ok": True}
 
 
 @router.get("/{name}/schema")
@@ -32,12 +84,19 @@ async def get_plugin_source(name: str):
     if not node_cls:
         raise HTTPException(status_code=404, detail=f"Node '{name}' not found")
     try:
-        file_path = inspect.getfile(node_cls)
+        # 自定义/fork 节点：直接读持久化的源码文件
+        custom_file = getattr(node_cls, "__work_node_source_file__", "")
+        if custom_file and Path(custom_file).exists():
+            file_path = custom_file
+        else:
+            file_path = inspect.getfile(node_cls)
         source = Path(file_path).read_text(encoding="utf-8")
         return {
             "source": source,
             "file_path": file_path,
             "node_name": name,
+            "is_custom": bool(getattr(node_cls, "__work_node_is_custom__", False)),
+            "class_name": node_cls.__name__,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"无法读取源码: {e}")

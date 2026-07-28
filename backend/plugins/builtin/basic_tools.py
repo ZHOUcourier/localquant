@@ -47,7 +47,7 @@ class PythonCodeOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="Python代码输入", group="01-基础工具", box_color="#607D8B")
+@work_node(name="Python代码输入", group="10-基础工具", box_color="#607D8B")
 class PythonCodeInputNode(BaseWorkNode):
     """自定义Python代码编写，接收DataFrame，输出DataFrame"""
 
@@ -130,7 +130,7 @@ class StockPoolOutput(BaseModel):
     count: int = Field(default=0, title="数量")
 
 
-@work_node(name="自定义股票池", group="01-基础工具", box_color="#607D8B")
+@work_node(name="自定义股票池", group="10-基础工具", box_color="#607D8B")
 class StockPoolNode(BaseWorkNode):
     """定义股票选择范围（股票代码列表），输出股票池"""
 
@@ -169,7 +169,7 @@ class FormulaOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="公式输入", group="01-基础工具", box_color="#607D8B")
+@work_node(name="公式输入", group="10-基础工具", box_color="#607D8B")
 class FormulaInputNode(BaseWorkNode):
     """数学公式定义，输入DataFrame+公式，输出计算结果"""
 
@@ -227,7 +227,7 @@ class DataDownloadOutput(BaseModel):
     success: bool = Field(default=False, title="是否成功")
 
 
-@work_node(name="数据下载", group="01-基础工具", box_color="#607D8B")
+@work_node(name="数据下载", group="10-基础工具", box_color="#607D8B")
 class DataDownloadNode(BaseWorkNode):
     """下载行情数据到本地"""
 

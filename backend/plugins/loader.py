@@ -23,7 +23,7 @@ def load_all_nodes():
         "backend.plugins.builtin.output",
         "backend.plugins.builtin.ml_models",
         "backend.plugins.builtin.basic_tools",
-        "backend.plugins.builtin.agent_nodes",
+        "backend.plugins.builtin.notification",
     ]
 
     for module_path in builtin_modules:
@@ -34,11 +34,19 @@ def load_all_nodes():
 
     logger.info(f"Loaded {len(ALL_WORK_NODES)} built-in nodes")
 
-    # 3. 动态加载自定义节点
+    # 3. 加载持久化的自定义节点（带 .json 元数据，由 custom_node_service 重命名注册）
+    from backend.services.custom_node_service import load_persisted_custom_nodes
+
+    load_persisted_custom_nodes()
+
+    # 4. 动态加载遗留的裸 .py 自定义节点（无元数据，直接 exec 自注册）
     custom_dir = Path("./data/custom_nodes")
     if custom_dir.exists():
         for py_file in custom_dir.glob("*.py"):
             if py_file.name.startswith("_"):
+                continue
+            # 有同名 .json 元数据的已在上一步加载
+            if py_file.with_suffix(".json").exists():
                 continue
             try:
                 spec = importlib.util.spec_from_file_location(

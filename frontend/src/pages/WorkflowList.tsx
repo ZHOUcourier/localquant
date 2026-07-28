@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Star, Trash2, Eye, Copy, Plus, FolderOpen } from 'lucide-react';
-import { useWorkflows, useDeleteWorkflow, useWorkflowTemplates, useCreateFromTemplate, useSaveWorkflow, useToggleFavorite } from '../hooks/useWorkflow';
+import { Search, Star, Trash2, Eye, Copy, Plus, FolderOpen, Download, CheckSquare, Square, X } from 'lucide-react';
+import { useWorkflows, useDeleteWorkflow, useWorkflowTemplates, useToggleFavorite } from '../hooks/useWorkflow';
+import { useQueryClient } from '@tanstack/react-query';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -18,35 +19,94 @@ const TABS: { key: TabKey; label: string }[] = [
 
 export default function WorkflowList() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<TabKey>('my');
   const [search, setSearch] = useState('');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  // 批量管理
+  const [batchMode, setBatchMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  const [batchBusy, setBatchBusy] = useState(false);
 
   const { data: workflows, isLoading } = useWorkflows(activeTab, search);
   const { data: templates } = useWorkflowTemplates();
   const deleteMutation = useDeleteWorkflow();
-  const createFromTemplate = useCreateFromTemplate();
-  const saveWorkflow = useSaveWorkflow();
   const toggleFavorite = useToggleFavorite();
 
-  const handleCreateNew = async () => {
-    const result = await saveWorkflow.mutateAsync({
-      name: '未命名工作流',
-      nodes: [],
-      links: [],
-    });
+  // 新建/用模板：只打开编辑器，不创建 DB 记录，用户点保存才入库
+  const handleCreateNew = () => {
     setShowCreateDialog(false);
-    if (result?.id) {
-      navigate(`/workflow/${result.id}`);
+    navigate('/workflow/new');
+  };
+
+  const handleCreateFromTemplate = (templateId: string) => {
+    setShowCreateDialog(false);
+    navigate(`/workflow/new?template=${encodeURIComponent(templateId)}`);
+  };
+
+  // 批量选择
+  const toggleSelect = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const allSelected = !!workflows && workflows.length > 0 && workflows.every(w => selected.has(w.id));
+  const toggleSelectAll = () => {
+    if (!workflows) return;
+    setSelected(allSelected ? new Set() : new Set(workflows.map(w => w.id)));
+  };
+
+  const exitBatchMode = () => {
+    setBatchMode(false);
+    setSelected(new Set());
+  };
+
+  // 批量导出：拉取详情后合并为一个 JSON 文件（可直接导入）
+  const handleBatchExport = async () => {
+    if (selected.size === 0) return;
+    setBatchBusy(true);
+    try {
+      const details = await Promise.all(
+        [...selected].map(id => fetch(`/api/workflow/${id}`).then(r => r.json()))
+      );
+      const payload = {
+        workflows: details.map(d => ({
+          name: d.name,
+          description: d.description || '',
+          nodes: d.nodes || [],
+          links: d.links || [],
+        })),
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `workflows-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setBatchBusy(false);
     }
   };
 
-  const handleCreateFromTemplate = async (templateId: string) => {
-    const result = await createFromTemplate.mutateAsync(templateId);
-    setShowCreateDialog(false);
-    if (result?.id) {
-      navigate(`/workflow/${result.id}`);
+  // 批量删除
+  const handleBatchDelete = async () => {
+    setBatchBusy(true);
+    try {
+      await Promise.all(
+        [...selected].map(id => fetch(`/api/workflow/${id}`, { method: 'DELETE' }))
+      );
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      exitBatchMode();
+    } finally {
+      setBatchBusy(false);
+      setBatchDeleteConfirm(false);
     }
   };
 
@@ -89,15 +149,28 @@ export default function WorkflowList() {
           <h1 className="text-[20px] font-bold text-[#201d1d]">
             [+] 工作流
           </h1>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setShowCreateDialog(true)}
-            className="flex items-center gap-1.5"
-          >
-            <Plus size={14} />
-            创建工作流
-          </Button>
+          <div className="flex items-center gap-2">
+            {activeTab !== 'preset' && !batchMode && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setBatchMode(true)}
+                className="flex items-center gap-1.5"
+              >
+                <CheckSquare size={14} />
+                批量管理
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setShowCreateDialog(true)}
+              className="flex items-center gap-1.5"
+            >
+              <Plus size={14} />
+              创建工作流
+            </Button>
+          </div>
         </div>
 
         {/* Tab 导航 */}
@@ -139,6 +212,54 @@ export default function WorkflowList() {
           </div>
         )}
 
+        {/* 批量操作栏 */}
+        {batchMode && activeTab !== 'preset' && (
+          <div
+            className="mb-4 flex items-center gap-2 rounded-[4px] bg-[#f8f7f7] px-3 py-2"
+            style={{ border: '1px solid rgba(15, 0, 0, 0.12)' }}
+          >
+            <button
+              type="button"
+              onClick={toggleSelectAll}
+              className="flex cursor-pointer items-center gap-1.5 text-xs text-[#201d1d]"
+            >
+              {allSelected ? <CheckSquare size={14} /> : <Square size={14} />}
+              全选
+            </button>
+            <span className="text-xs text-[#646262]">已选 {selected.size} 项</span>
+            <div className="flex-1" />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleBatchExport}
+              disabled={selected.size === 0 || batchBusy}
+              className="flex items-center gap-1 text-xs"
+            >
+              <Download size={12} />
+              导出选中 ({selected.size})
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => setBatchDeleteConfirm(true)}
+              disabled={selected.size === 0 || batchBusy}
+              className="flex items-center gap-1 text-xs"
+            >
+              <Trash2 size={12} />
+              删除选中 ({selected.size})
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={exitBatchMode}
+              className="flex items-center gap-1 text-xs"
+            >
+              <X size={12} />
+              退出
+            </Button>
+          </div>
+        )}
+
         {/* 加载中 */}
         {isLoading && (
           <div className="py-16 text-center text-sm text-[#646262]">
@@ -174,6 +295,9 @@ export default function WorkflowList() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="bg-[#f8f7f7]">
+                  {batchMode && activeTab !== 'preset' && (
+                    <th className="px-4 py-2.5" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)', width: 40 }} />
+                  )}
                   <th className="px-4 py-2.5 text-left text-xs font-medium text-[#646262]" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}>
                     名称
                   </th>
@@ -199,13 +323,23 @@ export default function WorkflowList() {
                     key={wf.id}
                     className="cursor-pointer transition-colors hover:bg-[#f1eeee]"
                     onClick={() => {
-                      if (activeTab === 'preset') {
+                      if (batchMode && activeTab !== 'preset') {
+                        toggleSelect(wf.id);
+                      } else if (activeTab === 'preset') {
                         handleCreateFromTemplate(wf.id);
                       } else {
                         navigate(`/workflow/${wf.id}`);
                       }
                     }}
                   >
+                    {/* 批量选择 */}
+                    {batchMode && activeTab !== 'preset' && (
+                      <td className="px-4 py-3" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.08)' }}>
+                        {selected.has(wf.id)
+                          ? <CheckSquare size={15} className="text-[#201d1d]" />
+                          : <Square size={15} className="text-[#9a9898]" />}
+                      </td>
+                    )}
                     {/* 名称 */}
                     <td className="px-4 py-3 text-[#201d1d] font-medium" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.08)' }}>
                       <div className="flex items-center gap-2">
@@ -299,6 +433,18 @@ export default function WorkflowList() {
         variant="danger"
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteConfirm(null)}
+      />
+
+      {/* 批量删除确认 */}
+      <ConfirmDialog
+        open={batchDeleteConfirm}
+        title="[-] 批量删除工作流"
+        message={`确定要删除选中的 ${selected.size} 个工作流吗？此操作不可撤销。`}
+        confirmText="删除"
+        cancelText="取消"
+        variant="danger"
+        onConfirm={handleBatchDelete}
+        onCancel={() => setBatchDeleteConfirm(false)}
       />
 
       {/* 创建工作流模态框 */}
