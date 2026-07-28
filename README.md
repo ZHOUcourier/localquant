@@ -119,4 +119,4 @@ class MyNode(BaseWorkNode):
 
 - xtquant 仅支持 Windows，macOS 开发时 QMT 数据功能不可用
 - 数据全部来自 QMT，不使用模拟数据
-- 前端采用 OpenCode 暗色主题风格
+- 前端采用 OpenCode 浅色主题风格，frontend/DESIGN-opencode.ai.md
