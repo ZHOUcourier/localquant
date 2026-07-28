@@ -1,0 +1,73 @@
+{
+  "name": "回测分析模板",
+  "description": "策略回测完整流程：数据准备 → 信号生成 → 回测执行 → 绩效分析",
+  "nodes": [
+    {
+      "uuid": "n1",
+      "name": "QMTKlineNode",
+      "title": "获取历史K线",
+      "positionX": 50,
+      "positionY": 100,
+      "width": 240,
+      "height": 180,
+      "static_input_data": { "period": "1d", "start_date": "20220101" }
+    },
+    {
+      "uuid": "n2",
+      "name": "FactorBuildFormulaNode",
+      "title": "信号公式",
+      "positionX": 350,
+      "positionY": 100,
+      "width": 240,
+      "height": 180,
+      "static_input_data": { "formula": "" }
+    },
+    {
+      "uuid": "n3",
+      "name": "BacktestNode",
+      "title": "回测引擎",
+      "positionX": 650,
+      "positionY": 100,
+      "width": 240,
+      "height": 180,
+      "static_input_data": {
+        "initial_capital": 1000000,
+        "commission_rate": 0.0003,
+        "slippage": 0.001
+      }
+    },
+    {
+      "uuid": "n4",
+      "name": "BacktestAnalysisNode",
+      "title": "绩效分析",
+      "positionX": 950,
+      "positionY": 100,
+      "width": 240,
+      "height": 180,
+      "static_input_data": {}
+    }
+  ],
+  "links": [
+    {
+      "uuid": "l1",
+      "previous_node_uuid": "n1",
+      "output_field_name": "data",
+      "next_node_uuid": "n2",
+      "input_field_name": "kline_data"
+    },
+    {
+      "uuid": "l2",
+      "previous_node_uuid": "n2",
+      "output_field_name": "factor_data",
+      "next_node_uuid": "n3",
+      "input_field_name": "signal_data"
+    },
+    {
+      "uuid": "l3",
+      "previous_node_uuid": "n3",
+      "output_field_name": "backtest_result",
+      "next_node_uuid": "n4",
+      "input_field_name": "backtest_result"
+    }
+  ]
+}

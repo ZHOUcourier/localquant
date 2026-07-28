@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-primary: #0a0a0a;
+  --color-bg-panel: #161b22;
+  --color-bg-element: #21262d;
+  --color-bg-hover: #2d333b;
+  --color-text-primary: #eeeeee;
+  --color-text-muted: #808080;
+  --color-text-disabled: #555555;
+  --color-accent: #fab283;
+  --color-success: #7fd88f;
+  --color-warning: #f5a742;
+  --color-error: #e06c75;
+  --color-info: #56b6c2;
+  --color-border: #30363d;
+  --color-border-focus: #fab283;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+/* 全局基础样式 */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #808080;
+}
+
+/* 选中文字 */
+::selection {
+  background-color: rgba(250, 178, 131, 0.3);
+}
+
+/* React Flow 暗色主题适配 */
+.react-flow__edge-path {
+  stroke: #808080;
+  stroke-width: 1.5;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #fab283;
+  stroke-width: 2;
+}
+.react-flow__connection-line .react-flow__edge-path {
+  stroke: #fab283;
+}
+.react-flow__controls {
+  background: #161b22 !important;
+  border: 1px solid #30363d !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+.react-flow__controls-button {
+  background: #21262d !important;
+  border-bottom: 1px solid #30363d !important;
+  fill: #808080 !important;
+}
+.react-flow__controls-button:hover {
+  background: #2d333b !important;
+  fill: #eeeeee !important;
+}
+.react-flow__minimap {
+  background: #161b22 !important;
+  border: 1px solid #30363d !important;
+  border-radius: 6px !important;
+}
+.react-flow__handle {
+  cursor: crosshair;
+}
+.react-flow__node.selected {
+  outline: none;
+}
+
+/* 节点运行脉冲动画 */
+@keyframes node-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(250,178,131,0.2); }
+  50% { box-shadow: 0 0 12px rgba(250,178,131,0.5); }
+}
+.work-node--running {
+  animation: node-pulse 1.5s ease-in-out infinite;
+}
+
+/* Loader2 旋转动画 */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
