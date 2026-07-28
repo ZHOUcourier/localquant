@@ -5,13 +5,13 @@ import { NodeWidget } from './NodeWidget';
 
 // 节点类别色映射
 const BOX_COLORS: Record<string, string> = {
-  orange: '#fab283',
-  green: '#7fd88f',
-  yellow: '#f5a742',
-  '#e5c07b': '#e5c07b',
-  cyan: '#56b6c2',
-  red: '#e06c75',
-  black: '#808080',
+  orange: '#007aff',
+  green: '#30d158',
+  yellow: '#ff9f0a',
+  '#ffd60a': '#ffd60a',
+  cyan: '#64d2ff',
+  red: '#ff3b30',
+  black: '#9a9898',
 };
 
 // 节点状态图标
@@ -24,10 +24,10 @@ const STATUS_ICONS: Record<NodeStatus, string> = {
 
 // 状态颜色
 const STATUS_COLORS: Record<NodeStatus, string> = {
-  pending: '#808080',
-  running: '#fab283',
-  success: '#7fd88f',
-  failed: '#e06c75',
+  pending: '#9a9898',
+  running: '#007aff',
+  success: '#30d158',
+  failed: '#ff3b30',
 };
 
 export interface WorkNodeData {
@@ -46,7 +46,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
   const nodeStatuses = useFlowStore((s) => s.nodeStatuses);
   const status = nodeStatuses[id] || 'pending';
 
-  const boxColor = BOX_COLORS[data.box_color || 'orange'] || '#fab283';
+  const boxColor = BOX_COLORS[data.box_color || 'orange'] || '#007aff';
   const inputs = data.inputs || [];
   const outputs = data.outputs || [];
   const widgets = data.widgets || [];
@@ -56,15 +56,15 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
 
   // 根据运行状态决定边框和样式
   const borderColor = status === 'running'
-    ? '#fab283'
+    ? '#007aff'
     : status === 'success'
-    ? '#7fd88f'
+    ? '#30d158'
     : status === 'failed'
-    ? '#e06c75'
-    : selected ? '#fab283' : '#30363d';
+    ? '#ff3b30'
+    : selected ? '#007aff' : '#403b3b';
 
   // 左侧色条：success 显示绿色，其他状态显示原始 boxColor
-  const leftBarColor = status === 'success' ? '#7fd88f' : status === 'failed' ? '#e06c75' : boxColor;
+  const leftBarColor = status === 'success' ? '#30d158' : status === 'failed' ? '#ff3b30' : boxColor;
 
   // running 状态使用脉冲动画 className
   const nodeClassName = status === 'running' ? 'work-node work-node--running' : 'work-node';
@@ -73,16 +73,16 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
     <div
       className={nodeClassName}
       style={{
-        background: '#161b22',
+        background: '#262222',
         border: `1px solid ${borderColor}`,
-        borderRadius: 6,
+        borderRadius: 4,
         minWidth: 200,
-        fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+        fontFamily: "var(--font-mono, monospace)",
         fontSize: 12,
         boxShadow: selected && status === 'pending'
-          ? '0 0 0 1px #fab283'
+          ? '0 0 0 1px #007aff'
           : status === 'running'
-          ? '0 0 8px rgba(250,178,131,0.3)'
+          ? '0 0 8px rgba(0,122,255,0.3)'
           : '0 2px 8px rgba(0,0,0,0.4)',
         overflow: 'visible',
         position: 'relative',
@@ -108,12 +108,12 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '6px 10px 6px 12px',
-          borderBottom: '1px solid #30363d',
-          background: '#21262d',
+          borderBottom: '1px solid #403b3b',
+          background: '#302c2c',
           borderRadius: '5px 5px 0 0',
         }}
       >
-        <span style={{ color: '#eeeeee', fontWeight: 600, fontSize: 12 }}>
+        <span style={{ color: '#fdfcfc', fontWeight: 600, fontSize: 12 }}>
           {data.label}
         </span>
         <span
@@ -149,8 +149,8 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
                 top: inputs.length === 1 ? '50%' : `${((i + 1) / (inputs.length + 1)) * 100}%`,
                 width: 8,
                 height: 8,
-                background: '#fab283',
-                border: '1px solid #0a0a0a',
+                background: '#007aff',
+                border: '1px solid #201d1d',
                 borderRadius: '50%',
               }}
             />
@@ -164,7 +164,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
               <div
                 key={`in-label-${input.name}`}
                 style={{
-                  color: '#808080',
+                  color: '#9a9898',
                   fontSize: 11,
                   lineHeight: inputs.length === 1 ? undefined : '20px',
                   textAlign: 'left',
@@ -196,7 +196,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
               <div
                 key={`out-label-${output.name}`}
                 style={{
-                  color: '#808080',
+                  color: '#9a9898',
                   fontSize: 11,
                   lineHeight: outputs.length === 1 ? undefined : '20px',
                   textAlign: 'right',
@@ -222,8 +222,8 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
                 top: outputs.length === 1 ? '50%' : `${((i + 1) / (outputs.length + 1)) * 100}%`,
                 width: 8,
                 height: 8,
-                background: '#fab283',
-                border: '1px solid #0a0a0a',
+                background: '#007aff',
+                border: '1px solid #201d1d',
                 borderRadius: '50%',
               }}
             />

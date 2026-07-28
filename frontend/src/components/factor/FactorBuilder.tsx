@@ -6,7 +6,12 @@ import type { TabItem } from '@/components/ui';
 export interface FactorResult {
   dates: string[];
   stocks: string[];
+  /** {date: {stock: factor_value}} */
   values: Record<string, Record<string, number>>;
+  /** {date: {stock: daily_return}} 用于 IC / 分层分析 */
+  returnData: Record<string, Record<string, number>>;
+  /** 用于标识该因子（相关性分析） */
+  name: string;
 }
 
 interface FactorBuilderProps {
@@ -41,28 +46,56 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [computing, setComputing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<FactorResult | null>(null);
 
   const handleCompute = useCallback(async () => {
     setComputing(true);
+    setError(null);
     try {
-      // 模拟因子计算结果（实际应调用后端 API）
-      const dates = ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08'];
-      const stocks = ['000001.SZ', '000002.SZ', '600000.SH', '600036.SH'];
-      const values: Record<string, Record<string, number>> = {};
-      for (const d of dates) {
-        values[d] = {};
-        for (const s of stocks) {
-          values[d][s] = Math.round((Math.random() - 0.5) * 2 * 1000) / 1000;
-        }
+      // 调用后端基于本地真实行情数据计算因子
+      const res = await fetch('/api/factor/compute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          formula,
+          code,
+          stock_pool: pool
+            .split(/[,，\s]+/)
+            .map((s) => s.trim())
+            .filter(Boolean),
+          start_date: startDate,
+          end_date: endDate,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `因子计算接口错误 (HTTP ${res.status})`);
       }
-      const result: FactorResult = { dates, stocks, values };
+      const data = await res.json();
+      const result: FactorResult = {
+        dates: data.dates,
+        stocks: data.stocks,
+        values: data.factor_data,
+        returnData: data.return_data,
+        name: mode === 'formula' ? (formula || 'factor') : 'custom_factor',
+      };
       setPreview(result);
       onFactorComputed?.(result);
+    } catch (e) {
+      const msg = e instanceof TypeError
+        ? '无法连接后端服务 (http://localhost:8000)，请先运行 make dev 或 make dev-backend'
+        : e instanceof Error ? e.message : String(e);
+      setError(msg);
+      setPreview(null);
     } finally {
       setComputing(false);
     }
-  }, [onFactorComputed]);
+  }, [mode, formula, code, pool, startDate, endDate, onFactorComputed]);
+
+  // 预览仅展示最近 20 个交易日，避免渲染过大表格
+  const previewDates = preview ? preview.dates.slice(-20) : [];
 
   return (
     <Card title="因子构建器" className="h-full flex flex-col">
@@ -77,7 +110,7 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 公式模式 */}
         {mode === 'formula' && (
           <div className="flex flex-col gap-2">
-            <label className="text-xs text-[#808080]">因子公式表达式</label>
+            <label className="text-xs text-[#9a9898]">因子公式表达式（可用变量: open/high/low/close/volume/amount, np, pd）</label>
             <Input
               placeholder="例: close / close.shift(5) - 1"
               value={formula}
@@ -89,8 +122,8 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 代码模式 */}
         {mode === 'code' && (
           <div className="flex flex-col gap-2">
-            <label className="text-xs text-[#808080]">Python 代码</label>
-            <div className="rounded-[4px] border border-[#30363d] overflow-hidden" style={{ height: 220 }}>
+            <label className="text-xs text-[#9a9898]">Python 代码</label>
+            <div className="rounded-[4px] border border-[#403b3b] overflow-hidden" style={{ height: 220 }}>
               <Editor
                 height="220px"
                 language="python"
@@ -113,15 +146,15 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 参数区域 */}
         <div className="grid grid-cols-3 gap-2">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">股票池</label>
+            <label className="text-xs text-[#9a9898]">股票池</label>
             <Input
-              placeholder="留空=全市场"
+              placeholder="留空=全部已缓存股票"
               value={pool}
               onChange={(e) => setPool(e.target.value)}
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">起始日期</label>
+            <label className="text-xs text-[#9a9898]">起始日期</label>
             <Input
               type="date"
               value={startDate}
@@ -129,7 +162,7 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">结束日期</label>
+            <label className="text-xs text-[#9a9898]">结束日期</label>
             <Input
               type="date"
               value={endDate}
@@ -142,36 +175,43 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
           计算因子
         </Button>
 
+        {/* 错误提示（真实后端错误，无模拟数据兜底） */}
+        {error && (
+          <div className="rounded-[4px] border border-[#ff3b30] bg-[#ff3b30]/10 px-3 py-2 font-mono text-xs text-[#ff3b30]">
+            {error}
+          </div>
+        )}
+
         {/* 因子值预览 */}
         {preview && (
           <div className="flex flex-col gap-2">
-            <label className="text-xs text-[#808080]">因子值预览</label>
+            <label className="text-xs text-[#9a9898]">因子值预览（最近 {previewDates.length} 个交易日）</label>
             <ScrollArea maxHeight={200}>
               <table className="w-full border-collapse text-xs">
                 <thead>
-                  <tr className="bg-[#21262d]">
-                    <th className="border-b border-[#30363d] px-2 py-1.5 text-left text-[#808080] sticky top-0 bg-[#21262d]">
+                  <tr className="bg-[#302c2c]">
+                    <th className="border-b border-[#403b3b] px-2 py-1.5 text-left text-[#9a9898] sticky top-0 bg-[#302c2c]">
                       日期
                     </th>
                     {preview.stocks.map((s) => (
-                      <th key={s} className="border-b border-[#30363d] px-2 py-1.5 text-right text-[#808080] sticky top-0 bg-[#21262d]">
+                      <th key={s} className="border-b border-[#403b3b] px-2 py-1.5 text-right text-[#9a9898] sticky top-0 bg-[#302c2c]">
                         {s}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.dates.map((d) => (
-                    <tr key={d} className="hover:bg-[#2d333b]">
-                      <td className="border-b border-[#30363d] px-2 py-1 text-[#808080]">{d}</td>
+                  {previewDates.map((d) => (
+                    <tr key={d} className="hover:bg-[#363131]">
+                      <td className="border-b border-[#403b3b] px-2 py-1 text-[#9a9898]">{d}</td>
                       {preview.stocks.map((s) => {
-                        const v = preview.values[d]?.[s] ?? 0;
+                        const v = preview.values[d]?.[s];
                         return (
                           <td
                             key={s}
-                            className={`border-b border-[#30363d] px-2 py-1 text-right font-mono ${v > 0 ? 'text-[#7fd88f]' : v < 0 ? 'text-[#e06c75]' : 'text-[#eeeeee]'}`}
+                            className={`border-b border-[#403b3b] px-2 py-1 text-right font-mono ${v != null && v > 0 ? 'text-[#30d158]' : v != null && v < 0 ? 'text-[#ff3b30]' : 'text-[#fdfcfc]'}`}
                           >
-                            {v.toFixed(3)}
+                            {v != null ? v.toFixed(3) : '-'}
                           </td>
                         );
                       })}

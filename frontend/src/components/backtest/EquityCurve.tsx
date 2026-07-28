@@ -51,13 +51,13 @@ function formatMoney(v: number) {
 const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; name: string; color: string }>; label?: string }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded border border-[#30363d] bg-[#161b22] px-3 py-2 text-xs shadow-lg">
-      <div className="mb-1 text-[#808080]">{label}</div>
+    <div className="rounded border border-[#403b3b] bg-[#262222] px-3 py-2 text-xs">
+      <div className="mb-1 text-[#9a9898]">{label}</div>
       {payload.map((p, i) => (
         <div key={i} className="flex items-center gap-2">
           <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: p.color }} />
-          <span className="text-[#808080]">{p.name}:</span>
-          <span className="font-mono text-[#eeeeee]">
+          <span className="text-[#9a9898]">{p.name}:</span>
+          <span className="font-mono text-[#fdfcfc]">
             {p.name.includes('净值') ? formatMoney(p.value) : formatPct(p.value)}
           </span>
         </div>
@@ -107,16 +107,16 @@ export function EquityCurve({
         <div className="h-[260px]">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#30363d" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" vertical={false} />
               <XAxis
                 dataKey="date"
-                tick={{ fontSize: 11, fill: '#808080' }}
+                tick={{ fontSize: 11, fill: '#9a9898' }}
                 tickLine={false}
-                axisLine={{ stroke: '#30363d' }}
+                axisLine={{ stroke: '#403b3b' }}
                 interval={tickInterval}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: '#808080' }}
+                tick={{ fontSize: 11, fill: '#9a9898' }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={formatPct}
@@ -124,29 +124,29 @@ export function EquityCurve({
               />
               <Tooltip content={<CustomTooltip />} />
               <Legend
-                wrapperStyle={{ fontSize: 12, color: '#808080' }}
+                wrapperStyle={{ fontSize: 12, color: '#9a9898' }}
                 iconType="line"
               />
-              <ReferenceLine y={0} stroke="#555555" strokeDasharray="2 2" />
+              <ReferenceLine y={0} stroke="#6e6e73" strokeDasharray="2 2" />
               <Line
                 type="monotone"
                 dataKey="strategy"
                 name="策略"
-                stroke="#fab283"
+                stroke="#007aff"
                 strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 4, fill: '#fab283' }}
+                activeDot={{ r: 4, fill: '#007aff' }}
               />
               {benchmarkCurve && (
                 <Line
                   type="monotone"
                   dataKey="benchmark"
                   name="基准"
-                  stroke="#56b6c2"
+                  stroke="#64d2ff"
                   strokeWidth={1.5}
                   dot={false}
                   strokeDasharray="4 2"
-                  activeDot={{ r: 3, fill: '#56b6c2' }}
+                  activeDot={{ r: 3, fill: '#64d2ff' }}
                 />
               )}
             </LineChart>
@@ -159,16 +159,16 @@ export function EquityCurve({
         <div className="h-[160px]">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#30363d" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" vertical={false} />
               <XAxis
                 dataKey="date"
-                tick={{ fontSize: 11, fill: '#808080' }}
+                tick={{ fontSize: 11, fill: '#9a9898' }}
                 tickLine={false}
-                axisLine={{ stroke: '#30363d' }}
+                axisLine={{ stroke: '#403b3b' }}
                 interval={tickInterval}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: '#808080' }}
+                tick={{ fontSize: 11, fill: '#9a9898' }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={formatPct}
@@ -179,9 +179,9 @@ export function EquityCurve({
                 type="monotone"
                 dataKey="drawdown"
                 name="回撤"
-                stroke="#e06c75"
+                stroke="#ff3b30"
                 strokeWidth={1.5}
-                fill="#e06c75"
+                fill="#ff3b30"
                 fillOpacity={0.2}
               />
             </AreaChart>

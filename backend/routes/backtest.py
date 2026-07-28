@@ -1,9 +1,12 @@
 """回测路由"""
+
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel
-from typing import Optional
 
+from backend.services import market_data
 from backend.services.backtest_analysis import backtest_analysis
 
 router = APIRouter()
@@ -11,9 +14,10 @@ router = APIRouter()
 
 # ── 请求模型 ─────────────────────────────────────────────────
 
+
 class RunBacktestRequest(BaseModel):
     signals: dict  # {date_str: {code: signal_value}}
-    prices: dict   # {date_str: {code: price}}
+    prices: dict  # {date_str: {code: price}}
     initial_capital: float = 1_000_000
     commission_rate: float = 0.001
     slippage: float = 0.001
@@ -31,10 +35,23 @@ class MonteCarloRequest(BaseModel):
     n_days: int = 252
 
 
+class RunStrategyRequest(BaseModel):
+    signal_code: str
+    stock_pool: list[str] = []
+    start_date: str = ""
+    end_date: str = ""
+    initial_capital: float = 1_000_000
+    commission_rate: float = 0.001
+    slippage: float = 0.001
+    risk_free_rate: float = 0.03
+
+
 # ── 工具函数 ─────────────────────────────────────────────────
+
 
 def _dict_to_series(d: dict) -> "pd.Series":
     import pandas as pd
+
     s = pd.Series(d)
     s.index = pd.to_datetime(s.index)
     s = s.sort_index()
@@ -43,16 +60,105 @@ def _dict_to_series(d: dict) -> "pd.Series":
 
 def _dict_to_df(d: dict) -> "pd.DataFrame":
     import pandas as pd
+
     return pd.DataFrame(d).apply(pd.to_numeric, errors="coerce")
 
 
 # ── 路由 ─────────────────────────────────────────────────────
+
+
+@router.post("/run-strategy")
+async def run_strategy(req: RunStrategyRequest):
+    """基于本地行情数据执行策略回测：执行信号代码 → 回测 → 绩效报告"""
+    import pandas as pd
+
+    # 1. 加载真实行情（无数据时返回明确错误）
+    try:
+        panels = market_data.load_price_panels(
+            codes=req.stock_pool,
+            start_date=req.start_date,
+            end_date=req.end_date,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    prices = panels["close"]
+
+    # 2. 执行用户信号代码，要求定义 generate_signals(prices, **kwargs)
+    exec_ctx: dict = {"pd": pd}
+    try:
+        exec(req.signal_code, {"__builtins__": __builtins__}, exec_ctx)  # noqa: S102
+        fn = exec_ctx.get("generate_signals")
+        if not callable(fn):
+            raise ValueError("信号代码必须定义 generate_signals(prices, **kwargs) 函数")
+        signals_raw = fn(prices)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"信号生成失败: {e}")
+        raise HTTPException(status_code=400, detail=f"信号代码执行失败: {e}")
+
+    if isinstance(signals_raw, dict):
+        signals_df = pd.DataFrame.from_dict(signals_raw, orient="index")
+        signals_df.index = pd.to_datetime(signals_df.index)
+        signals_df = signals_df.sort_index()
+    elif isinstance(signals_raw, pd.DataFrame):
+        signals_df = signals_raw
+    else:
+        raise HTTPException(
+            status_code=400, detail="generate_signals 应返回 dict 或 DataFrame"
+        )
+
+    if signals_df.empty:
+        raise HTTPException(
+            status_code=400, detail="信号为空 — 请检查信号逻辑与数据区间"
+        )
+
+    # 3. 回测 + 绩效
+    try:
+        result = backtest_analysis.run_backtest(
+            signals=signals_df,
+            prices=prices,
+            initial_capital=req.initial_capital,
+            commission_rate=req.commission_rate,
+            slippage=req.slippage,
+        )
+        equity_curve = result["equity_curve"]
+        strategy_returns = result["strategy_returns"]
+
+        tear = backtest_analysis.performance_tear_sheet(
+            returns=strategy_returns,
+            risk_free_rate=req.risk_free_rate,
+        )
+        dd = backtest_analysis.drawdown_analysis(strategy_returns)
+
+        def _ser(s) -> dict:
+            return {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in s.items()
+            }
+
+        return {
+            "status": "ok",
+            "initial_capital": req.initial_capital,
+            "equity_curve": _ser(equity_curve),
+            "strategy_returns": _ser(strategy_returns),
+            "drawdown_series": _ser(dd["drawdown_series"]),
+            "tear_sheet": {**tear, "max_drawdown": dd["max_drawdown"]},
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"回测执行失败: {e}")
+        raise HTTPException(status_code=400, detail=f"回测执行失败: {e}")
+
 
 @router.post("/run")
 async def run_backtest(req: RunBacktestRequest):
     """执行向量化回测"""
     try:
         import pandas as pd
+
         signals_df = _dict_to_df(req.signals)
         prices_df = _dict_to_df(req.prices)
 
@@ -68,13 +174,23 @@ async def run_backtest(req: RunBacktestRequest):
         equity_curve = result["equity_curve"]
         strategy_returns = result["strategy_returns"]
 
-        total_return = float(equity_curve.iloc[-1] / equity_curve.iloc[0] - 1) if len(equity_curve) > 0 else 0.0
+        total_return = (
+            float(equity_curve.iloc[-1] / equity_curve.iloc[0] - 1)
+            if len(equity_curve) > 0
+            else 0.0
+        )
 
         return {
             "status": "ok",
             "total_return": total_return,
-            "equity_curve": {str(k.date() if hasattr(k, "date") else k): float(v) for k, v in equity_curve.items()},
-            "strategy_returns": {str(k.date() if hasattr(k, "date") else k): float(v) for k, v in strategy_returns.items()},
+            "equity_curve": {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in equity_curve.items()
+            },
+            "strategy_returns": {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in strategy_returns.items()
+            },
             "initial_capital": req.initial_capital,
         }
     except Exception as e:
@@ -97,6 +213,7 @@ async def tear_sheet(req: TearSheetRequest):
 
         # 序列化 drawdown_series
         from backend.services.backtest_analysis import backtest_analysis as ba
+
         dd = ba.drawdown_analysis(returns_series)
         result["drawdown_series"] = {
             str(k.date() if hasattr(k, "date") else k): float(v)

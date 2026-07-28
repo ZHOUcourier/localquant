@@ -32,26 +32,26 @@ export const Dialog = React.forwardRef<HTMLDivElement, DialogProps>(
         <div
           ref={ref}
           className={cn(
-            'relative z-10 min-w-[320px] max-w-[560px] rounded-[4px] border border-[#30363d] bg-[#161b22]',
+            'relative z-10 min-w-[320px] max-w-[560px] rounded-[4px] border border-[#403b3b] bg-[#262222]',
             className
           )}
           {...props}
         >
           {title && (
-            <div className="flex items-center justify-between border-b border-[#30363d] px-4 py-3">
-              <div className="text-sm font-medium text-[#eeeeee]">{title}</div>
+            <div className="flex items-center justify-between border-b border-[#403b3b] px-4 py-3">
+              <div className="text-sm font-medium text-[#fdfcfc]">{title}</div>
               <button
                 type="button"
-                className="text-[#808080] hover:text-[#eeeeee] transition-colors cursor-pointer"
+                className="text-[#9a9898] hover:text-[#fdfcfc] transition-colors cursor-pointer"
                 onClick={onClose}
               >
                 ✕
               </button>
             </div>
           )}
-          <div className="px-4 py-3 text-sm text-[#eeeeee]">{children}</div>
+          <div className="px-4 py-3 text-sm text-[#fdfcfc]">{children}</div>
           {footer && (
-            <div className="flex items-center justify-end gap-2 border-t border-[#30363d] px-4 py-3">
+            <div className="flex items-center justify-end gap-2 border-t border-[#403b3b] px-4 py-3">
               {footer}
             </div>
           )}

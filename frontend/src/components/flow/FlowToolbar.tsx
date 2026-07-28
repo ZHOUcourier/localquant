@@ -103,14 +103,14 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
     : '就绪';
 
   const statusColor = isRunning
-    ? '#fab283'
+    ? '#007aff'
     : statusCounts['failed']
-    ? '#e06c75'
+    ? '#ff3b30'
     : statusCounts['success']
-    ? '#7fd88f'
-    : '#808080';
+    ? '#30d158'
+    : '#9a9898';
 
-  const saveBtnColor = saveStatus === 'saved' ? '#7fd88f' : saveStatus === 'error' ? '#e06c75' : '#808080';
+  const saveBtnColor = saveStatus === 'saved' ? '#30d158' : saveStatus === 'error' ? '#ff3b30' : '#9a9898';
   const saveBtnText = saveStatus === 'saving' ? '保存中...' : saveStatus === 'saved' ? '已保存' : saveStatus === 'error' ? '保存失败' : '保存';
 
   return (
@@ -120,8 +120,8 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         alignItems: 'center',
         gap: 12,
         padding: '8px 16px',
-        background: '#161b22',
-        borderBottom: '1px solid #30363d',
+        background: '#262222',
+        borderBottom: '1px solid #403b3b',
         height: 44,
         flexShrink: 0,
       }}
@@ -135,10 +135,10 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
           onBlur={handleNameSubmit}
           onKeyDown={handleNameKeyDown}
           style={{
-            background: '#0a0a0a',
-            border: '1px solid #fab283',
+            background: '#201d1d',
+            border: '1px solid #007aff',
             borderRadius: 4,
-            color: '#eeeeee',
+            color: '#fdfcfc',
             padding: '2px 8px',
             fontSize: 13,
             fontFamily: 'inherit',
@@ -150,7 +150,7 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         <span
           onDoubleClick={() => { setDraft(workflowName); setEditing(true); }}
           style={{
-            color: '#eeeeee',
+            color: '#fdfcfc',
             fontSize: 13,
             fontWeight: 600,
             cursor: 'pointer',
@@ -193,8 +193,8 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
           alignItems: 'center',
           gap: 5,
           padding: '4px 12px',
-          background: '#21262d',
-          border: '1px solid #30363d',
+          background: '#302c2c',
+          border: '1px solid #403b3b',
           borderRadius: 4,
           color: saveBtnColor,
           fontSize: 12,
@@ -216,10 +216,10 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
           alignItems: 'center',
           gap: 5,
           padding: '4px 14px',
-          background: isRunning ? '#e06c75' : '#fab283',
+          background: isRunning ? '#ff3b30' : '#007aff',
           border: 'none',
           borderRadius: 4,
-          color: isRunning ? '#fff' : '#0a0a0a',
+          color: isRunning ? '#fff' : '#201d1d',
           fontSize: 12,
           fontWeight: 600,
           cursor: !workflowId ? 'not-allowed' : 'pointer',

@@ -1,7 +1,10 @@
 """FastAPI 后端入口"""
+
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from loguru import logger
 
 from backend.config import settings
@@ -17,6 +20,7 @@ async def lifespan(app: FastAPI):
 
     # 加载插件
     from backend.plugins.loader import load_all_nodes
+
     load_all_nodes()
     logger.info("Plugins loaded")
 
@@ -42,7 +46,15 @@ app.add_middleware(
 )
 
 # 路由注册
-from backend.routes import workflow, plugins, data, explorer, factor, backtest, experiment
+from backend.routes import (
+    backtest,
+    data,
+    experiment,
+    explorer,
+    factor,
+    plugins,
+    workflow,
+)
 
 app.include_router(workflow.router, prefix="/api/workflow", tags=["workflow"])
 app.include_router(plugins.router, prefix="/api/plugins", tags=["plugins"])
@@ -51,6 +63,12 @@ app.include_router(explorer.router, prefix="/api/explorer", tags=["explorer"])
 app.include_router(factor.router, prefix="/api/factor", tags=["factor"])
 app.include_router(backtest.router, prefix="/api/backtest", tags=["backtest"])
 app.include_router(experiment.router, prefix="/api/experiment", tags=["experiment"])
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """后端根路径跳转到 API 文档，避免访问 8000 端口时误以为服务未启动"""
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/api/health")

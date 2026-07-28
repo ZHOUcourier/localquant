@@ -31,10 +31,10 @@ const sourceIcons: Record<string, typeof GitBranch> = {
 };
 
 const sourceColors: Record<string, string> = {
-  workflow: '#fab283',
-  factor: '#7fd88f',
-  backtest: '#f5a742',
-  explore: '#56b6c2',
+  workflow: '#007aff',
+  factor: '#30d158',
+  backtest: '#ff9f0a',
+  explore: '#64d2ff',
 };
 
 const statusVariant: Record<string, 'success' | 'warning' | 'error' | 'info' | 'default'> = {
@@ -121,7 +121,7 @@ export default function Experiments() {
           type="checkbox"
           checked={selected.size === experiments.length && experiments.length > 0}
           onChange={toggleAll}
-          className="accent-[#fab283]"
+          className="accent-[#007aff]"
         />
       ),
       dataIndex: 'id' as keyof Experiment,
@@ -131,7 +131,7 @@ export default function Experiments() {
           type="checkbox"
           checked={selected.has(record.id)}
           onChange={() => toggleSelect(record.id)}
-          className="accent-[#fab283]"
+          className="accent-[#007aff]"
         />
       ),
     },
@@ -142,7 +142,7 @@ export default function Experiments() {
       width: 90,
       render: (val) => {
         const Icon = sourceIcons[val as string] || Search;
-        const color = sourceColors[val as string] || '#808080';
+        const color = sourceColors[val as string] || '#9a9898';
         return (
           <span className="inline-flex items-center gap-1">
             <Icon size={13} style={{ color }} />
@@ -171,7 +171,7 @@ export default function Experiments() {
       title: '时间',
       dataIndex: 'created_at' as keyof Experiment,
       width: 120,
-      render: (val) => <span className="text-xs text-[#808080]">{formatTime(val as number)}</span>,
+      render: (val) => <span className="text-xs text-[#9a9898]">{formatTime(val as number)}</span>,
     },
     {
       key: 'metrics',
@@ -179,12 +179,12 @@ export default function Experiments() {
       dataIndex: 'metrics' as keyof Experiment,
       render: (val) => {
         const m = val as Record<string, unknown>;
-        if (!m || Object.keys(m).length === 0) return <span className="text-[#555555]">-</span>;
+        if (!m || Object.keys(m).length === 0) return <span className="text-[#6e6e73]">-</span>;
         return (
           <div className="flex gap-2 flex-wrap">
             {Object.entries(m).slice(0, 3).map(([k, v]) => (
-              <span key={k} className="text-xs text-[#808080]">
-                {k}: <span className="text-[#eeeeee]">{typeof v === 'number' ? v.toFixed(4) : String(v)}</span>
+              <span key={k} className="text-xs text-[#9a9898]">
+                {k}: <span className="text-[#fdfcfc]">{typeof v === 'number' ? v.toFixed(4) : String(v)}</span>
               </span>
             ))}
           </div>
@@ -206,17 +206,17 @@ export default function Experiments() {
                 placeholder="输入备注..."
                 autoFocus
               />
-              <button onClick={saveNote} className="text-[#7fd88f] hover:text-[#5ec46e] cursor-pointer"><Check size={14} /></button>
-              <button onClick={() => setNoteEditId(null)} className="text-[#808080] hover:text-[#eeeeee] cursor-pointer"><X size={14} /></button>
+              <button onClick={saveNote} className="text-[#30d158] hover:text-[#28b04a] cursor-pointer"><Check size={14} /></button>
+              <button onClick={() => setNoteEditId(null)} className="text-[#9a9898] hover:text-[#fdfcfc] cursor-pointer"><X size={14} /></button>
             </div>
           );
         }
         return (
           <div className="flex items-center gap-1 group">
-            <span className="text-xs text-[#808080] truncate max-w-[120px]">{(record.note as string) || '-'}</span>
+            <span className="text-xs text-[#9a9898] truncate max-w-[120px]">{(record.note as string) || '-'}</span>
             <button
               onClick={() => startEditNote(record)}
-              className="opacity-0 group-hover:opacity-100 text-[#808080] hover:text-[#fab283] transition-opacity cursor-pointer"
+              className="opacity-0 group-hover:opacity-100 text-[#9a9898] hover:text-[#007aff] transition-opacity cursor-pointer"
             >
               <Pencil size={12} />
             </button>
@@ -230,8 +230,8 @@ export default function Experiments() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-xl font-semibold text-[#eeeeee] mb-1">实验管理</h1>
-          <p className="text-[13px] text-[#808080]">共 {experiments.length} 条实验记录</p>
+          <h1 className="text-xl font-semibold text-[#fdfcfc] mb-1">实验管理</h1>
+          <p className="text-[13px] text-[#9a9898]">共 {experiments.length} 条实验记录</p>
         </div>
         <Button
           variant="primary"
@@ -259,22 +259,22 @@ export default function Experiments() {
         className="max-w-[720px]"
       >
         {compareLoading ? (
-          <div className="text-center py-8 text-[#808080]">加载中...</div>
+          <div className="text-center py-8 text-[#9a9898]">加载中...</div>
         ) : compareResult ? (
           <div className="space-y-4 max-h-[60vh] overflow-auto">
             {/* 参数差异 */}
             <div>
-              <h3 className="text-sm font-medium text-[#eeeeee] mb-2">参数差异</h3>
+              <h3 className="text-sm font-medium text-[#fdfcfc] mb-2">参数差异</h3>
               {Object.keys(compareResult.param_diffs).length === 0 ? (
-                <p className="text-xs text-[#555555]">无参数差异</p>
+                <p className="text-xs text-[#6e6e73]">无参数差异</p>
               ) : (
-                <div className="rounded border border-[#30363d] overflow-hidden">
+                <div className="rounded border border-[#403b3b] overflow-hidden">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="bg-[#21262d]">
-                        <th className="px-2 py-1.5 text-left text-[#808080] font-medium">参数</th>
+                      <tr className="bg-[#302c2c]">
+                        <th className="px-2 py-1.5 text-left text-[#9a9898] font-medium">参数</th>
                         {compareResult.experiments.map(e => (
-                          <th key={e.id} className="px-2 py-1.5 text-left text-[#808080] font-medium truncate max-w-[120px]">
+                          <th key={e.id} className="px-2 py-1.5 text-left text-[#9a9898] font-medium truncate max-w-[120px]">
                             {e.name || e.id.slice(0, 8)}
                           </th>
                         ))}
@@ -282,8 +282,8 @@ export default function Experiments() {
                     </thead>
                     <tbody>
                       {Object.entries(compareResult.param_diffs).map(([key, vals]) => (
-                        <tr key={key} className="border-t border-[#30363d]">
-                          <td className="px-2 py-1 text-[#fab283] font-mono">{key}</td>
+                        <tr key={key} className="border-t border-[#403b3b]">
+                          <td className="px-2 py-1 text-[#007aff] font-mono">{key}</td>
                           {compareResult.experiments.map(e => {
                             const v = (vals as Record<string, unknown>)[e.id];
                             const isDiff = Object.values(vals as Record<string, unknown>).length > 1 &&
@@ -291,7 +291,7 @@ export default function Experiments() {
                             return (
                               <td
                                 key={e.id}
-                                className={`px-2 py-1 font-mono ${isDiff ? 'bg-[#fab283]/10 text-[#fab283]' : 'text-[#eeeeee]'}`}
+                                className={`px-2 py-1 font-mono ${isDiff ? 'bg-[#007aff]/10 text-[#007aff]' : 'text-[#fdfcfc]'}`}
                               >
                                 {v !== undefined ? JSON.stringify(v) : '-'}
                               </td>
@@ -307,17 +307,17 @@ export default function Experiments() {
 
             {/* 指标对比 */}
             <div>
-              <h3 className="text-sm font-medium text-[#eeeeee] mb-2">指标对比</h3>
+              <h3 className="text-sm font-medium text-[#fdfcfc] mb-2">指标对比</h3>
               {Object.keys(compareResult.metric_comparison).length === 0 ? (
-                <p className="text-xs text-[#555555]">无指标数据</p>
+                <p className="text-xs text-[#6e6e73]">无指标数据</p>
               ) : (
-                <div className="rounded border border-[#30363d] overflow-hidden">
+                <div className="rounded border border-[#403b3b] overflow-hidden">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="bg-[#21262d]">
-                        <th className="px-2 py-1.5 text-left text-[#808080] font-medium">指标</th>
+                      <tr className="bg-[#302c2c]">
+                        <th className="px-2 py-1.5 text-left text-[#9a9898] font-medium">指标</th>
                         {compareResult.experiments.map(e => (
-                          <th key={e.id} className="px-2 py-1.5 text-left text-[#808080] font-medium truncate max-w-[120px]">
+                          <th key={e.id} className="px-2 py-1.5 text-left text-[#9a9898] font-medium truncate max-w-[120px]">
                             {e.name || e.id.slice(0, 8)}
                           </th>
                         ))}
@@ -325,12 +325,12 @@ export default function Experiments() {
                     </thead>
                     <tbody>
                       {Object.entries(compareResult.metric_comparison).map(([key, vals]) => (
-                        <tr key={key} className="border-t border-[#30363d]">
-                          <td className="px-2 py-1 text-[#56b6c2] font-medium">{key}</td>
+                        <tr key={key} className="border-t border-[#403b3b]">
+                          <td className="px-2 py-1 text-[#64d2ff] font-medium">{key}</td>
                           {compareResult.experiments.map(e => {
                             const v = (vals as Record<string, unknown>)[e.id];
                             return (
-                              <td key={e.id} className="px-2 py-1 font-mono text-[#eeeeee]">
+                              <td key={e.id} className="px-2 py-1 font-mono text-[#fdfcfc]">
                                 {v !== undefined ? (typeof v === 'number' ? v.toFixed(6) : JSON.stringify(v)) : '-'}
                               </td>
                             );

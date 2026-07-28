@@ -1,35 +1,43 @@
+/**
+ * OpenCode 设计系统主题
+ * 暖黑背景 (#201d1d) + 暖白文字 (#fdfcfc) + Apple HIG 语义色，
+ * Berkeley Mono 单一字体，扁平无阴影，4px 圆角。
+ */
 export const colors = {
   bg: {
-    primary: '#0a0a0a',
-    panel: '#161b22',
-    element: '#21262d',
-    hover: '#2d333b',
+    primary: '#201d1d',
+    panel: '#262222',
+    element: '#302c2c',
+    hover: '#363131',
   },
   text: {
-    primary: '#eeeeee',
-    muted: '#808080',
-    disabled: '#555555',
+    primary: '#fdfcfc',
+    muted: '#9a9898',
+    disabled: '#6e6e73',
   },
-  accent: '#fab283',
-  success: '#7fd88f',
-  warning: '#f5a742',
-  error: '#e06c75',
-  info: '#56b6c2',
-  border: '#30363d',
-  borderFocus: '#fab283',
-  // 节点类别色
-  nodeData: '#fab283',
-  nodeProcess: '#7fd88f',
-  nodeIndicator: '#f5a742',
-  nodeFactor: '#e5c07b',
-  nodeAnalysis: '#56b6c2',
-  nodeBacktest: '#e06c75',
-  nodeOutput: '#808080',
+  accent: '#007aff',
+  accentHover: '#0056b3',
+  accentActive: '#004085',
+  success: '#30d158',
+  warning: '#ff9f0a',
+  error: '#ff3b30',
+  info: '#64d2ff',
+  border: '#403b3b',
+  borderOutline: '#646262',
+  borderFocus: '#007aff',
+  // 节点类别色（Apple HIG 派生）
+  nodeData: '#007aff',
+  nodeProcess: '#30d158',
+  nodeIndicator: '#ff9f0a',
+  nodeFactor: '#ffd60a',
+  nodeAnalysis: '#64d2ff',
+  nodeBacktest: '#ff3b30',
+  nodeOutput: '#9a9898',
 } as const;
 
 export const fonts = {
-  mono: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-  sans: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+  mono: "'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+  sans: "'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
 } as const;
 
 export const spacing = {
@@ -45,5 +53,5 @@ export const radii = {
   none: '0px',
   sm: '2px',
   md: '4px',
-  lg: '8px',
+  lg: '6px',
 } as const;

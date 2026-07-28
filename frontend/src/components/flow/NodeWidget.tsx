@@ -16,14 +16,14 @@ interface NodeWidgetProps {
 const inputStyle: React.CSSProperties = {
   width: '100%',
   height: 24,
-  background: '#0d1117',
-  border: '1px solid #30363d',
+  background: '#201d1d',
+  border: '1px solid #403b3b',
   borderRadius: 3,
-  color: '#eeeeee',
+  color: '#fdfcfc',
   fontSize: 11,
   padding: '2px 6px',
   outline: 'none',
-  fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+  fontFamily: "var(--font-mono, monospace)",
   boxSizing: 'border-box' as const,
 };
 
@@ -61,13 +61,13 @@ function NodeWidgetComponent({ nodeId, widget }: NodeWidgetProps) {
           padding: '1px 0',
         }}
       >
-        <span style={{ color: '#808080', fontSize: 10, flexShrink: 0 }}>{widget.name}</span>
+        <span style={{ color: '#9a9898', fontSize: 10, flexShrink: 0 }}>{widget.name}</span>
         <button
           style={{
-            background: '#21262d',
-            border: '1px solid #30363d',
+            background: '#302c2c',
+            border: '1px solid #403b3b',
             borderRadius: 3,
-            color: '#8b949e',
+            color: '#9a9898',
             fontSize: 10,
             padding: '2px 6px',
             cursor: 'pointer',
@@ -93,7 +93,7 @@ function NodeWidgetComponent({ nodeId, widget }: NodeWidgetProps) {
           padding: '1px 0',
         }}
       >
-        <span style={{ color: '#808080', fontSize: 10, flexShrink: 0, minWidth: 36 }}>
+        <span style={{ color: '#9a9898', fontSize: 10, flexShrink: 0, minWidth: 36 }}>
           {widget.name}
         </span>
         <select
@@ -132,7 +132,7 @@ function NodeWidgetComponent({ nodeId, widget }: NodeWidgetProps) {
           padding: '1px 0',
         }}
       >
-        <span style={{ color: '#808080', fontSize: 10, flexShrink: 0, minWidth: 36 }}>
+        <span style={{ color: '#9a9898', fontSize: 10, flexShrink: 0, minWidth: 36 }}>
           {widget.name}
         </span>
         <input
@@ -160,7 +160,7 @@ function NodeWidgetComponent({ nodeId, widget }: NodeWidgetProps) {
           padding: '1px 0',
         }}
       >
-        <span style={{ color: '#808080', fontSize: 10, flexShrink: 0, minWidth: 36 }}>
+        <span style={{ color: '#9a9898', fontSize: 10, flexShrink: 0, minWidth: 36 }}>
           {widget.name}
         </span>
         <input
@@ -183,7 +183,7 @@ function NodeWidgetComponent({ nodeId, widget }: NodeWidgetProps) {
         padding: '1px 0',
       }}
     >
-      <span style={{ color: '#808080', fontSize: 10, flexShrink: 0, minWidth: 36 }}>
+      <span style={{ color: '#9a9898', fontSize: 10, flexShrink: 0, minWidth: 36 }}>
         {widget.name}
       </span>
       <input

@@ -98,7 +98,7 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
               alignItems: 'center',
               gap: 8,
               padding: '2px 12px',
-              borderBottom: '1px solid #21262d',
+              borderBottom: '1px solid #302c2c',
             }}
           >
             <span style={{ color: '#555', flexShrink: 0, fontSize: 11 }}>
@@ -107,12 +107,12 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
                 : '--:--:--'}
             </span>
             {entry.node_name && (
-              <span style={{ color: '#c9d1d9', minWidth: 80 }}>{entry.node_name}</span>
+              <span style={{ color: '#d4d2d2', minWidth: 80 }}>{entry.node_name}</span>
             )}
             <Badge variant={statusVariant[entry.status]}>
               {statusLabel[entry.status]}
             </Badge>
-            <span style={{ color: '#808080', fontSize: 11 }}>{entry.message}</span>
+            <span style={{ color: '#9a9898', fontSize: 11 }}>{entry.message}</span>
           </div>
         ))}
       </div>

@@ -34,7 +34,7 @@ export function SQLPanel() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-[4px] border border-[#30363d] overflow-hidden">
+      <div className="rounded-[4px] border border-[#403b3b] overflow-hidden">
         <Editor
           height="200px"
           defaultLanguage="sql"
@@ -58,30 +58,30 @@ export function SQLPanel() {
           执行
         </Button>
         {result && !result.error && (
-          <span className="text-xs text-[#808080]">
+          <span className="text-xs text-[#9a9898]">
             返回 {result.row_count} 行
           </span>
         )}
       </div>
 
       {result?.error && (
-        <div className="rounded-[4px] border border-[#e06c75]/30 bg-[#e06c75]/10 px-3 py-2 text-sm text-[#e06c75]">
+        <div className="rounded-[4px] border border-[#ff3b30]/30 bg-[#ff3b30]/10 px-3 py-2 text-sm text-[#ff3b30]">
           {result.error}
         </div>
       )}
 
       {result && result.columns.length > 0 && (
-        <div className="rounded-[4px] border border-[#30363d] overflow-auto max-h-[400px]">
+        <div className="rounded-[4px] border border-[#403b3b] overflow-auto max-h-[400px]">
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10">
-              <tr className="bg-[#21262d]">
-                <th className="border-b border-[#30363d] px-3 py-2 text-left text-xs font-medium text-[#808080] w-10">
+              <tr className="bg-[#302c2c]">
+                <th className="border-b border-[#403b3b] px-3 py-2 text-left text-xs font-medium text-[#9a9898] w-10">
                   #
                 </th>
                 {result.columns.map((col) => (
                   <th
                     key={col}
-                    className="border-b border-[#30363d] px-3 py-2 text-left text-xs font-medium text-[#808080] whitespace-nowrap"
+                    className="border-b border-[#403b3b] px-3 py-2 text-left text-xs font-medium text-[#9a9898] whitespace-nowrap"
                   >
                     {col}
                   </th>
@@ -90,11 +90,11 @@ export function SQLPanel() {
             </thead>
             <tbody>
               {result.data.map((row, ri) => (
-                <tr key={ri} className="border-b border-[#30363d] hover:bg-[#2d333b] transition-colors">
-                  <td className="px-3 py-1.5 text-xs text-[#555555]">{ri + 1}</td>
+                <tr key={ri} className="border-b border-[#403b3b] hover:bg-[#363131] transition-colors">
+                  <td className="px-3 py-1.5 text-xs text-[#6e6e73]">{ri + 1}</td>
                   {row.map((val, ci) => (
-                    <td key={ci} className="px-3 py-1.5 text-[#eeeeee] whitespace-nowrap font-mono text-xs">
-                      {val === null ? <span className="text-[#555555]">NULL</span> : String(val)}
+                    <td key={ci} className="px-3 py-1.5 text-[#fdfcfc] whitespace-nowrap font-mono text-xs">
+                      {val === null ? <span className="text-[#6e6e73]">NULL</span> : String(val)}
                     </td>
                   ))}
                 </tr>

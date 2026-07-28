@@ -61,8 +61,8 @@ export default function WorkflowList() {
     <div style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto' }}>
       {/* 顶部标题栏 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
-        <h1 style={{ color: '#eeeeee', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Layout size={20} style={{ color: '#fab283' }} />
+        <h1 style={{ color: '#fdfcfc', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Layout size={20} style={{ color: '#007aff' }} />
           工作流
         </h1>
         <div style={{ flex: 1 }} />
@@ -73,8 +73,8 @@ export default function WorkflowList() {
             onClick={() => setShowTemplateMenu(!showTemplateMenu)}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: '6px 14px', background: '#21262d', border: '1px solid #30363d',
-              borderRadius: 6, color: '#c9d1d9', fontSize: 13, cursor: 'pointer',
+              padding: '6px 14px', background: '#302c2c', border: '1px solid #403b3b',
+              borderRadius: 4, color: '#d4d2d2', fontSize: 13, cursor: 'pointer',
             }}
           >
             <FolderOpen size={14} />
@@ -84,7 +84,7 @@ export default function WorkflowList() {
             <div
               style={{
                 position: 'absolute', top: '100%', right: 0, marginTop: 4,
-                background: '#161b22', border: '1px solid #30363d', borderRadius: 8,
+                background: '#262222', border: '1px solid #403b3b', borderRadius: 4,
                 minWidth: 220, zIndex: 100, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
                 overflow: 'hidden',
               }}
@@ -95,14 +95,14 @@ export default function WorkflowList() {
                   onClick={() => handleCreateFromTemplate(t.id)}
                   style={{
                     display: 'block', width: '100%', padding: '10px 14px',
-                    background: 'transparent', border: 'none', borderBottom: '1px solid #21262d',
-                    color: '#c9d1d9', fontSize: 13, textAlign: 'left', cursor: 'pointer',
+                    background: 'transparent', border: 'none', borderBottom: '1px solid #302c2c',
+                    color: '#d4d2d2', fontSize: 13, textAlign: 'left', cursor: 'pointer',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#21262d')}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#302c2c')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   <div style={{ fontWeight: 500 }}>{t.name}</div>
-                  <div style={{ color: '#808080', fontSize: 11, marginTop: 2 }}>{t.description}</div>
+                  <div style={{ color: '#9a9898', fontSize: 11, marginTop: 2 }}>{t.description}</div>
                 </button>
               ))}
             </div>
@@ -114,8 +114,8 @@ export default function WorkflowList() {
           onClick={handleCreateNew}
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
-            padding: '6px 16px', background: '#fab283', border: 'none',
-            borderRadius: 6, color: '#0a0a0a', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            padding: '6px 16px', background: '#007aff', border: 'none',
+            borderRadius: 4, color: '#201d1d', fontSize: 13, fontWeight: 600, cursor: 'pointer',
           }}
         >
           <Plus size={14} />
@@ -125,7 +125,7 @@ export default function WorkflowList() {
 
       {/* 加载中 */}
       {isLoading && (
-        <div style={{ color: '#808080', fontSize: 13, textAlign: 'center', padding: 60 }}>
+        <div style={{ color: '#9a9898', fontSize: 13, textAlign: 'center', padding: 60 }}>
           加载中...
         </div>
       )}
@@ -134,16 +134,16 @@ export default function WorkflowList() {
       {!isLoading && (!workflows || workflows.length === 0) && (
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          padding: '80px 20px', color: '#808080',
+          padding: '80px 20px', color: '#9a9898',
         }}>
-          <Layout size={48} style={{ color: '#30363d', marginBottom: 16 }} />
-          <p style={{ fontSize: 15, marginBottom: 16, color: '#c9d1d9' }}>还没有工作流</p>
+          <Layout size={48} style={{ color: '#403b3b', marginBottom: 16 }} />
+          <p style={{ fontSize: 15, marginBottom: 16, color: '#d4d2d2' }}>还没有工作流</p>
           <button
             onClick={handleCreateNew}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
-              padding: '8px 20px', background: '#fab283', border: 'none',
-              borderRadius: 6, color: '#0a0a0a', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              padding: '8px 20px', background: '#007aff', border: 'none',
+              borderRadius: 4, color: '#201d1d', fontSize: 13, fontWeight: 600, cursor: 'pointer',
             }}
           >
             <Plus size={14} />
@@ -164,20 +164,20 @@ export default function WorkflowList() {
               key={wf.id}
               onClick={() => navigate(`/workflow/${wf.id}`)}
               style={{
-                background: '#161b22',
-                border: '1px solid #30363d',
-                borderRadius: 10,
+                background: '#262222',
+                border: '1px solid #403b3b',
+                borderRadius: 4,
                 padding: '18px 20px',
                 cursor: 'pointer',
                 transition: 'border-color 0.15s ease, transform 0.1s ease',
                 position: 'relative',
               }}
               onMouseEnter={e => {
-                e.currentTarget.style.borderColor = '#fab283';
+                e.currentTarget.style.borderColor = '#007aff';
                 e.currentTarget.style.transform = 'translateY(-1px)';
               }}
               onMouseLeave={e => {
-                e.currentTarget.style.borderColor = '#30363d';
+                e.currentTarget.style.borderColor = '#403b3b';
                 e.currentTarget.style.transform = 'translateY(0)';
               }}
             >
@@ -189,26 +189,26 @@ export default function WorkflowList() {
                   position: 'absolute', top: 12, right: 12,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   width: 28, height: 28,
-                  background: deleteConfirm === wf.id ? '#e06c75' : 'transparent',
-                  border: 'none', borderRadius: 6,
-                  color: deleteConfirm === wf.id ? '#fff' : '#808080',
+                  background: deleteConfirm === wf.id ? '#ff3b30' : 'transparent',
+                  border: 'none', borderRadius: 4,
+                  color: deleteConfirm === wf.id ? '#fff' : '#9a9898',
                   cursor: 'pointer', opacity: 0.7,
                   transition: 'all 0.15s ease',
                 }}
-                onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#e06c75' : '#21262d'; }}
-                onMouseLeave={e => { e.currentTarget.style.opacity = '0.7'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#e06c75' : 'transparent'; }}
+                onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#ff3b30' : '#302c2c'; }}
+                onMouseLeave={e => { e.currentTarget.style.opacity = '0.7'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#ff3b30' : 'transparent'; }}
               >
                 <Trash2 size={14} />
               </button>
 
               {/* 名称 */}
-              <div style={{ color: '#eeeeee', fontSize: 14, fontWeight: 600, marginBottom: 6, paddingRight: 32 }}>
+              <div style={{ color: '#fdfcfc', fontSize: 14, fontWeight: 600, marginBottom: 6, paddingRight: 32 }}>
                 {wf.name}
               </div>
 
               {/* 描述 */}
               <div style={{
-                color: '#808080', fontSize: 12, marginBottom: 14,
+                color: '#9a9898', fontSize: 12, marginBottom: 14,
                 overflow: 'hidden', textOverflow: 'ellipsis',
                 display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
                 minHeight: 32, lineHeight: '16px',

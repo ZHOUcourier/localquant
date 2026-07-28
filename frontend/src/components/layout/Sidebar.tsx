@@ -27,18 +27,18 @@ export default function Sidebar() {
       className="flex flex-col h-full shrink-0"
       style={{
         width: 200,
-        background: '#161b22',
-        borderRight: '1px solid #30363d',
+        background: '#262222',
+        borderRight: '1px solid #403b3b',
       }}
     >
       {/* Logo */}
       <div
         className="flex items-center h-10 px-4 shrink-0"
-        style={{ borderBottom: '1px solid #30363d' }}
+        style={{ borderBottom: '1px solid #403b3b' }}
       >
         <span
           className="text-base font-bold tracking-wide"
-          style={{ color: '#fab283', fontFamily: 'var(--font-mono)' }}
+          style={{ color: '#007aff', fontFamily: 'var(--font-mono)' }}
         >
           LocalQuant
         </span>
@@ -54,8 +54,8 @@ export default function Sidebar() {
             className={({ isActive }) =>
               `relative flex items-center gap-2 px-4 no-underline transition-colors duration-100 ${
                 isActive
-                  ? 'text-[#eeeeee] bg-[#21262d]'
-                  : 'text-[#808080] hover:text-[#eeeeee] hover:bg-[#21262d]'
+                  ? 'text-[#fdfcfc] bg-[#302c2c]'
+                  : 'text-[#9a9898] hover:text-[#fdfcfc] hover:bg-[#302c2c]'
               }`
             }
             style={{ height: 36 }}
@@ -67,7 +67,7 @@ export default function Sidebar() {
                     className="absolute left-0 top-0 bottom-0"
                     style={{
                       width: 2,
-                      background: '#fab283',
+                      background: '#007aff',
                     }}
                   />
                 )}
@@ -82,7 +82,7 @@ export default function Sidebar() {
       {/* Version */}
       <div
         className="shrink-0 px-4 py-2 text-[11px]"
-        style={{ color: '#555555', borderTop: '1px solid #30363d' }}
+        style={{ color: '#6e6e73', borderTop: '1px solid #403b3b' }}
       >
         v0.1.0
       </div>

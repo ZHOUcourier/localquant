@@ -26,21 +26,21 @@ export default function TopBar() {
       className="flex items-center justify-between px-4 shrink-0"
       style={{
         height: 40,
-        background: '#161b22',
-        borderBottom: '1px solid #30363d',
+        background: '#262222',
+        borderBottom: '1px solid #403b3b',
       }}
     >
       {/* Left: breadcrumb / title */}
       <div className="flex items-center gap-2">
         {location.pathname !== '/' && (
-          <span className="text-[#808080] text-[13px]">
-            <Link to="/" className="text-[#808080] no-underline hover:text-[#eeeeee]">
+          <span className="text-[#9a9898] text-[13px]">
+            <Link to="/" className="text-[#9a9898] no-underline hover:text-[#fdfcfc]">
               工作台
             </Link>
             <span className="mx-1">/</span>
           </span>
         )}
-        <span className="text-[13px] text-[#eeeeee]">{title}</span>
+        <span className="text-[13px] text-[#fdfcfc]">{title}</span>
       </div>
 
       {/* Right: QMT connection status */}
@@ -50,10 +50,10 @@ export default function TopBar() {
           style={{
             width: 8,
             height: 8,
-            background: '#555555',
+            background: '#6e6e73',
           }}
         />
-        <span className="text-[12px] text-[#808080]">QMT 未连接</span>
+        <span className="text-[12px] text-[#9a9898]">QMT 未连接</span>
       </div>
     </div>
   );

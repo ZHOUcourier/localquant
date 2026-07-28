@@ -8,11 +8,11 @@ export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
 }
 
 const variantStyles: Record<BadgeVariant, string> = {
-  default: 'bg-[#21262d] text-[#808080] border-[#30363d]',
-  success: 'bg-[#7fd88f]/10 text-[#7fd88f] border-[#7fd88f]/30',
-  warning: 'bg-[#f5a742]/10 text-[#f5a742] border-[#f5a742]/30',
-  error: 'bg-[#e06c75]/10 text-[#e06c75] border-[#e06c75]/30',
-  info: 'bg-[#56b6c2]/10 text-[#56b6c2] border-[#56b6c2]/30',
+  default: 'bg-[#302c2c] text-[#9a9898] border-[#403b3b]',
+  success: 'bg-[#30d158]/10 text-[#30d158] border-[#30d158]/30',
+  warning: 'bg-[#ff9f0a]/10 text-[#ff9f0a] border-[#ff9f0a]/30',
+  error: 'bg-[#ff3b30]/10 text-[#ff3b30] border-[#ff3b30]/30',
+  info: 'bg-[#64d2ff]/10 text-[#64d2ff] border-[#64d2ff]/30',
 };
 
 export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(

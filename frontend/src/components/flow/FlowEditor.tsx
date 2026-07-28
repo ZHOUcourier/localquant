@@ -20,8 +20,8 @@ const nodeTypes: NodeTypes = {
 };
 
 const defaultEdgeOptions = {
-  style: { stroke: '#808080', strokeWidth: 1.5 },
-  selectedStyle: { stroke: '#fab283', strokeWidth: 2 },
+  style: { stroke: '#9a9898', strokeWidth: 1.5 },
+  selectedStyle: { stroke: '#007aff', strokeWidth: 2 },
   animated: false,
 };
 
@@ -137,30 +137,30 @@ export function FlowEditor({ className }: FlowEditorProps) {
         connectionMode={ConnectionMode.Loose}
         fitView
         proOptions={{ hideAttribution: true }}
-        style={{ background: '#0a0a0a' }}
+        style={{ background: '#201d1d' }}
       >
         <Background
           variant={BackgroundVariant.Dots}
           gap={20}
           size={1}
-          color="#30363d"
+          color="#403b3b"
         />
         <Controls
           position="bottom-left"
           style={{
-            background: '#161b22',
-            border: '1px solid #30363d',
-            borderRadius: 6,
+            background: '#262222',
+            border: '1px solid #403b3b',
+            borderRadius: 4,
           }}
         />
         <MiniMap
           position="bottom-right"
-          nodeColor={() => '#fab283'}
+          nodeColor={() => '#007aff'}
           maskColor="rgba(10, 10, 10, 0.8)"
           style={{
-            background: '#161b22',
-            border: '1px solid #30363d',
-            borderRadius: 6,
+            background: '#262222',
+            border: '1px solid #403b3b',
+            borderRadius: 4,
           }}
           pannable
           zoomable

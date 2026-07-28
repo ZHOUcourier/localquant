@@ -55,30 +55,30 @@ export const Select = React.forwardRef<HTMLDivElement, SelectProps>(
         <button
           type="button"
           className={cn(
-            'flex w-full items-center justify-between rounded-[4px] border border-[#30363d] bg-[#21262d] px-3 py-1.5 text-sm text-[#eeeeee] transition-colors cursor-pointer',
-            open && 'border-[#fab283]',
+            'flex w-full items-center justify-between rounded-[4px] border border-[#403b3b] bg-[#302c2c] px-3 py-1.5 text-sm text-[#fdfcfc] transition-colors cursor-pointer',
+            open && 'border-[#007aff]',
             disabled && 'opacity-50 cursor-not-allowed'
           )}
           disabled={disabled}
           onClick={() => setOpen(!open)}
         >
-          <span className={cn(!selectedOption && 'text-[#555555]')}>
+          <span className={cn(!selectedOption && 'text-[#6e6e73]')}>
             {selectedOption ? selectedOption.label : placeholder}
           </span>
-          <span className="ml-2 text-[#808080]">▾</span>
+          <span className="ml-2 text-[#9a9898]">▾</span>
         </button>
         {open && (
-          <div className="absolute z-50 mt-1 w-full rounded-[4px] border border-[#30363d] bg-[#161b22] py-1">
+          <div className="absolute z-50 mt-1 w-full rounded-[4px] border border-[#403b3b] bg-[#262222] py-1">
             {options.map((option) => (
               <div
                 key={option.value}
                 className={cn(
                   'cursor-pointer px-3 py-1.5 text-sm transition-colors',
                   option.disabled
-                    ? 'text-[#555555] cursor-not-allowed'
+                    ? 'text-[#6e6e73] cursor-not-allowed'
                     : option.value === currentValue
-                    ? 'bg-[#2d333b] text-[#fab283]'
-                    : 'text-[#eeeeee] hover:bg-[#2d333b]'
+                    ? 'bg-[#363131] text-[#007aff]'
+                    : 'text-[#fdfcfc] hover:bg-[#363131]'
                 )}
                 onClick={() => handleSelect(option.value, option.disabled)}
               >

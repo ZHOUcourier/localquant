@@ -35,7 +35,6 @@ export default function DataManagement() {
   const [period, setPeriod] = useState('1d');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const [qualityOpen, setQualityOpen] = useState(false);
 
   const { data: status, refetch: refetchStatus } = useQuery<DataStatus>({
@@ -45,31 +44,19 @@ export default function DataManagement() {
 
   const downloadMutation = useMutation({
     mutationFn: async () => {
-      setDownloadProgress(0);
-      const interval = setInterval(() => {
-        setDownloadProgress(prev => {
-          if (prev === null || prev >= 90) { clearInterval(interval); return prev; }
-          return prev + 10;
-        });
-      }, 300);
-      try {
-        const res = await fetch('/api/data/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol, period, start_date: startDate, end_date: endDate }),
-        });
-        clearInterval(interval);
-        setDownloadProgress(100);
-        return res.json();
-      } catch (e) {
-        clearInterval(interval);
-        setDownloadProgress(null);
-        throw e;
+      const res = await fetch('/api/data/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, period, start_date: startDate, end_date: endDate }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.detail ?? `下载接口错误 (HTTP ${res.status})`);
       }
+      return body as { status: string; symbol: string; rows: number };
     },
     onSuccess: () => {
       refetchStatus();
-      setTimeout(() => setDownloadProgress(null), 1500);
     },
   });
 
@@ -82,8 +69,8 @@ export default function DataManagement() {
   return (
     <div>
       <div className="mb-4">
-        <h1 className="text-xl font-semibold text-[#eeeeee] mb-1">数据管理</h1>
-        <p className="text-[13px] text-[#808080]">管理 QMT 数据源连接与本地缓存</p>
+        <h1 className="text-xl font-semibold text-[#fdfcfc] mb-1">数据管理</h1>
+        <p className="text-[13px] text-[#9a9898]">管理 QMT 数据源连接与本地缓存</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -93,30 +80,30 @@ export default function DataManagement() {
             <div className="relative">
               <div
                 className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                  status?.qmt_connected ? 'bg-[#7fd88f]/15' : 'bg-[#e06c75]/15'
+                  status?.qmt_connected ? 'bg-[#30d158]/15' : 'bg-[#ff3b30]/15'
                 }`}
               >
                 {status?.qmt_connected ? (
-                  <Wifi size={24} className="text-[#7fd88f]" />
+                  <Wifi size={24} className="text-[#30d158]" />
                 ) : (
-                  <WifiOff size={24} className="text-[#e06c75]" />
+                  <WifiOff size={24} className="text-[#ff3b30]" />
                 )}
               </div>
               <span
-                className={`absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[#161b22] ${
-                  status?.qmt_connected ? 'bg-[#7fd88f]' : 'bg-[#e06c75]'
+                className={`absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-[#262222] ${
+                  status?.qmt_connected ? 'bg-[#30d158]' : 'bg-[#ff3b30]'
                 }`}
               />
             </div>
             <div className="text-center">
-              <div className={`text-sm font-medium mb-1 ${status?.qmt_connected ? 'text-[#7fd88f]' : 'text-[#e06c75]'}`}>
+              <div className={`text-sm font-medium mb-1 ${status?.qmt_connected ? 'text-[#30d158]' : 'text-[#ff3b30]'}`}>
                 {status?.qmt_connected ? '已连接' : '未连接'}
               </div>
               {status?.qmt_path && (
-                <div className="text-xs text-[#555555] font-mono truncate max-w-[200px]">{status.qmt_path}</div>
+                <div className="text-xs text-[#6e6e73] font-mono truncate max-w-[200px]">{status.qmt_path}</div>
               )}
               {status?.qmt_data_dir && (
-                <div className="text-xs text-[#555555] font-mono truncate max-w-[200px]">{status.qmt_data_dir}</div>
+                <div className="text-xs text-[#6e6e73] font-mono truncate max-w-[200px]">{status.qmt_data_dir}</div>
               )}
             </div>
           </div>
@@ -127,24 +114,24 @@ export default function DataManagement() {
           <div className="space-y-3 py-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Database size={15} className="text-[#56b6c2]" />
-                <span className="text-sm text-[#eeeeee]">已缓存品种</span>
+                <Database size={15} className="text-[#64d2ff]" />
+                <span className="text-sm text-[#fdfcfc]">已缓存品种</span>
               </div>
-              <span className="text-sm font-mono text-[#fab283]">{status?.cache_count ?? 0}</span>
+              <span className="text-sm font-mono text-[#007aff]">{status?.cache_count ?? 0}</span>
             </div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Database size={15} className="text-[#56b6c2]" />
-                <span className="text-sm text-[#eeeeee]">数据总量</span>
+                <Database size={15} className="text-[#64d2ff]" />
+                <span className="text-sm text-[#fdfcfc]">数据总量</span>
               </div>
-              <span className="text-sm font-mono text-[#fab283]">{status?.total_records?.toLocaleString() ?? '0'} 条</span>
+              <span className="text-sm font-mono text-[#007aff]">{status?.total_records?.toLocaleString() ?? '0'} 条</span>
             </div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Database size={15} className="text-[#56b6c2]" />
-                <span className="text-sm text-[#eeeeee]">磁盘占用</span>
+                <Database size={15} className="text-[#64d2ff]" />
+                <span className="text-sm text-[#fdfcfc]">磁盘占用</span>
               </div>
-              <span className="text-sm font-mono text-[#fab283]">{status?.cache_size ?? '0 MB'}</span>
+              <span className="text-sm font-mono text-[#007aff]">{status?.cache_size ?? '0 MB'}</span>
             </div>
           </div>
         </Card>
@@ -152,8 +139,8 @@ export default function DataManagement() {
         {/* 数据质量 */}
         <Card title="数据质量">
           <div className="flex flex-col items-center justify-center py-6 gap-3">
-            <ShieldCheck size={32} className="text-[#56b6c2]" />
-            <p className="text-xs text-[#808080] text-center">运行数据质量检查，验证缓存数据完整性</p>
+            <ShieldCheck size={32} className="text-[#64d2ff]" />
+            <p className="text-xs text-[#9a9898] text-center">运行数据质量检查，验证缓存数据完整性</p>
             <Button
               variant="secondary"
               size="sm"
@@ -170,7 +157,7 @@ export default function DataManagement() {
       <Card title="数据下载" className="mt-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
           <div>
-            <label className="block text-xs text-[#808080] mb-1">品种代码</label>
+            <label className="block text-xs text-[#9a9898] mb-1">品种代码</label>
             <Input
               value={symbol}
               onChange={e => setSymbol(e.target.value)}
@@ -178,15 +165,15 @@ export default function DataManagement() {
             />
           </div>
           <div>
-            <label className="block text-xs text-[#808080] mb-1">周期</label>
+            <label className="block text-xs text-[#9a9898] mb-1">周期</label>
             <Select options={periodOptions} value={period} onChange={setPeriod} />
           </div>
           <div>
-            <label className="block text-xs text-[#808080] mb-1">开始日期</label>
+            <label className="block text-xs text-[#9a9898] mb-1">开始日期</label>
             <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
           </div>
           <div>
-            <label className="block text-xs text-[#808080] mb-1">结束日期</label>
+            <label className="block text-xs text-[#9a9898] mb-1">结束日期</label>
             <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
           </div>
           <Button
@@ -200,21 +187,21 @@ export default function DataManagement() {
           </Button>
         </div>
 
-        {/* 进度条 */}
-        {downloadProgress !== null && (
-          <div className="mt-3">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs text-[#808080]">
-                {downloadMutation.isPending ? '下载中...' : downloadProgress >= 100 ? '下载完成' : '下载中...'}
-              </span>
-              <span className="text-xs text-[#fab283]">{downloadProgress}%</span>
-            </div>
-            <div className="w-full h-1.5 bg-[#21262d] rounded-full overflow-hidden">
-              <div
-                className="h-full bg-[#fab283] rounded-full transition-all duration-300"
-                style={{ width: `${downloadProgress}%` }}
-              />
-            </div>
+        {/* 下载状态（真实结果，非模拟进度） */}
+        {downloadMutation.isPending && (
+          <div className="mt-3 flex items-center gap-2 text-xs text-[#9a9898]">
+            <Loader2 size={13} className="animate-spin" />
+            正在从 QMT 下载 {symbol} ({period}) 数据...
+          </div>
+        )}
+        {downloadMutation.isError && (
+          <div className="mt-3 rounded-[4px] border border-[#ff3b30] bg-[#ff3b30]/10 px-3 py-2 font-mono text-xs text-[#ff3b30]">
+            {downloadMutation.error instanceof Error ? downloadMutation.error.message : '下载失败'}
+          </div>
+        )}
+        {downloadMutation.isSuccess && (
+          <div className="mt-3 rounded-[4px] border border-[#30d158] bg-[#30d158]/10 px-3 py-2 font-mono text-xs text-[#30d158]">
+            下载完成: {downloadMutation.data?.symbol} 共 {downloadMutation.data?.rows} 条数据已写入本地缓存
           </div>
         )}
       </Card>
@@ -232,13 +219,13 @@ export default function DataManagement() {
                 {qualityMutation.data.passed ? '通过' : '存在问题'}
               </Badge>
               {qualityMutation.data.summary && (
-                <span className="text-xs text-[#808080]">{qualityMutation.data.summary}</span>
+                <span className="text-xs text-[#9a9898]">{qualityMutation.data.summary}</span>
               )}
             </div>
             {qualityMutation.data.issues && qualityMutation.data.issues.length > 0 && (
               <ul className="space-y-1">
                 {qualityMutation.data.issues.map((issue, i) => (
-                  <li key={i} className="text-xs text-[#e06c75] flex items-start gap-1">
+                  <li key={i} className="text-xs text-[#ff3b30] flex items-start gap-1">
                     <span className="mt-0.5">•</span>
                     <span>{issue}</span>
                   </li>
@@ -247,7 +234,7 @@ export default function DataManagement() {
             )}
           </div>
         ) : (
-          <div className="flex items-center justify-center py-4 gap-2 text-[#808080]">
+          <div className="flex items-center justify-center py-4 gap-2 text-[#9a9898]">
             <Loader2 size={14} className="animate-spin" />
             检查中...
           </div>

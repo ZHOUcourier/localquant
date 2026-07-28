@@ -5,17 +5,17 @@ import { useFlowStore } from '../../store/flowStore';
 
 // box_color 名称 → 实际色值
 const COLOR_MAP: Record<string, string> = {
-  orange: '#fab283',
-  green: '#7fd88f',
-  yellow: '#f5a742',
-  '#e5c07b': '#e5c07b',
-  cyan: '#56b6c2',
-  red: '#e06c75',
-  black: '#808080',
+  orange: '#007aff',
+  green: '#30d158',
+  yellow: '#ff9f0a',
+  '#ffd60a': '#ffd60a',
+  cyan: '#64d2ff',
+  red: '#ff3b30',
+  black: '#9a9898',
 };
 
 function resolveColor(c: string) {
-  return COLOR_MAP[c] || c || '#fab283';
+  return COLOR_MAP[c] || c || '#007aff';
 }
 
 /** 从 input_schema 提取默认 widgets */
@@ -117,8 +117,8 @@ export function NodePalette() {
       style={{
         width: 200,
         flexShrink: 0,
-        background: '#161b22',
-        borderRight: '1px solid #30363d',
+        background: '#262222',
+        borderRight: '1px solid #403b3b',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -133,10 +133,10 @@ export function NodePalette() {
           onChange={(e) => setSearch(e.target.value)}
           style={{
             width: '100%',
-            background: '#0d1117',
-            border: '1px solid #30363d',
+            background: '#201d1d',
+            border: '1px solid #403b3b',
             borderRadius: 4,
-            color: '#eeeeee',
+            color: '#fdfcfc',
             fontSize: 12,
             padding: '5px 8px',
             outline: 'none',
@@ -163,7 +163,7 @@ export function NodePalette() {
                 alignItems: 'center',
                 padding: '6px 10px',
                 cursor: 'pointer',
-                color: '#8b949e',
+                color: '#9a9898',
                 fontSize: 11,
                 fontWeight: 600,
                 userSelect: 'none',
@@ -182,7 +182,7 @@ export function NodePalette() {
                 ▼
               </span>
               {group}
-              <span style={{ marginLeft: 'auto', color: '#484f58', fontSize: 10 }}>
+              <span style={{ marginLeft: 'auto', color: '#646262', fontSize: 10 }}>
                 {nodes.length}
               </span>
             </div>
@@ -206,7 +206,7 @@ export function NodePalette() {
                       transition: 'background 0.1s',
                     }}
                     onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLDivElement).style.background = '#21262d';
+                      (e.currentTarget as HTMLDivElement).style.background = '#302c2c';
                     }}
                     onMouseLeave={(e) => {
                       (e.currentTarget as HTMLDivElement).style.background = 'transparent';
@@ -225,7 +225,7 @@ export function NodePalette() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div
                         style={{
-                          color: '#eeeeee',
+                          color: '#fdfcfc',
                           fontSize: 12,
                           fontWeight: 500,
                           whiteSpace: 'nowrap',
@@ -238,7 +238,7 @@ export function NodePalette() {
                       {node.input_schema?.properties && (
                         <div
                           style={{
-                            color: '#484f58',
+                            color: '#646262',
                             fontSize: 10,
                             whiteSpace: 'nowrap',
                             overflow: 'hidden',

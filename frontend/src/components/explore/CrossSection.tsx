@@ -80,7 +80,7 @@ export function CrossSection() {
     <div className="flex flex-col gap-4">
       <div className="flex items-end gap-3">
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#808080]">日期</label>
+          <label className="text-xs text-[#9a9898]">日期</label>
           <Input
             placeholder="2024-01-02"
             value={date}
@@ -89,7 +89,7 @@ export function CrossSection() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#808080]">字段</label>
+          <label className="text-xs text-[#9a9898]">字段</label>
           <Select
             options={fieldOptions}
             value={field}
@@ -103,7 +103,7 @@ export function CrossSection() {
       </div>
 
       {result?.error && (
-        <div className="rounded-[4px] border border-[#e06c75]/30 bg-[#e06c75]/10 px-3 py-2 text-sm text-[#e06c75]">
+        <div className="rounded-[4px] border border-[#ff3b30]/30 bg-[#ff3b30]/10 px-3 py-2 text-sm text-[#ff3b30]">
           {result.error}
         </div>
       )}
@@ -119,10 +119,10 @@ export function CrossSection() {
           ].map((item) => (
             <div
               key={item.label}
-              className="rounded-[4px] border border-[#30363d] bg-[#161b22] px-3 py-3"
+              className="rounded-[4px] border border-[#403b3b] bg-[#262222] px-3 py-3"
             >
-              <div className="text-xs text-[#808080] mb-1">{item.label}</div>
-              <div className="text-lg font-mono text-[#eeeeee]">
+              <div className="text-xs text-[#9a9898] mb-1">{item.label}</div>
+              <div className="text-lg font-mono text-[#fdfcfc]">
                 {Number.isFinite(item.value) ? item.value.toFixed(4) : '-'}
               </div>
             </div>
@@ -139,10 +139,10 @@ export function CrossSection() {
           ].map((item) => (
             <div
               key={item.label}
-              className="rounded-[4px] border border-[#30363d] bg-[#161b22] px-3 py-3"
+              className="rounded-[4px] border border-[#403b3b] bg-[#262222] px-3 py-3"
             >
-              <div className="text-xs text-[#808080] mb-1">{item.label}</div>
-              <div className="text-lg font-mono text-[#eeeeee]">
+              <div className="text-xs text-[#9a9898] mb-1">{item.label}</div>
+              <div className="text-lg font-mono text-[#fdfcfc]">
                 {Number.isFinite(item.value) ? item.value.toFixed(4) : '-'}
               </div>
             </div>
@@ -151,29 +151,29 @@ export function CrossSection() {
       )}
 
       {histogramData.length > 0 && (
-        <div className="rounded-[4px] border border-[#30363d] bg-[#161b22] p-4">
-          <div className="text-sm text-[#808080] mb-3">分布直方图</div>
+        <div className="rounded-[4px] border border-[#403b3b] bg-[#262222] p-4">
+          <div className="text-sm text-[#9a9898] mb-3">分布直方图</div>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={histogramData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#30363d" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" />
               <XAxis
                 dataKey="bin"
-                tick={{ fill: '#808080', fontSize: 11 }}
-                axisLine={{ stroke: '#30363d' }}
+                tick={{ fill: '#9a9898', fontSize: 11 }}
+                axisLine={{ stroke: '#403b3b' }}
               />
               <YAxis
-                tick={{ fill: '#808080', fontSize: 11 }}
-                axisLine={{ stroke: '#30363d' }}
+                tick={{ fill: '#9a9898', fontSize: 11 }}
+                axisLine={{ stroke: '#403b3b' }}
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: '#161b22',
-                  border: '1px solid #30363d',
+                  backgroundColor: '#262222',
+                  border: '1px solid #403b3b',
                   borderRadius: '4px',
-                  color: '#eeeeee',
+                  color: '#fdfcfc',
                 }}
               />
-              <Bar dataKey="count" fill="#fab283" radius={[2, 2, 0, 0]} />
+              <Bar dataKey="count" fill="#007aff" radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>

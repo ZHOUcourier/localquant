@@ -27,7 +27,7 @@ export const Tabs = React.forwardRef<HTMLDivElement, TabsProps>(
 
     return (
       <div ref={ref} className={cn('flex flex-col', className)} {...props}>
-        <div className="flex border-b border-[#30363d]">
+        <div className="flex border-b border-[#403b3b]">
           {items.map((item) => (
             <button
               key={item.key}
@@ -35,16 +35,16 @@ export const Tabs = React.forwardRef<HTMLDivElement, TabsProps>(
               className={cn(
                 'relative px-3 py-2 text-sm transition-colors cursor-pointer',
                 item.disabled
-                  ? 'text-[#555555] cursor-not-allowed'
+                  ? 'text-[#6e6e73] cursor-not-allowed'
                   : currentKey === item.key
-                  ? 'text-[#fab283]'
-                  : 'text-[#808080] hover:text-[#eeeeee]'
+                  ? 'text-[#007aff]'
+                  : 'text-[#9a9898] hover:text-[#fdfcfc]'
               )}
               onClick={() => handleClick(item.key, item.disabled)}
             >
               {item.label}
               {currentKey === item.key && (
-                <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#fab283]" />
+                <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#007aff]" />
               )}
             </button>
           ))}

@@ -19,8 +19,8 @@ export const BottomPanel: React.FC = () => {
     <div
       style={{
         flexShrink: 0,
-        background: '#161b22',
-        borderTop: '1px solid #30363d',
+        background: '#262222',
+        borderTop: '1px solid #403b3b',
         display: 'flex',
         flexDirection: 'column',
         height: expanded ? 250 : 40,

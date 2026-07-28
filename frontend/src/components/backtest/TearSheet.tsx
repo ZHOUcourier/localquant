@@ -33,18 +33,18 @@ function MetricCard({ label, value, format }: MetricCardProps) {
 
   if (format === 'pct') {
     displayValue = `${(value * 100).toFixed(2)}%`;
-    colorClass = value > 0 ? 'text-[#7fd88f]' : value < 0 ? 'text-[#e06c75]' : 'text-[#eeeeee]';
+    colorClass = value > 0 ? 'text-[#30d158]' : value < 0 ? 'text-[#ff3b30]' : 'text-[#fdfcfc]';
   } else if (format === 'pct_signed') {
     displayValue = `${(value * 100).toFixed(2)}%`;
-    colorClass = value > 0 ? 'text-[#7fd88f]' : value < 0 ? 'text-[#e06c75]' : 'text-[#eeeeee]';
+    colorClass = value > 0 ? 'text-[#30d158]' : value < 0 ? 'text-[#ff3b30]' : 'text-[#fdfcfc]';
   } else {
     displayValue = value.toFixed(3);
-    colorClass = value > 0 ? 'text-[#7fd88f]' : value < 0 ? 'text-[#e06c75]' : 'text-[#eeeeee]';
+    colorClass = value > 0 ? 'text-[#30d158]' : value < 0 ? 'text-[#ff3b30]' : 'text-[#fdfcfc]';
   }
 
   return (
-    <div className="rounded border border-[#30363d] bg-[#21262d] px-3 py-2.5">
-      <div className="text-xs text-[#808080] mb-1">{label}</div>
+    <div className="rounded border border-[#403b3b] bg-[#302c2c] px-3 py-2.5">
+      <div className="text-xs text-[#9a9898] mb-1">{label}</div>
       <div className={`text-lg font-mono font-semibold ${colorClass}`}>
         {displayValue}
       </div>
@@ -56,7 +56,7 @@ const MONTHS = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11'
 const MONTH_LABELS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
 
 function getHeatmapColor(value: number, maxAbs: number): string {
-  if (maxAbs === 0) return '#21262d';
+  if (maxAbs === 0) return '#302c2c';
   const intensity = Math.min(Math.abs(value) / maxAbs, 1);
   if (value > 0) {
     // green shades
@@ -67,7 +67,7 @@ function getHeatmapColor(value: number, maxAbs: number): string {
     const alpha = 0.15 + intensity * 0.7;
     return `rgba(224, 108, 117, ${alpha})`;
   }
-  return '#21262d';
+  return '#302c2c';
 }
 
 function MonthlyHeatmap({ monthlyReturns }: { monthlyReturns: Record<string, Record<string, number>> }) {
@@ -92,11 +92,11 @@ function MonthlyHeatmap({ monthlyReturns }: { monthlyReturns: Record<string, Rec
         <table className="w-full text-xs font-mono">
           <thead>
             <tr>
-              <th className="text-left text-[#808080] font-normal pr-2 py-1 sticky left-0 bg-[#161b22]">年份</th>
+              <th className="text-left text-[#9a9898] font-normal pr-2 py-1 sticky left-0 bg-[#262222]">年份</th>
               {MONTH_LABELS.map((m) => (
-                <th key={m} className="text-center text-[#808080] font-normal px-1 py-1">{m}</th>
+                <th key={m} className="text-center text-[#9a9898] font-normal px-1 py-1">{m}</th>
               ))}
-              <th className="text-center text-[#808080] font-normal px-1 py-1">全年</th>
+              <th className="text-center text-[#9a9898] font-normal px-1 py-1">全年</th>
             </tr>
           </thead>
           <tbody>
@@ -110,7 +110,7 @@ function MonthlyHeatmap({ monthlyReturns }: { monthlyReturns: Record<string, Rec
               }
               return (
                 <tr key={year}>
-                  <td className="text-[#808080] pr-2 py-0.5 sticky left-0 bg-[#161b22]">{year}</td>
+                  <td className="text-[#9a9898] pr-2 py-0.5 sticky left-0 bg-[#262222]">{year}</td>
                   {MONTHS.map((m) => {
                     const val = months[m];
                     const hasData = val !== undefined;
@@ -119,8 +119,8 @@ function MonthlyHeatmap({ monthlyReturns }: { monthlyReturns: Record<string, Rec
                         <div
                           className="rounded px-1 py-1 text-center"
                           style={{
-                            backgroundColor: hasData ? getHeatmapColor(val, maxAbs) : '#21262d',
-                            color: hasData ? (val > 0 ? '#7fd88f' : val < 0 ? '#e06c75' : '#808080') : '#555555',
+                            backgroundColor: hasData ? getHeatmapColor(val, maxAbs) : '#302c2c',
+                            color: hasData ? (val > 0 ? '#30d158' : val < 0 ? '#ff3b30' : '#9a9898') : '#6e6e73',
                           }}
                         >
                           {hasData ? `${(val * 100).toFixed(1)}%` : '—'}
@@ -129,7 +129,7 @@ function MonthlyHeatmap({ monthlyReturns }: { monthlyReturns: Record<string, Rec
                     );
                   })}
                   <td className="text-center px-1 py-0.5">
-                    <span className={annualRet > 0 ? 'text-[#7fd88f]' : annualRet < 0 ? 'text-[#e06c75]' : 'text-[#808080]'}>
+                    <span className={annualRet > 0 ? 'text-[#30d158]' : annualRet < 0 ? 'text-[#ff3b30]' : 'text-[#9a9898]'}>
                       {(annualRet * 100).toFixed(1)}%
                     </span>
                   </td>

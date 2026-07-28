@@ -7,6 +7,7 @@ import Editor from '@monaco-editor/react';
 
 export interface BacktestConfigData {
   signalCode: string;
+  stockPool: string[];
   initialCapital: number;
   commissionRate: number;
   slippage: number;
@@ -61,6 +62,7 @@ const benchmarkOptions = [
 
 export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
   const [signalCode, setSignalCode] = useState(defaultSignalCode);
+  const [stockPool, setStockPool] = useState('');
   const [initialCapital, setInitialCapital] = useState(1000000);
   const [commissionRate, setCommissionRate] = useState(0.001);
   const [slippage, setSlippage] = useState(0.001);
@@ -71,6 +73,10 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
   const handleRun = () => {
     onRun({
       signalCode,
+      stockPool: stockPool
+        .split(/[,\uff0c\s]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
       initialCapital,
       commissionRate,
       slippage,
@@ -84,7 +90,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
     <div className="flex flex-col gap-4 h-full">
       {/* 信号定义 */}
       <Card title="信号定义" className="flex-1 min-h-0 flex flex-col">
-        <div className="flex-1 min-h-[240px] rounded border border-[#30363d] overflow-hidden">
+        <div className="flex-1 min-h-[240px] rounded border border-[#403b3b] overflow-hidden">
           <Editor
             height="100%"
             defaultLanguage="python"
@@ -98,7 +104,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
               scrollBeyondLastLine: false,
               wordWrap: 'on',
               padding: { top: 8 },
-              fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+              fontFamily: "'Berkeley Mono', 'IBM Plex Mono', ui-monospace, monospace",
             }}
           />
         </div>
@@ -107,8 +113,16 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
       {/* 回测参数 */}
       <Card title="回测参数">
         <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1 col-span-2">
+            <label className="text-xs text-[#9a9898]">股票池（逗号分隔，留空=全部已缓存股票）</label>
+            <Input
+              placeholder="如: 000001.SZ, 600000.SH"
+              value={stockPool}
+              onChange={(e) => setStockPool(e.target.value)}
+            />
+          </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">初始资金</label>
+            <label className="text-xs text-[#9a9898]">初始资金</label>
             <Input
               type="number"
               value={initialCapital}
@@ -117,7 +131,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">手续费率</label>
+            <label className="text-xs text-[#9a9898]">手续费率</label>
             <Input
               type="number"
               step="0.0001"
@@ -127,7 +141,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">滑点</label>
+            <label className="text-xs text-[#9a9898]">滑点</label>
             <Input
               type="number"
               step="0.0001"
@@ -136,7 +150,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">基准指数</label>
+            <label className="text-xs text-[#9a9898]">基准指数</label>
             <Select
               options={benchmarkOptions}
               value={benchmark}
@@ -150,7 +164,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
       <Card title="回测区间">
         <div className="grid grid-cols-2 gap-3">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">开始日期</label>
+            <label className="text-xs text-[#9a9898]">开始日期</label>
             <Input
               type="date"
               value={startDate}
@@ -158,7 +172,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#808080]">结束日期</label>
+            <label className="text-xs text-[#9a9898]">结束日期</label>
             <Input
               type="date"
               value={endDate}

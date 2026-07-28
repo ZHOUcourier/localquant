@@ -42,12 +42,14 @@ make install
 ### 启动
 
 ```bash
-# 一键启动前后端
+# 一键启动前后端（并行运行，Ctrl+C 同时退出）
 make dev
+# 前端页面 → http://localhost:5173
+# 后端 API → http://localhost:8000（根路径自动跳转到 /docs 接口文档）
 
 # 或分别启动
 make dev-backend   # 后端 → http://localhost:8000
-make dev-frontend  # 前端 → http://localhost:5173
+make dev-frontend  # 前端 → http://localhost:5173（需后端已启动，否则页面顶部会提示后端未连接）
 ```
 
 ### 配置

@@ -52,7 +52,7 @@ function WorkflowEditorInner() {
 
   if (isLoading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#808080', fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#9a9898', fontSize: 13 }}>
         加载中...
       </div>
     );
@@ -60,7 +60,7 @@ function WorkflowEditorInner() {
 
   if (error) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#e06c75', fontSize: 13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#ff3b30', fontSize: 13 }}>
         加载工作流失败
       </div>
     );
@@ -72,7 +72,7 @@ function WorkflowEditorInner() {
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: '#0a0a0a',
+        background: '#201d1d',
         overflow: 'hidden',
       }}
     >

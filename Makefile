@@ -9,8 +9,13 @@ install-backend:
 install-frontend:
 	cd frontend && npm install
 
-# 开发模式
-dev: dev-backend dev-frontend
+# 开发模式（并行启动前后端，Ctrl+C 同时退出）
+dev:
+	@echo "启动后端 http://localhost:8000 + 前端 http://localhost:5173 （Ctrl+C 退出）"
+	@trap 'kill 0' INT TERM; \
+	uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload & \
+	(cd frontend && npm run dev) & \
+	wait
 
 dev-backend:
 	uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload

@@ -30,7 +30,7 @@ export const ResultViewer: React.FC = () => {
     );
   }
 
-  // 模拟输出数据（后续从后端/API获取）
+  // 节点执行完成后后端回传的真实输出数据
   const outputData: Record<string, unknown>[] =
     (selectedNode?.data?.output as Record<string, unknown>[]) || [];
 
@@ -73,11 +73,11 @@ export const ResultViewer: React.FC = () => {
                 style={{
                   padding: '4px 12px',
                   textAlign: 'left',
-                  borderBottom: '1px solid #30363d',
-                  color: '#808080',
+                  borderBottom: '1px solid #403b3b',
+                  color: '#9a9898',
                   fontWeight: 500,
                   whiteSpace: 'nowrap',
-                  background: '#161b22',
+                  background: '#262222',
                   position: 'sticky',
                   top: 0,
                 }}
@@ -95,8 +95,8 @@ export const ResultViewer: React.FC = () => {
                   key={col}
                   style={{
                     padding: '3px 12px',
-                    borderBottom: '1px solid #21262d',
-                    color: '#c9d1d9',
+                    borderBottom: '1px solid #302c2c',
+                    color: '#d4d2d2',
                     whiteSpace: 'nowrap',
                     maxWidth: 300,
                     overflow: 'hidden',

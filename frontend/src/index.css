@@ -1,34 +1,41 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg-primary: #0a0a0a;
-  --color-bg-panel: #161b22;
-  --color-bg-element: #21262d;
-  --color-bg-hover: #2d333b;
-  --color-text-primary: #eeeeee;
-  --color-text-muted: #808080;
-  --color-text-disabled: #555555;
-  --color-accent: #fab283;
-  --color-success: #7fd88f;
-  --color-warning: #f5a742;
-  --color-error: #e06c75;
-  --color-info: #56b6c2;
-  --color-border: #30363d;
-  --color-border-focus: #fab283;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --color-bg-primary: #201d1d;
+  --color-bg-panel: #262222;
+  --color-bg-element: #302c2c;
+  --color-bg-hover: #363131;
+  --color-text-primary: #fdfcfc;
+  --color-text-muted: #9a9898;
+  --color-text-disabled: #6e6e73;
+  --color-accent: #007aff;
+  --color-success: #30d158;
+  --color-warning: #ff9f0a;
+  --color-error: #ff3b30;
+  --color-info: #64d2ff;
+  --color-border: #403b3b;
+  --color-border-focus: #007aff;
+  --font-mono: 'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --font-sans: 'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 
-/* 全局基础样式 */
+/* 全局基础样式 — opencode: monospace 单一字体、暖黑背景、扁平无阴影 */
 html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-size: 14px;
   line-height: 1.5;
+}
+
+/* 链接默认下划线，呼应 opencode 文本为中心的风格 */
+a {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* 滚动条样式 */
@@ -40,49 +47,49 @@ html, body, #root {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #30363d;
+  background: #403b3b;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #808080;
+  background: #9a9898;
 }
 
 /* 选中文字 */
 ::selection {
-  background-color: rgba(250, 178, 131, 0.3);
+  background-color: rgba(0, 122, 255, 0.3);
 }
 
 /* React Flow 暗色主题适配 */
 .react-flow__edge-path {
-  stroke: #808080;
+  stroke: #9a9898;
   stroke-width: 1.5;
 }
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke: #fab283;
+  stroke: #007aff;
   stroke-width: 2;
 }
 .react-flow__connection-line .react-flow__edge-path {
-  stroke: #fab283;
+  stroke: #007aff;
 }
 .react-flow__controls {
-  background: #161b22 !important;
-  border: 1px solid #30363d !important;
-  border-radius: 6px !important;
+  background: #262222 !important;
+  border: 1px solid #403b3b !important;
+  border-radius: 4px !important;
   box-shadow: none !important;
 }
 .react-flow__controls-button {
-  background: #21262d !important;
-  border-bottom: 1px solid #30363d !important;
-  fill: #808080 !important;
+  background: #302c2c !important;
+  border-bottom: 1px solid #403b3b !important;
+  fill: #9a9898 !important;
 }
 .react-flow__controls-button:hover {
-  background: #2d333b !important;
-  fill: #eeeeee !important;
+  background: #363131 !important;
+  fill: #fdfcfc !important;
 }
 .react-flow__minimap {
-  background: #161b22 !important;
-  border: 1px solid #30363d !important;
-  border-radius: 6px !important;
+  background: #262222 !important;
+  border: 1px solid #403b3b !important;
+  border-radius: 4px !important;
 }
 .react-flow__handle {
   cursor: crosshair;
@@ -91,10 +98,10 @@ html, body, #root {
   outline: none;
 }
 
-/* 节点运行脉冲动画 */
+/* 节点运行脉冲动画（用边框颜色变化代替阴影，保持扁平） */
 @keyframes node-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(250,178,131,0.2); }
-  50% { box-shadow: 0 0 12px rgba(250,178,131,0.5); }
+  0%, 100% { outline: 1px solid rgba(0, 122, 255, 0.25); }
+  50% { outline: 1px solid rgba(0, 122, 255, 0.7); }
 }
 .work-node--running {
   animation: node-pulse 1.5s ease-in-out infinite;

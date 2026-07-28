@@ -3,21 +3,21 @@ import { usePlugins, type PluginNodeSchema, type SchemaProperty } from '../../ho
 import { useFlowStore } from '../../store/flowStore';
 
 const COLOR_MAP: Record<string, string> = {
-  orange: '#fab283',
-  green: '#7fd88f',
-  yellow: '#f5a742',
-  '#e5c07b': '#e5c07b',
-  cyan: '#56b6c2',
-  red: '#e06c75',
-  black: '#808080',
+  orange: '#007aff',
+  green: '#30d158',
+  yellow: '#ff9f0a',
+  '#ffd60a': '#ffd60a',
+  cyan: '#64d2ff',
+  red: '#ff3b30',
+  black: '#9a9898',
 };
 
 function resolveColor(c: string) {
-  return COLOR_MAP[c] || c || '#fab283';
+  return COLOR_MAP[c] || c || '#007aff';
 }
 
 const labelStyle: React.CSSProperties = {
-  color: '#8b949e',
+  color: '#9a9898',
   fontSize: 11,
   marginBottom: 3,
   display: 'block',
@@ -25,14 +25,14 @@ const labelStyle: React.CSSProperties = {
 
 const fieldInputStyle: React.CSSProperties = {
   width: '100%',
-  background: '#0d1117',
-  border: '1px solid #30363d',
+  background: '#201d1d',
+  border: '1px solid #403b3b',
   borderRadius: 4,
-  color: '#eeeeee',
+  color: '#fdfcfc',
   fontSize: 12,
   padding: '5px 8px',
   outline: 'none',
-  fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+  fontFamily: "var(--font-mono, monospace)",
   boxSizing: 'border-box',
 };
 
@@ -59,7 +59,7 @@ function ParamField({
         <label style={labelStyle}>{label}</label>
         <div
           style={{
-            color: '#484f58',
+            color: '#646262',
             fontSize: 11,
             fontStyle: 'italic',
             padding: '4px 0',
@@ -273,14 +273,14 @@ export function NodeConfig() {
         style={{
           width: 280,
           flexShrink: 0,
-          background: '#161b22',
-          borderLeft: '1px solid #30363d',
+          background: '#262222',
+          borderLeft: '1px solid #403b3b',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
         }}
       >
-        <span style={{ color: '#484f58', fontSize: 12 }}>
+        <span style={{ color: '#646262', fontSize: 12 }}>
           {selectedNode ? '加载中...' : '选择节点查看配置'}
         </span>
       </div>
@@ -294,8 +294,8 @@ export function NodeConfig() {
       style={{
         width: 280,
         flexShrink: 0,
-        background: '#161b22',
-        borderLeft: '1px solid #30363d',
+        background: '#262222',
+        borderLeft: '1px solid #403b3b',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -307,7 +307,7 @@ export function NodeConfig() {
           display: 'flex',
           alignItems: 'center',
           padding: '10px 12px',
-          borderBottom: '1px solid #30363d',
+          borderBottom: '1px solid #403b3b',
           gap: 8,
         }}
       >
@@ -322,7 +322,7 @@ export function NodeConfig() {
         />
         <span
           style={{
-            color: '#eeeeee',
+            color: '#fdfcfc',
             fontSize: 13,
             fontWeight: 600,
             flex: 1,
@@ -338,7 +338,7 @@ export function NodeConfig() {
           style={{
             background: 'none',
             border: 'none',
-            color: '#808080',
+            color: '#9a9898',
             cursor: 'pointer',
             fontSize: 16,
             padding: '0 4px',
@@ -353,7 +353,7 @@ export function NodeConfig() {
       {/* 中间：参数表单 */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
         {Object.keys(properties).length === 0 ? (
-          <div style={{ color: '#484f58', fontSize: 12 }}>该节点无可配置参数</div>
+          <div style={{ color: '#646262', fontSize: 12 }}>该节点无可配置参数</div>
         ) : (
           Object.entries(properties).map(([key, prop]) => (
             <ParamField
@@ -371,24 +371,24 @@ export function NodeConfig() {
       <div
         style={{
           padding: '10px 14px',
-          borderTop: '1px solid #30363d',
+          borderTop: '1px solid #403b3b',
           flexShrink: 0,
         }}
       >
-        <div style={{ color: '#484f58', fontSize: 10, lineHeight: 1.5 }}>
-          <span style={{ color: '#8b949e' }}>类型：</span>
+        <div style={{ color: '#646262', fontSize: 10, lineHeight: 1.5 }}>
+          <span style={{ color: '#9a9898' }}>类型：</span>
           {schema.name}
           {schema.input_schema?.properties && (
             <>
               {' · '}
-              <span style={{ color: '#8b949e' }}>参数：</span>
+              <span style={{ color: '#9a9898' }}>参数：</span>
               {Object.keys(schema.input_schema.properties).length}
             </>
           )}
           {schema.output_schema?.properties && (
             <>
               {' · '}
-              <span style={{ color: '#8b949e' }}>输出：</span>
+              <span style={{ color: '#9a9898' }}>输出：</span>
               {Object.keys(schema.output_schema.properties).length}
             </>
           )}
