@@ -80,7 +80,7 @@ export function CrossSection() {
     <div className="flex flex-col gap-4">
       <div className="flex items-end gap-3">
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#9a9898]">日期</label>
+          <label className="text-xs text-[#646262]">日期</label>
           <Input
             placeholder="2024-01-02"
             value={date}
@@ -89,7 +89,7 @@ export function CrossSection() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#9a9898]">字段</label>
+          <label className="text-xs text-[#646262]">字段</label>
           <Select
             options={fieldOptions}
             value={field}
@@ -121,7 +121,7 @@ export function CrossSection() {
               key={item.label}
               className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-3"
             >
-              <div className="text-xs text-[#9a9898] mb-1">{item.label}</div>
+              <div className="text-xs text-[#646262] mb-1">{item.label}</div>
               <div className="text-lg font-mono text-[#201d1d]">
                 {Number.isFinite(item.value) ? item.value.toFixed(4) : '-'}
               </div>
@@ -141,7 +141,7 @@ export function CrossSection() {
               key={item.label}
               className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-3"
             >
-              <div className="text-xs text-[#9a9898] mb-1">{item.label}</div>
+              <div className="text-xs text-[#646262] mb-1">{item.label}</div>
               <div className="text-lg font-mono text-[#201d1d]">
                 {Number.isFinite(item.value) ? item.value.toFixed(4) : '-'}
               </div>
@@ -152,17 +152,17 @@ export function CrossSection() {
 
       {histogramData.length > 0 && (
         <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] p-4">
-          <div className="text-sm text-[#9a9898] mb-3">分布直方图</div>
+          <div className="text-sm text-[#646262] mb-3">分布直方图</div>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={histogramData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" />
               <XAxis
                 dataKey="bin"
-                tick={{ fill: '#9a9898', fontSize: 11 }}
+                tick={{ fill: '#646262', fontSize: 11 }}
                 axisLine={{ stroke: '#403b3b' }}
               />
               <YAxis
-                tick={{ fill: '#9a9898', fontSize: 11 }}
+                tick={{ fill: '#646262', fontSize: 11 }}
                 axisLine={{ stroke: '#403b3b' }}
               />
               <Tooltip

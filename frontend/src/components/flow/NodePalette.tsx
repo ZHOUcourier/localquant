@@ -149,7 +149,7 @@ export function NodePalette() {
       {/* 节点列表 */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {isLoading && (
-          <div style={{ color: '#9a9898', fontSize: 11, textAlign: 'center', padding: 16 }}>
+          <div style={{ color: '#646262', fontSize: 11, textAlign: 'center', padding: 16 }}>
             加载中...
           </div>
         )}
@@ -163,7 +163,7 @@ export function NodePalette() {
                 alignItems: 'center',
                 padding: '6px 10px',
                 cursor: 'pointer',
-                color: '#9a9898',
+                color: '#646262',
                 fontSize: 11,
                 fontWeight: 600,
                 userSelect: 'none',
@@ -217,7 +217,7 @@ export function NodePalette() {
                       style={{
                         width: 3,
                         height: 18,
-                        borderRadius: 2,
+                        borderRadius: 0,
                         background: color,
                         flexShrink: 0,
                       }}

@@ -110,7 +110,7 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 公式模式 */}
         {mode === 'formula' && (
           <div className="flex flex-col gap-2">
-            <label className="text-xs text-[#9a9898]">因子公式表达式（可用变量: open/high/low/close/volume/amount, np, pd）</label>
+            <label className="text-xs text-[#646262]">因子公式表达式（可用变量: open/high/low/close/volume/amount, np, pd）</label>
             <Input
               placeholder="例: close / close.shift(5) - 1"
               value={formula}
@@ -122,7 +122,7 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 代码模式 */}
         {mode === 'code' && (
           <div className="flex flex-col gap-2">
-            <label className="text-xs text-[#9a9898]">Python 代码</label>
+            <label className="text-xs text-[#646262]">Python 代码</label>
             <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] overflow-hidden" style={{ height: 220 }}>
               <Editor
                 height="220px"
@@ -146,7 +146,7 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 参数区域 */}
         <div className="grid grid-cols-3 gap-2">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">股票池</label>
+            <label className="text-xs text-[#646262]">股票池</label>
             <Input
               placeholder="留空=全部已缓存股票"
               value={pool}
@@ -154,7 +154,7 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">起始日期</label>
+            <label className="text-xs text-[#646262]">起始日期</label>
             <Input
               type="date"
               value={startDate}
@@ -162,7 +162,7 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">结束日期</label>
+            <label className="text-xs text-[#646262]">结束日期</label>
             <Input
               type="date"
               value={endDate}
@@ -185,16 +185,16 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 因子值预览 */}
         {preview && (
           <div className="flex flex-col gap-2">
-            <label className="text-xs text-[#9a9898]">因子值预览（最近 {previewDates.length} 个交易日）</label>
+            <label className="text-xs text-[#646262]">因子值预览（最近 {previewDates.length} 个交易日）</label>
             <ScrollArea maxHeight={200}>
               <table className="w-full border-collapse text-xs">
                 <thead>
                   <tr className="bg-[#f8f7f7]">
-                    <th className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-left text-[#9a9898] sticky top-0 bg-[#f8f7f7]">
+                    <th className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-left text-[#646262] sticky top-0 bg-[#f8f7f7]">
                       日期
                     </th>
                     {preview.stocks.map((s) => (
-                      <th key={s} className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-right text-[#9a9898] sticky top-0 bg-[#f8f7f7]">
+                      <th key={s} className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-right text-[#646262] sticky top-0 bg-[#f8f7f7]">
                         {s}
                       </th>
                     ))}
@@ -203,7 +203,7 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
                 <tbody>
                   {previewDates.map((d) => (
                     <tr key={d} className="hover:bg-[#f1eeee]">
-                      <td className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1 text-[#9a9898]">{d}</td>
+                      <td className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1 text-[#646262]">{d}</td>
                       {preview.stocks.map((s) => {
                         const v = preview.values[d]?.[s];
                         return (

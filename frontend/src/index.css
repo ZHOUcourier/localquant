@@ -6,15 +6,16 @@
   --color-bg-element: #f8f7f7;
   --color-bg-hover: #f1eeee;
   --color-text-primary: #201d1d;
-  --color-text-muted: #9a9898;
-  --color-text-disabled: #6e6e73;
+  --color-text-body: #424245;
+  --color-text-muted: #646262;
+  --color-text-disabled: #9a9898;
   --color-accent: #007aff;
   --color-success: #30d158;
   --color-warning: #ff9f0a;
   --color-error: #ff3b30;
   --color-info: #64d2ff;
   --color-border: rgba(15, 0, 0, 0.12);
-  --color-border-focus: #007aff;
+  --color-border-focus: #201d1d;
   --font-mono: 'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   --font-sans: 'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }

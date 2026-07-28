@@ -36,7 +36,7 @@ function TableInner<T extends object>(
           {columns.map((col) => (
             <th
               key={col.key}
-              className="px-3 py-2 text-left text-xs font-medium text-[#9a9898]"
+              className="px-3 py-2 text-left text-xs font-medium text-[#646262]"
               style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)', width: col.width }}
             >
               {col.title}

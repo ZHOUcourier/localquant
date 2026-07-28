@@ -32,8 +32,8 @@ export default function TopBar() {
     >
       <div className="flex items-center gap-2">
         {location.pathname !== '/' && (
-          <span className="text-[#9a9898] text-[13px]">
-            <Link to="/" className="text-[#9a9898] no-underline hover:text-[#201d1d]">
+          <span className="text-[#646262] text-[13px]">
+            <Link to="/" className="text-[#646262] no-underline hover:text-[#201d1d]">
               工作台
             </Link>
             <span className="mx-1">/</span>
@@ -51,7 +51,7 @@ export default function TopBar() {
             background: '#6e6e73',
           }}
         />
-        <span className="text-[12px] text-[#9a9898]">QMT 未连接</span>
+        <span className="text-[12px] text-[#646262]">QMT 未连接</span>
       </div>
     </div>
   );

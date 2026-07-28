@@ -33,7 +33,7 @@ interface ICAnalysisProps {
 function StatCard({ label, value, color }: { label: string; value: string; color: string }) {
   return (
     <div className="flex flex-col items-center rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2">
-      <span className="text-xs text-[#9a9898]">{label}</span>
+      <span className="text-xs text-[#646262]">{label}</span>
       <span className={`text-lg font-semibold font-mono ${color}`}>{value}</span>
     </div>
   );
@@ -83,12 +83,12 @@ export default function ICAnalysis({ icSeries, stats, loading }: ICAnalysisProps
             <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 11, fill: '#9a9898' }}
+              tick={{ fontSize: 11, fill: '#646262' }}
               tickLine={{ stroke: '#403b3b' }}
               axisLine={{ stroke: '#403b3b' }}
             />
             <YAxis
-              tick={{ fontSize: 11, fill: '#9a9898' }}
+              tick={{ fontSize: 11, fill: '#646262' }}
               tickLine={{ stroke: '#403b3b' }}
               axisLine={{ stroke: '#403b3b' }}
             />
@@ -99,7 +99,7 @@ export default function ICAnalysis({ icSeries, stats, loading }: ICAnalysisProps
                 borderRadius: 4,
                 fontSize: 12,
               }}
-              labelStyle={{ color: '#9a9898' }}
+              labelStyle={{ color: '#646262' }}
             />
             <ReferenceLine y={0} stroke="#6e6e73" strokeDasharray="3 3" />
             <Line

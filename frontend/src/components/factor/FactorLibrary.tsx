@@ -132,7 +132,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
       width: 160,
       render: (record) => {
         const d = new Date(record.created_at);
-        return <span className="text-xs text-[#9a9898]">{d.toLocaleDateString()}</span>;
+        return <span className="text-xs text-[#646262]">{d.toLocaleDateString()}</span>;
       },
     },
     {
@@ -175,7 +175,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
                 className={`rounded-[4px] border px-2 py-1 text-xs cursor-pointer transition-colors ${
                   category === c
                     ? 'border-[#007aff] bg-[#007aff]/10 text-[#007aff]'
-                    : 'border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] text-[#9a9898] hover:text-[#201d1d]'
+                    : 'border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] text-[#646262] hover:text-[#201d1d]'
                 }`}
                 onClick={() => setCategory(c)}
               >
@@ -193,7 +193,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
                 {columns.map((col) => (
                   <th
                     key={col.key}
-                    className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898]"
+                    className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#646262]"
                     style={{ width: col.width }}
                   >
                     {col.title}
@@ -204,7 +204,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-3 py-8 text-center text-[#6e6e73]">
+                  <td colSpan={columns.length} className="px-3 py-8 text-center text-[#646262]">
                     暂无因子数据
                   </td>
                 </tr>
@@ -244,7 +244,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
       >
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">因子名称 *</label>
+            <label className="text-xs text-[#646262]">因子名称 *</label>
             <Input
               placeholder="例: 5日动量因子"
               value={form.name}
@@ -252,7 +252,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">分类</label>
+            <label className="text-xs text-[#646262]">分类</label>
             <div className="flex gap-1 flex-wrap">
               {CATEGORY_OPTIONS.filter((c) => c !== '全部').map((c) => (
                 <button
@@ -261,7 +261,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
                   className={`rounded-[4px] border px-2 py-1 text-xs cursor-pointer transition-colors ${
                     form.category === c
                       ? 'border-[#007aff] bg-[#007aff]/10 text-[#007aff]'
-                      : 'border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] text-[#9a9898] hover:text-[#201d1d]'
+                      : 'border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] text-[#646262] hover:text-[#201d1d]'
                   }`}
                   onClick={() => setForm({ ...form, category: c })}
                 >
@@ -271,7 +271,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
             </div>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">描述</label>
+            <label className="text-xs text-[#646262]">描述</label>
             <Input
               placeholder="因子描述..."
               value={form.description}
@@ -279,7 +279,7 @@ export default function FactorLibrary({ onRefresh }: FactorLibraryProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">公式</label>
+            <label className="text-xs text-[#646262]">公式</label>
             <Input
               placeholder="因子公式..."
               value={form.formula}

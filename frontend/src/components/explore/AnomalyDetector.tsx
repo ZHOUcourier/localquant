@@ -55,7 +55,7 @@ export function AnomalyDetector() {
     <div className="flex flex-col gap-3">
       <div className="flex items-end gap-3 flex-wrap">
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#9a9898]">股票代码</label>
+          <label className="text-xs text-[#646262]">股票代码</label>
           <Input
             placeholder="000001.SH"
             value={code}
@@ -64,7 +64,7 @@ export function AnomalyDetector() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#9a9898]">字段</label>
+          <label className="text-xs text-[#646262]">字段</label>
           <Select
             options={fieldOptions}
             value={field}
@@ -73,7 +73,7 @@ export function AnomalyDetector() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#9a9898]">窗口大小</label>
+          <label className="text-xs text-[#646262]">窗口大小</label>
           <Input
             type="number"
             value={window}
@@ -82,7 +82,7 @@ export function AnomalyDetector() {
           />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-xs text-[#9a9898]">阈值</label>
+          <label className="text-xs text-[#646262]">阈值</label>
           <Input
             type="number"
             step="0.1"
@@ -104,20 +104,20 @@ export function AnomalyDetector() {
 
       {anomalyData && anomalyData.columns.length > 0 && (
         <>
-          <div className="text-xs text-[#9a9898]">
+          <div className="text-xs text-[#646262]">
             检测到 {anomalyData.row_count} 个异常值（{result.code} / {result.field}）
           </div>
           <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] overflow-auto max-h-[500px]">
             <table className="w-full border-collapse text-sm">
               <thead className="sticky top-0 z-10">
                 <tr className="bg-[#f8f7f7]">
-                  <th className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898] w-10">
+                  <th className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#646262] w-10">
                     #
                   </th>
                   {anomalyData.columns.map((col) => (
                     <th
                       key={col}
-                      className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898] whitespace-nowrap"
+                      className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#646262] whitespace-nowrap"
                     >
                       {col}
                     </th>
@@ -127,7 +127,7 @@ export function AnomalyDetector() {
               <tbody>
                 {anomalyData.data.map((row, ri) => (
                   <tr key={ri} className="border-b border-[rgba(15,0,0,0.12)] hover:bg-[#f1eeee] transition-colors">
-                    <td className="px-3 py-1.5 text-xs text-[#6e6e73]">{ri + 1}</td>
+                    <td className="px-3 py-1.5 text-xs text-[#646262]">{ri + 1}</td>
                     {row.map((val, ci) => {
                       const colName = anomalyData.columns[ci];
                       const isZScore = colName === 'z_score';
@@ -139,7 +139,7 @@ export function AnomalyDetector() {
                           }`}
                         >
                           {val === null ? (
-                            <span className="text-[#6e6e73]">NULL</span>
+                            <span className="text-[#9a9898]">NULL</span>
                           ) : typeof val === 'number' ? (
                             val.toFixed(4)
                           ) : (
@@ -157,7 +157,7 @@ export function AnomalyDetector() {
       )}
 
       {result && anomalyData && anomalyData.row_count === 0 && !result.error && (
-        <div className="text-sm text-[#9a9898] py-8 text-center">未检测到异常值</div>
+        <div className="text-sm text-[#646262] py-8 text-center">未检测到异常值</div>
       )}
     </div>
   );

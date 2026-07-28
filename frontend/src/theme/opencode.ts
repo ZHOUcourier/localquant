@@ -12,8 +12,9 @@ export const colors = {
   },
   text: {
     primary: '#201d1d',
-    muted: '#9a9898',
-    disabled: '#6e6e73',
+    body: '#424245',
+    muted: '#646262',
+    disabled: '#9a9898',
   },
   accent: '#007aff',
   accentHover: '#0056b3',
@@ -24,7 +25,7 @@ export const colors = {
   info: '#64d2ff',
   border: 'rgba(15, 0, 0, 0.12)',
   borderOutline: '#646262',
-  borderFocus: '#007aff',
+  borderFocus: '#201d1d',
   nodeData: '#007aff',
   nodeProcess: '#30d158',
   nodeIndicator: '#ff9f0a',
@@ -50,7 +51,6 @@ export const spacing = {
 
 export const radii = {
   none: '0px',
-  sm: '2px',
-  md: '4px',
-  lg: '6px',
+  sm: '4px',
+  full: '9999px',
 } as const;

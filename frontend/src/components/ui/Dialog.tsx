@@ -44,7 +44,7 @@ export const Dialog = React.forwardRef<HTMLDivElement, DialogProps>(
               <div className="text-sm font-medium text-[#201d1d]">{title}</div>
               <button
                 type="button"
-                className="text-[#9a9898] hover:text-[#201d1d] transition-colors cursor-pointer"
+                className="text-[#646262] hover:text-[#201d1d] transition-colors cursor-pointer"
                 onClick={onClose}
               >
                 ✕

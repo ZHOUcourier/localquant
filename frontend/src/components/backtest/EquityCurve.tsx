@@ -52,11 +52,11 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-3 py-2 text-xs">
-      <div className="mb-1 text-[#9a9898]">{label}</div>
+      <div className="mb-1 text-[#646262]">{label}</div>
       {payload.map((p, i) => (
         <div key={i} className="flex items-center gap-2">
           <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: p.color }} />
-          <span className="text-[#9a9898]">{p.name}:</span>
+          <span className="text-[#646262]">{p.name}:</span>
           <span className="font-mono text-[#201d1d]">
             {p.name.includes('净值') ? formatMoney(p.value) : formatPct(p.value)}
           </span>
@@ -110,13 +110,13 @@ export function EquityCurve({
               <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" vertical={false} />
               <XAxis
                 dataKey="date"
-                tick={{ fontSize: 11, fill: '#9a9898' }}
+                tick={{ fontSize: 11, fill: '#646262' }}
                 tickLine={false}
                 axisLine={{ stroke: '#403b3b' }}
                 interval={tickInterval}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: '#9a9898' }}
+                tick={{ fontSize: 11, fill: '#646262' }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={formatPct}
@@ -124,7 +124,7 @@ export function EquityCurve({
               />
               <Tooltip content={<CustomTooltip />} />
               <Legend
-                wrapperStyle={{ fontSize: 12, color: '#9a9898' }}
+                wrapperStyle={{ fontSize: 12, color: '#646262' }}
                 iconType="line"
               />
               <ReferenceLine y={0} stroke="#6e6e73" strokeDasharray="2 2" />
@@ -162,13 +162,13 @@ export function EquityCurve({
               <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" vertical={false} />
               <XAxis
                 dataKey="date"
-                tick={{ fontSize: 11, fill: '#9a9898' }}
+                tick={{ fontSize: 11, fill: '#646262' }}
                 tickLine={false}
                 axisLine={{ stroke: '#403b3b' }}
                 interval={tickInterval}
               />
               <YAxis
-                tick={{ fontSize: 11, fill: '#9a9898' }}
+                tick={{ fontSize: 11, fill: '#646262' }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={formatPct}

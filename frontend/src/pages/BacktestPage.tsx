@@ -82,8 +82,8 @@ export default function BacktestPage() {
           {!result && !loading && !error && (
             <div className="flex h-full items-center justify-center">
               <div className="text-center">
-                <div className="mb-2 font-mono text-sm text-[#9a9898]">配置左侧参数，运行回测查看结果</div>
-                <div className="font-mono text-xs text-[#6e6e73]">回测基于本地缓存行情数据，请先在「数据管理」页下载数据</div>
+                <div className="mb-2 font-mono text-sm text-[#646262]">配置左侧参数，运行回测查看结果</div>
+                <div className="font-mono text-xs text-[#646262]">回测基于本地缓存行情数据，请先在「数据管理」页下载数据</div>
               </div>
             </div>
           )}
@@ -92,7 +92,7 @@ export default function BacktestPage() {
             <div className="flex h-full items-center justify-center">
               <div className="text-center">
                 <div className="mb-2 h-8 w-8 mx-auto animate-spin rounded-full border-2 border-[#007aff] border-t-transparent" />
-                <div className="font-mono text-sm text-[#9a9898]">回测运行中...</div>
+                <div className="font-mono text-sm text-[#646262]">回测运行中...</div>
               </div>
             </div>
           )}

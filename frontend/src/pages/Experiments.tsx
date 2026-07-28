@@ -142,7 +142,7 @@ export default function Experiments() {
       width: 90,
       render: (val) => {
         const Icon = sourceIcons[val as string] || Search;
-        const color = sourceColors[val as string] || '#9a9898';
+        const color = sourceColors[val as string] || '#646262';
         return (
           <span className="inline-flex items-center gap-1">
             <Icon size={13} style={{ color }} />
@@ -171,7 +171,7 @@ export default function Experiments() {
       title: '时间',
       dataIndex: 'created_at' as keyof Experiment,
       width: 120,
-      render: (val) => <span className="text-xs text-[#9a9898]">{formatTime(val as number)}</span>,
+      render: (val) => <span className="text-xs text-[#646262]">{formatTime(val as number)}</span>,
     },
     {
       key: 'metrics',
@@ -179,11 +179,11 @@ export default function Experiments() {
       dataIndex: 'metrics' as keyof Experiment,
       render: (val) => {
         const m = val as Record<string, unknown>;
-        if (!m || Object.keys(m).length === 0) return <span className="text-[#6e6e73]">-</span>;
+        if (!m || Object.keys(m).length === 0) return <span className="text-[#9a9898]">-</span>;
         return (
           <div className="flex gap-2 flex-wrap">
             {Object.entries(m).slice(0, 3).map(([k, v]) => (
-              <span key={k} className="text-xs text-[#9a9898]">
+              <span key={k} className="text-xs text-[#646262]">
                 {k}: <span className="text-[#201d1d]">{typeof v === 'number' ? v.toFixed(4) : String(v)}</span>
               </span>
             ))}
@@ -207,16 +207,16 @@ export default function Experiments() {
                 autoFocus
               />
               <button onClick={saveNote} className="text-[#30d158] hover:text-[#28b04a] cursor-pointer"><Check size={14} /></button>
-              <button onClick={() => setNoteEditId(null)} className="text-[#9a9898] hover:text-[#201d1d] cursor-pointer"><X size={14} /></button>
+              <button onClick={() => setNoteEditId(null)} className="text-[#646262] hover:text-[#201d1d] cursor-pointer"><X size={14} /></button>
             </div>
           );
         }
         return (
           <div className="flex items-center gap-1 group">
-            <span className="text-xs text-[#9a9898] truncate max-w-[120px]">{(record.note as string) || '-'}</span>
+            <span className="text-xs text-[#646262] truncate max-w-[120px]">{(record.note as string) || '-'}</span>
             <button
               onClick={() => startEditNote(record)}
-              className="opacity-0 group-hover:opacity-100 text-[#9a9898] hover:text-[#007aff] transition-opacity cursor-pointer"
+              className="opacity-0 group-hover:opacity-100 text-[#646262] hover:text-[#007aff] transition-opacity cursor-pointer"
             >
               <Pencil size={12} />
             </button>
@@ -231,7 +231,7 @@ export default function Experiments() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-semibold text-[#201d1d] mb-1">实验管理</h1>
-          <p className="text-[13px] text-[#9a9898]">共 {experiments.length} 条实验记录</p>
+          <p className="text-[13px] text-[#646262]">共 {experiments.length} 条实验记录</p>
         </div>
         <Button
           variant="primary"
@@ -259,22 +259,22 @@ export default function Experiments() {
         className="max-w-[720px]"
       >
         {compareLoading ? (
-          <div className="text-center py-8 text-[#9a9898]">加载中...</div>
+          <div className="text-center py-8 text-[#646262]">加载中...</div>
         ) : compareResult ? (
           <div className="space-y-4 max-h-[60vh] overflow-auto">
             {/* 参数差异 */}
             <div>
               <h3 className="text-sm font-medium text-[#201d1d] mb-2">参数差异</h3>
               {Object.keys(compareResult.param_diffs).length === 0 ? (
-                <p className="text-xs text-[#6e6e73]">无参数差异</p>
+                <p className="text-xs text-[#9a9898]">无参数差异</p>
               ) : (
                 <div className="rounded border border-[rgba(15,0,0,0.12)] overflow-hidden">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-[#f8f7f7]">
-                        <th className="px-2 py-1.5 text-left text-[#9a9898] font-medium">参数</th>
+                        <th className="px-2 py-1.5 text-left text-[#646262] font-medium">参数</th>
                         {compareResult.experiments.map(e => (
-                          <th key={e.id} className="px-2 py-1.5 text-left text-[#9a9898] font-medium truncate max-w-[120px]">
+                          <th key={e.id} className="px-2 py-1.5 text-left text-[#646262] font-medium truncate max-w-[120px]">
                             {e.name || e.id.slice(0, 8)}
                           </th>
                         ))}
@@ -309,15 +309,15 @@ export default function Experiments() {
             <div>
               <h3 className="text-sm font-medium text-[#201d1d] mb-2">指标对比</h3>
               {Object.keys(compareResult.metric_comparison).length === 0 ? (
-                <p className="text-xs text-[#6e6e73]">无指标数据</p>
+                <p className="text-xs text-[#9a9898]">无指标数据</p>
               ) : (
                 <div className="rounded border border-[rgba(15,0,0,0.12)] overflow-hidden">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-[#f8f7f7]">
-                        <th className="px-2 py-1.5 text-left text-[#9a9898] font-medium">指标</th>
+                        <th className="px-2 py-1.5 text-left text-[#646262] font-medium">指标</th>
                         {compareResult.experiments.map(e => (
-                          <th key={e.id} className="px-2 py-1.5 text-left text-[#9a9898] font-medium truncate max-w-[120px]">
+                          <th key={e.id} className="px-2 py-1.5 text-left text-[#646262] font-medium truncate max-w-[120px]">
                             {e.name || e.id.slice(0, 8)}
                           </th>
                         ))}

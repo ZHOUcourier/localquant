@@ -70,7 +70,7 @@ export default function DataManagement() {
     <div>
       <div className="mb-4">
         <h1 className="text-xl font-semibold text-[#201d1d] mb-1">数据管理</h1>
-        <p className="text-[13px] text-[#9a9898]">管理 QMT 数据源连接与本地缓存</p>
+        <p className="text-[13px] text-[#646262]">管理 QMT 数据源连接与本地缓存</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -100,10 +100,10 @@ export default function DataManagement() {
                 {status?.qmt_connected ? '已连接' : '未连接'}
               </div>
               {status?.qmt_path && (
-                <div className="text-xs text-[#6e6e73] font-mono truncate max-w-[200px]">{status.qmt_path}</div>
+                <div className="text-xs text-[#646262] font-mono truncate max-w-[200px]">{status.qmt_path}</div>
               )}
               {status?.qmt_data_dir && (
-                <div className="text-xs text-[#6e6e73] font-mono truncate max-w-[200px]">{status.qmt_data_dir}</div>
+                <div className="text-xs text-[#646262] font-mono truncate max-w-[200px]">{status.qmt_data_dir}</div>
               )}
             </div>
           </div>
@@ -140,7 +140,7 @@ export default function DataManagement() {
         <Card title="数据质量">
           <div className="flex flex-col items-center justify-center py-6 gap-3">
             <ShieldCheck size={32} className="text-[#64d2ff]" />
-            <p className="text-xs text-[#9a9898] text-center">运行数据质量检查，验证缓存数据完整性</p>
+            <p className="text-xs text-[#646262] text-center">运行数据质量检查，验证缓存数据完整性</p>
             <Button
               variant="secondary"
               size="sm"
@@ -157,7 +157,7 @@ export default function DataManagement() {
       <Card title="数据下载" className="mt-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
           <div>
-            <label className="block text-xs text-[#9a9898] mb-1">品种代码</label>
+            <label className="block text-xs text-[#646262] mb-1">品种代码</label>
             <Input
               value={symbol}
               onChange={e => setSymbol(e.target.value)}
@@ -165,15 +165,15 @@ export default function DataManagement() {
             />
           </div>
           <div>
-            <label className="block text-xs text-[#9a9898] mb-1">周期</label>
+            <label className="block text-xs text-[#646262] mb-1">周期</label>
             <Select options={periodOptions} value={period} onChange={setPeriod} />
           </div>
           <div>
-            <label className="block text-xs text-[#9a9898] mb-1">开始日期</label>
+            <label className="block text-xs text-[#646262] mb-1">开始日期</label>
             <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
           </div>
           <div>
-            <label className="block text-xs text-[#9a9898] mb-1">结束日期</label>
+            <label className="block text-xs text-[#646262] mb-1">结束日期</label>
             <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
           </div>
           <Button
@@ -189,7 +189,7 @@ export default function DataManagement() {
 
         {/* 下载状态（真实结果，非模拟进度） */}
         {downloadMutation.isPending && (
-          <div className="mt-3 flex items-center gap-2 text-xs text-[#9a9898]">
+          <div className="mt-3 flex items-center gap-2 text-xs text-[#646262]">
             <Loader2 size={13} className="animate-spin" />
             正在从 QMT 下载 {symbol} ({period}) 数据...
           </div>
@@ -219,7 +219,7 @@ export default function DataManagement() {
                 {qualityMutation.data.passed ? '通过' : '存在问题'}
               </Badge>
               {qualityMutation.data.summary && (
-                <span className="text-xs text-[#9a9898]">{qualityMutation.data.summary}</span>
+                <span className="text-xs text-[#646262]">{qualityMutation.data.summary}</span>
               )}
             </div>
             {qualityMutation.data.issues && qualityMutation.data.issues.length > 0 && (
@@ -234,7 +234,7 @@ export default function DataManagement() {
             )}
           </div>
         ) : (
-          <div className="flex items-center justify-center py-4 gap-2 text-[#9a9898]">
+          <div className="flex items-center justify-center py-4 gap-2 text-[#646262]">
             <Loader2 size={14} className="animate-spin" />
             检查中...
           </div>

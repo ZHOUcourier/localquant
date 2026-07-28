@@ -73,7 +73,7 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
 
   if (!workflowId) {
     return (
-      <div style={{ color: '#9a9898', fontSize: 12, padding: 16, fontFamily: 'monospace' }}>
+      <div style={{ color: '#646262', fontSize: 12, padding: 16, fontFamily: 'monospace' }}>
         请先保存工作流后再执行
       </div>
     );
@@ -81,7 +81,7 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
 
   if (logs.length === 0) {
     return (
-      <div style={{ color: '#9a9898', fontSize: 12, padding: 16, fontFamily: 'monospace' }}>
+      <div style={{ color: '#646262', fontSize: 12, padding: 16, fontFamily: 'monospace' }}>
         等待执行日志...
       </div>
     );
@@ -101,7 +101,7 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
               borderBottom: '1px solid rgba(15,0,0,0.12)',
             }}
           >
-            <span style={{ color: '#9a9898', flexShrink: 0, fontSize: 11 }}>
+            <span style={{ color: '#646262', flexShrink: 0, fontSize: 11 }}>
               {entry.timestamp
                 ? new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour12: false })
                 : '--:--:--'}
@@ -112,7 +112,7 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
             <Badge variant={statusVariant[entry.status]}>
               {statusLabel[entry.status]}
             </Badge>
-            <span style={{ color: '#9a9898', fontSize: 11 }}>{entry.message}</span>
+            <span style={{ color: '#646262', fontSize: 11 }}>{entry.message}</span>
           </div>
         ))}
       </div>

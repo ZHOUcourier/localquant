@@ -45,7 +45,7 @@ interface CorrData {
 function EmptyState({ text }: { text: string }) {
   return (
     <div className="flex h-[280px] items-center justify-center rounded-[4px] border border-[rgba(15,0,0,0.12)]">
-      <span className="font-mono text-xs text-[#9a9898]">{text}</span>
+      <span className="font-mono text-xs text-[#646262]">{text}</span>
     </div>
   );
 }
@@ -185,14 +185,14 @@ export default function FactorResearch() {
       type: 'category' as const,
       data: corrData.names,
       splitArea: { show: true },
-      axisLabel: { color: '#9a9898', fontSize: 11 },
+      axisLabel: { color: '#646262', fontSize: 11 },
       axisLine: { lineStyle: { color: '#403b3b' } },
     },
     yAxis: {
       type: 'category' as const,
       data: corrData.names,
       splitArea: { show: true },
-      axisLabel: { color: '#9a9898', fontSize: 11 },
+      axisLabel: { color: '#646262', fontSize: 11 },
       axisLine: { lineStyle: { color: '#403b3b' } },
     },
     visualMap: {
@@ -205,7 +205,7 @@ export default function FactorResearch() {
       inRange: {
         color: ['#ff3b30', '#302c2c', '#30d158'],
       },
-      textStyle: { color: '#9a9898' },
+      textStyle: { color: '#646262' },
     },
     series: [
       {
@@ -221,7 +221,7 @@ export default function FactorResearch() {
           formatter: (params: { value: number[] }) => params.value[2].toFixed(2),
         },
         emphasis: {
-          itemStyle: { borderColor: '#9a9898', borderWidth: 1 },
+          itemStyle: { borderColor: '#646262', borderWidth: 1 },
         },
       },
     ],

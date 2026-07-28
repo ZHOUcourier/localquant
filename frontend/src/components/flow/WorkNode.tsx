@@ -79,11 +79,6 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
         minWidth: 200,
         fontFamily: "var(--font-mono, monospace)",
         fontSize: 12,
-        boxShadow: selected && status === 'pending'
-          ? '0 0 0 1px #007aff'
-          : status === 'running'
-          ? '0 0 8px rgba(0,122,255,0.3)'
-          : 'none',
         overflow: 'visible',
         position: 'relative',
       }}
@@ -97,7 +92,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
           bottom: 0,
           width: 3,
           background: leftBarColor,
-          borderRadius: '6px 0 0 6px',
+          borderRadius: '4px 0 0 4px',
         }}
       />
 
@@ -110,7 +105,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
           padding: '6px 10px 6px 12px',
           borderBottom: '1px solid #403b3b',
           background: '#302c2c',
-          borderRadius: '5px 5px 0 0',
+          borderRadius: '4px 4px 0 0',
         }}
       >
         <span style={{ color: '#fdfcfc', fontWeight: 600, fontSize: 12 }}>

@@ -18,7 +18,7 @@ const inputStyle: React.CSSProperties = {
   height: 24,
   background: '#201d1d',
   border: '1px solid #403b3b',
-  borderRadius: 3,
+  borderRadius: 4,
   color: '#fdfcfc',
   fontSize: 11,
   padding: '2px 6px',
@@ -66,7 +66,7 @@ function NodeWidgetComponent({ nodeId, widget }: NodeWidgetProps) {
           style={{
             background: '#302c2c',
             border: '1px solid #403b3b',
-            borderRadius: 3,
+            borderRadius: 4,
             color: '#9a9898',
             fontSize: 10,
             padding: '2px 6px',

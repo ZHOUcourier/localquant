@@ -53,7 +53,7 @@ export const BottomPanel: React.FC = () => {
         />
         <span
           style={{
-            color: '#9a9898',
+            color: '#646262',
             fontSize: 14,
             transform: expanded ? 'rotate(180deg)' : 'none',
             transition: 'transform 0.2s',

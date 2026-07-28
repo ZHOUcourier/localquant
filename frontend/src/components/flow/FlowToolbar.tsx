@@ -108,9 +108,9 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
     ? '#ff3b30'
     : statusCounts['success']
     ? '#30d158'
-    : '#9a9898';
+    : '#646262';
 
-  const saveBtnColor = saveStatus === 'saved' ? '#30d158' : saveStatus === 'error' ? '#ff3b30' : '#9a9898';
+  const saveBtnColor = saveStatus === 'saved' ? '#30d158' : saveStatus === 'error' ? '#ff3b30' : '#646262';
   const saveBtnText = saveStatus === 'saving' ? '保存中...' : saveStatus === 'saved' ? '已保存' : saveStatus === 'error' ? '保存失败' : '保存';
 
   return (

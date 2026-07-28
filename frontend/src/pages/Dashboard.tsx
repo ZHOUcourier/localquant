@@ -67,7 +67,7 @@ export default function Dashboard() {
     <div>
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-[#201d1d] mb-1">工作台</h1>
-        <p className="text-[13px] text-[#9a9898]">欢迎使用 LocalQuant 本地投研平台</p>
+        <p className="text-[13px] text-[#646262]">欢迎使用 LocalQuant 本地投研平台</p>
       </div>
 
       {/* 快速操作 */}
@@ -84,7 +84,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <div className="text-sm font-medium text-[#201d1d] mb-1">{title}</div>
-                <div className="text-[12px] text-[#9a9898] leading-relaxed">{description}</div>
+                <div className="text-[12px] text-[#646262] leading-relaxed">{description}</div>
               </div>
             </div>
           </Card>
@@ -95,7 +95,7 @@ export default function Dashboard() {
         {/* 最近工作流 */}
         <Card title="最近工作流" extra={<button className="text-xs text-[#007aff] hover:underline cursor-pointer" onClick={() => navigate('/workflow')}>查看全部</button>}>
           {recentWorkflows.length === 0 ? (
-            <p className="text-xs text-[#6e6e73] py-4 text-center">暂无工作流</p>
+            <p className="text-xs text-[#646262] py-4 text-center">暂无工作流</p>
           ) : (
             <div className="space-y-2">
               {recentWorkflows.map(wf => (
@@ -108,7 +108,7 @@ export default function Dashboard() {
                     <GitBranch size={14} className="text-[#007aff] flex-shrink-0" />
                     <span className="text-sm text-[#201d1d] truncate">{wf.name || '未命名工作流'}</span>
                   </div>
-                  <span className="text-xs text-[#6e6e73] flex-shrink-0 ml-2">{formatTime(wf.updated_at)}</span>
+                  <span className="text-xs text-[#646262] flex-shrink-0 ml-2">{formatTime(wf.updated_at)}</span>
                 </div>
               ))}
             </div>
@@ -118,7 +118,7 @@ export default function Dashboard() {
         {/* 最近实验 */}
         <Card title="最近实验" extra={<button className="text-xs text-[#007aff] hover:underline cursor-pointer" onClick={() => navigate('/experiments')}>查看全部</button>}>
           {recentExperiments.length === 0 ? (
-            <p className="text-xs text-[#6e6e73] py-4 text-center">暂无实验</p>
+            <p className="text-xs text-[#646262] py-4 text-center">暂无实验</p>
           ) : (
             <div className="space-y-2">
               {recentExperiments.map(exp => (
@@ -130,7 +130,7 @@ export default function Dashboard() {
                   </div>
                   <div className="flex gap-1 flex-shrink-0 ml-2">
                     {Object.entries(exp.metrics || {}).slice(0, 1).map(([k, v]) => (
-                      <span key={k} className="text-xs text-[#9a9898]">
+                      <span key={k} className="text-xs text-[#646262]">
                         {k}: {typeof v === 'number' ? v.toFixed(4) : String(v)}
                       </span>
                     ))}
@@ -162,7 +162,7 @@ export default function Dashboard() {
                 <Database size={16} className="text-[#64d2ff]" />
                 <span className="text-sm text-[#201d1d]">缓存数据</span>
               </div>
-              <span className="text-sm text-[#9a9898]">
+              <span className="text-sm text-[#646262]">
                 {dataStatus?.cache_count ?? 0} 品种 / {dataStatus?.cache_size ?? '0 B'}
               </span>
             </div>

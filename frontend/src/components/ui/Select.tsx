@@ -55,18 +55,18 @@ export const Select = React.forwardRef<HTMLDivElement, SelectProps>(
         <button
           type="button"
           className={cn(
-            'flex w-full items-center justify-between rounded-[6px] border bg-[#f8f7f7] px-3 py-1.5 text-sm text-[#201d1d] transition-colors cursor-pointer',
-            open && 'border-[#007aff]',
+            'flex w-full items-center justify-between rounded-[4px] border bg-[#f8f7f7] px-3 py-1.5 text-sm text-[#201d1d] transition-colors cursor-pointer',
+            open && 'border-[#201d1d] bg-[#fdfcfc]',
             disabled && 'opacity-50 cursor-not-allowed'
           )}
-          style={{ borderColor: open ? '#007aff' : 'rgba(15, 0, 0, 0.12)' }}
+          style={{ borderColor: open ? '#201d1d' : 'rgba(15, 0, 0, 0.12)' }}
           disabled={disabled}
           onClick={() => setOpen(!open)}
         >
-          <span className={cn(!selectedOption && 'text-[#6e6e73]')}>
+          <span className={cn(!selectedOption && 'text-[#9a9898]')}>
             {selectedOption ? selectedOption.label : placeholder}
           </span>
-          <span className="ml-2 text-[#9a9898]">▾</span>
+          <span className="ml-2 text-[#646262]">▾</span>
         </button>
         {open && (
           <div
@@ -79,9 +79,9 @@ export const Select = React.forwardRef<HTMLDivElement, SelectProps>(
                 className={cn(
                   'cursor-pointer px-3 py-1.5 text-sm transition-colors',
                   option.disabled
-                    ? 'text-[#6e6e73] cursor-not-allowed'
+                    ? 'text-[#9a9898] cursor-not-allowed'
                     : option.value === currentValue
-                    ? 'bg-[#f1eeee] text-[#007aff]'
+                    ? 'bg-[#f1eeee] text-[#201d1d] font-medium'
                     : 'text-[#201d1d] hover:bg-[#f1eeee]'
                 )}
                 onClick={() => handleSelect(option.value, option.disabled)}

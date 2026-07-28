@@ -58,7 +58,7 @@ export default function Settings() {
     <div>
       <div className="mb-4">
         <h1 className="text-xl font-semibold text-[#201d1d] mb-1">设置</h1>
-        <p className="text-[13px] text-[#9a9898]">配置 QMT、AI 及服务参数</p>
+        <p className="text-[13px] text-[#646262]">配置 QMT、AI 及服务参数</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -66,7 +66,7 @@ export default function Settings() {
         <Card title="QMT 配置">
           <div className="space-y-3">
             <div>
-              <label className="block text-xs text-[#9a9898] mb-1">MiniQMT 路径</label>
+              <label className="block text-xs text-[#646262] mb-1">MiniQMT 路径</label>
               <Input
                 value={form.qmt_path}
                 onChange={e => updateField('qmt_path', e.target.value)}
@@ -74,7 +74,7 @@ export default function Settings() {
               />
             </div>
             <div>
-              <label className="block text-xs text-[#9a9898] mb-1">数据目录</label>
+              <label className="block text-xs text-[#646262] mb-1">数据目录</label>
               <Input
                 value={form.qmt_data_dir}
                 onChange={e => updateField('qmt_data_dir', e.target.value)}
@@ -88,7 +88,7 @@ export default function Settings() {
         <Card title="AI 配置">
           <div className="space-y-3">
             <div>
-              <label className="block text-xs text-[#9a9898] mb-1">API Key</label>
+              <label className="block text-xs text-[#646262] mb-1">API Key</label>
               <Input
                 type="password"
                 value={form.openai_api_key}
@@ -97,7 +97,7 @@ export default function Settings() {
               />
             </div>
             <div>
-              <label className="block text-xs text-[#9a9898] mb-1">Base URL</label>
+              <label className="block text-xs text-[#646262] mb-1">Base URL</label>
               <Input
                 value={form.openai_base_url}
                 onChange={e => updateField('openai_base_url', e.target.value)}
@@ -111,7 +111,7 @@ export default function Settings() {
         <Card title="服务配置">
           <div className="space-y-3">
             <div>
-              <label className="block text-xs text-[#9a9898] mb-1">后端端口</label>
+              <label className="block text-xs text-[#646262] mb-1">后端端口</label>
               <Input
                 type="number"
                 value={form.backend_port}
@@ -119,7 +119,7 @@ export default function Settings() {
               />
             </div>
             <div>
-              <label className="block text-xs text-[#9a9898] mb-1">前端端口</label>
+              <label className="block text-xs text-[#646262] mb-1">前端端口</label>
               <Input
                 type="number"
                 value={form.frontend_port}
@@ -135,7 +135,7 @@ export default function Settings() {
             {currentConfig ? (
               Object.entries(currentConfig).slice(0, 8).map(([key, value]) => (
                 <div key={key} className="flex items-center justify-between text-xs">
-                  <span className="text-[#9a9898] font-mono">{key}</span>
+                  <span className="text-[#646262] font-mono">{key}</span>
                   <span className="text-[#201d1d] font-mono truncate max-w-[200px] ml-2">
                     {typeof value === 'string' && value.length > 30
                       ? value.slice(0, 30) + '...'
@@ -146,7 +146,7 @@ export default function Settings() {
                 </div>
               ))
             ) : (
-              <p className="text-xs text-[#6e6e73] py-2">加载中...</p>
+              <p className="text-xs text-[#646262] py-2">加载中...</p>
             )}
           </div>
         </Card>

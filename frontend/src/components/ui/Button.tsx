@@ -11,10 +11,10 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
-  primary: 'bg-[#201d1d] text-[#fdfcfc] border-none hover:bg-[#302c2c] disabled:bg-[#f1eeee] disabled:text-[#6e6e73]',
-  secondary: 'bg-transparent text-[#201d1d] border border-[#646262] hover:border-[#9a9898] hover:bg-[#f1eeee] disabled:border-[rgba(15,0,0,0.12)] disabled:text-[#6e6e73]',
-  ghost: 'bg-transparent text-[#201d1d] border border-transparent hover:bg-[#f1eeee] disabled:text-[#6e6e73]',
-  danger: 'bg-[#ff3b30] text-[#fdfcfc] border-none hover:bg-[#d70015] disabled:bg-[#6e6e73] disabled:text-[#fdfcfc]',
+  primary: 'bg-[#201d1d] text-[#fdfcfc] border-none hover:bg-[#302c2c] active:bg-[#0f0000] disabled:bg-[#f1eeee] disabled:text-[#9a9898]',
+  secondary: 'bg-[#fdfcfc] text-[#201d1d] border border-[#646262] hover:bg-[#f1eeee] active:bg-[#f1eeee] disabled:border-[rgba(15,0,0,0.12)] disabled:bg-[#f1eeee] disabled:text-[#9a9898]',
+  ghost: 'bg-transparent text-[#201d1d] border border-transparent hover:bg-[#f1eeee] disabled:text-[#9a9898]',
+  danger: 'bg-[#ff3b30] text-[#fdfcfc] border-none hover:bg-[#d70015] active:bg-[#a50011] disabled:bg-[#f1eeee] disabled:text-[#9a9898]',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {

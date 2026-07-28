@@ -53,7 +53,7 @@ export default function Sidebar() {
               `relative flex items-center gap-2 px-4 no-underline transition-colors duration-100 ${
                 isActive
                   ? 'text-[#201d1d] bg-[#f8f7f7]'
-                  : 'text-[#9a9898] hover:text-[#201d1d] hover:bg-[#f8f7f7]'
+                  : 'text-[#646262] hover:text-[#201d1d] hover:bg-[#f8f7f7]'
               }`
             }
             style={{ height: 36 }}
@@ -79,7 +79,7 @@ export default function Sidebar() {
 
       <div
         className="shrink-0 px-4 py-2 text-[11px]"
-        style={{ color: '#6e6e73', borderTop: '1px solid rgba(15, 0, 0, 0.12)' }}
+        style={{ color: '#646262', borderTop: '1px solid rgba(15, 0, 0, 0.12)' }}
       >
         v0.1.0
       </div>

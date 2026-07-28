@@ -114,7 +114,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
       <Card title="回测参数">
         <div className="grid grid-cols-2 gap-3">
           <div className="flex flex-col gap-1 col-span-2">
-            <label className="text-xs text-[#9a9898]">股票池（逗号分隔，留空=全部已缓存股票）</label>
+            <label className="text-xs text-[#646262]">股票池（逗号分隔，留空=全部已缓存股票）</label>
             <Input
               placeholder="如: 000001.SZ, 600000.SH"
               value={stockPool}
@@ -122,7 +122,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">初始资金</label>
+            <label className="text-xs text-[#646262]">初始资金</label>
             <Input
               type="number"
               value={initialCapital}
@@ -131,7 +131,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">手续费率</label>
+            <label className="text-xs text-[#646262]">手续费率</label>
             <Input
               type="number"
               step="0.0001"
@@ -141,7 +141,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">滑点</label>
+            <label className="text-xs text-[#646262]">滑点</label>
             <Input
               type="number"
               step="0.0001"
@@ -150,7 +150,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">基准指数</label>
+            <label className="text-xs text-[#646262]">基准指数</label>
             <Select
               options={benchmarkOptions}
               value={benchmark}
@@ -164,7 +164,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
       <Card title="回测区间">
         <div className="grid grid-cols-2 gap-3">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">开始日期</label>
+            <label className="text-xs text-[#646262]">开始日期</label>
             <Input
               type="date"
               value={startDate}
@@ -172,7 +172,7 @@ export function BacktestConfig({ onRun, loading }: BacktestConfigProps) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#9a9898]">结束日期</label>
+            <label className="text-xs text-[#646262]">结束日期</label>
             <Input
               type="date"
               value={endDate}

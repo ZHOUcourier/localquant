@@ -42,7 +42,7 @@ function CumulativeCard({ label, value }: { label: string; value: string }) {
   const isPositive = parseFloat(value) > 0;
   return (
     <div className="flex flex-col items-center rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2">
-      <span className="text-xs text-[#9a9898]">{label}</span>
+      <span className="text-xs text-[#646262]">{label}</span>
       <span className={`text-lg font-semibold font-mono ${isPositive ? 'text-[#30d158]' : 'text-[#ff3b30]'}`}>
         {value}
       </span>
@@ -89,12 +89,12 @@ export default function QuantileChart({ data, stats, loading }: QuantileChartPro
             <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 11, fill: '#9a9898' }}
+              tick={{ fontSize: 11, fill: '#646262' }}
               tickLine={{ stroke: '#403b3b' }}
               axisLine={{ stroke: '#403b3b' }}
             />
             <YAxis
-              tick={{ fontSize: 11, fill: '#9a9898' }}
+              tick={{ fontSize: 11, fill: '#646262' }}
               tickLine={{ stroke: '#403b3b' }}
               axisLine={{ stroke: '#403b3b' }}
               tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
@@ -106,12 +106,12 @@ export default function QuantileChart({ data, stats, loading }: QuantileChartPro
                 borderRadius: 4,
                 fontSize: 12,
               }}
-              labelStyle={{ color: '#9a9898' }}
+              labelStyle={{ color: '#646262' }}
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               formatter={(value: any) => [`${(Number(value) * 100).toFixed(2)}%`]}
             />
             <Legend
-              wrapperStyle={{ fontSize: 12, color: '#9a9898' }}
+              wrapperStyle={{ fontSize: 12, color: '#646262' }}
             />
             {groupLabels.map((g, i) => (
               <Line

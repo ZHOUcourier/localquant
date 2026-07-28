@@ -17,7 +17,7 @@ function resolveColor(c: string) {
 }
 
 const labelStyle: React.CSSProperties = {
-  color: '#9a9898',
+  color: '#646262',
   fontSize: 11,
   marginBottom: 3,
   display: 'block',
@@ -315,7 +315,7 @@ export function NodeConfig() {
           style={{
             width: 4,
             height: 20,
-            borderRadius: 2,
+            borderRadius: 0,
             background: boxColor,
             flexShrink: 0,
           }}
@@ -338,7 +338,7 @@ export function NodeConfig() {
           style={{
             background: 'none',
             border: 'none',
-            color: '#9a9898',
+            color: '#646262',
             cursor: 'pointer',
             fontSize: 16,
             padding: '0 4px',
@@ -376,19 +376,19 @@ export function NodeConfig() {
         }}
       >
         <div style={{ color: '#646262', fontSize: 10, lineHeight: 1.5 }}>
-          <span style={{ color: '#9a9898' }}>类型：</span>
+          <span style={{ color: '#646262' }}>类型：</span>
           {schema.name}
           {schema.input_schema?.properties && (
             <>
               {' · '}
-              <span style={{ color: '#9a9898' }}>参数：</span>
+              <span style={{ color: '#646262' }}>参数：</span>
               {Object.keys(schema.input_schema.properties).length}
             </>
           )}
           {schema.output_schema?.properties && (
             <>
               {' · '}
-              <span style={{ color: '#9a9898' }}>输出：</span>
+              <span style={{ color: '#646262' }}>输出：</span>
               {Object.keys(schema.output_schema.properties).length}
             </>
           )}

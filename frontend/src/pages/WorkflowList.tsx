@@ -102,7 +102,7 @@ export default function WorkflowList() {
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   <div style={{ fontWeight: 500 }}>{t.name}</div>
-                  <div style={{ color: '#9a9898', fontSize: 11, marginTop: 2 }}>{t.description}</div>
+                  <div style={{ color: '#646262', fontSize: 11, marginTop: 2 }}>{t.description}</div>
                 </button>
               ))}
             </div>
@@ -125,7 +125,7 @@ export default function WorkflowList() {
 
       {/* 加载中 */}
       {isLoading && (
-        <div style={{ color: '#9a9898', fontSize: 13, textAlign: 'center', padding: 60 }}>
+        <div style={{ color: '#646262', fontSize: 13, textAlign: 'center', padding: 60 }}>
           加载中...
         </div>
       )}
@@ -134,7 +134,7 @@ export default function WorkflowList() {
       {!isLoading && (!workflows || workflows.length === 0) && (
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          padding: '80px 20px', color: '#9a9898',
+          padding: '80px 20px', color: '#646262',
         }}>
           <Layout size={48} style={{ color: '#403b3b', marginBottom: 16 }} />
           <p style={{ fontSize: 15, marginBottom: 16, color: '#424245' }}>还没有工作流</p>
@@ -191,7 +191,7 @@ export default function WorkflowList() {
                   width: 28, height: 28,
                   background: deleteConfirm === wf.id ? '#ff3b30' : 'transparent',
                   border: 'none', borderRadius: 4,
-                  color: deleteConfirm === wf.id ? '#fff' : '#9a9898',
+                  color: deleteConfirm === wf.id ? '#fff' : '#646262',
                   cursor: 'pointer', opacity: 0.7,
                   transition: 'all 0.15s ease',
                 }}
@@ -208,7 +208,7 @@ export default function WorkflowList() {
 
               {/* 描述 */}
               <div style={{
-                color: '#9a9898', fontSize: 12, marginBottom: 14,
+                color: '#646262', fontSize: 12, marginBottom: 14,
                 overflow: 'hidden', textOverflow: 'ellipsis',
                 display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
                 minHeight: 32, lineHeight: '16px',
@@ -218,7 +218,7 @@ export default function WorkflowList() {
 
               {/* 底部信息 */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ color: '#9a9898', fontSize: 11 }}>
+                <span style={{ color: '#646262', fontSize: 11 }}>
                   {formatTime(wf.updated_at)}
                 </span>
               </div>

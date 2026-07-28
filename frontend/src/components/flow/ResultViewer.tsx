@@ -15,7 +15,7 @@ export const ResultViewer: React.FC = () => {
     return (
       <div
         style={{
-          color: '#9a9898',
+          color: '#646262',
           fontSize: 12,
           padding: 16,
           fontFamily: 'monospace',
@@ -38,7 +38,7 @@ export const ResultViewer: React.FC = () => {
     return (
       <div
         style={{
-          color: '#9a9898',
+          color: '#646262',
           fontSize: 12,
           padding: 16,
           fontFamily: 'monospace',
@@ -74,7 +74,7 @@ export const ResultViewer: React.FC = () => {
                   padding: '4px 12px',
                   textAlign: 'left',
                   borderBottom: '1px solid rgba(15,0,0,0.12)',
-                  color: '#9a9898',
+                  color: '#646262',
                   fontWeight: 500,
                   whiteSpace: 'nowrap',
                   background: '#f1eeee',

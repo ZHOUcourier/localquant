@@ -58,7 +58,7 @@ export function SQLPanel() {
           执行
         </Button>
         {result && !result.error && (
-          <span className="text-xs text-[#9a9898]">
+          <span className="text-xs text-[#646262]">
             返回 {result.row_count} 行
           </span>
         )}
@@ -75,13 +75,13 @@ export function SQLPanel() {
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10">
               <tr className="bg-[#f8f7f7]">
-                <th className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898] w-10">
+                <th className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#646262] w-10">
                   #
                 </th>
                 {result.columns.map((col) => (
                   <th
                     key={col}
-                    className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#9a9898] whitespace-nowrap"
+                    className="border-b border-[rgba(15,0,0,0.12)] px-3 py-2 text-left text-xs font-medium text-[#646262] whitespace-nowrap"
                   >
                     {col}
                   </th>
@@ -91,10 +91,10 @@ export function SQLPanel() {
             <tbody>
               {result.data.map((row, ri) => (
                 <tr key={ri} className="border-b border-[rgba(15,0,0,0.12)] hover:bg-[#f1eeee] transition-colors">
-                  <td className="px-3 py-1.5 text-xs text-[#6e6e73]">{ri + 1}</td>
+                  <td className="px-3 py-1.5 text-xs text-[#646262]">{ri + 1}</td>
                   {row.map((val, ci) => (
                     <td key={ci} className="px-3 py-1.5 text-[#201d1d] whitespace-nowrap font-mono text-xs">
-                      {val === null ? <span className="text-[#6e6e73]">NULL</span> : String(val)}
+                      {val === null ? <span className="text-[#9a9898]">NULL</span> : String(val)}
                     </td>
                   ))}
                 </tr>

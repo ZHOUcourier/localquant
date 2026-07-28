@@ -35,10 +35,10 @@ export const Tabs = React.forwardRef<HTMLDivElement, TabsProps>(
               className={cn(
                 'relative px-3 py-2 text-sm transition-colors cursor-pointer',
                 item.disabled
-                  ? 'text-[#6e6e73] cursor-not-allowed'
+                  ? 'text-[#9a9898] cursor-not-allowed'
                   : currentKey === item.key
                   ? 'text-[#201d1d]'
-                  : 'text-[#9a9898] hover:text-[#201d1d]'
+                  : 'text-[#646262] hover:text-[#201d1d]'
               )}
               onClick={() => handleClick(item.key, item.disabled)}
             >
