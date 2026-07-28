@@ -231,7 +231,9 @@ export default function Experiments() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-semibold text-[#201d1d] mb-1">实验管理</h1>
-          <p className="text-[13px] text-[#646262]">共 {experiments.length} 条实验记录</p>
+          <p className="text-[13px] text-[#646262]">
+            自动归档因子评估、策略回测、工作流运行的参数与指标，勾选 2 条以上可横向对比 — 共 {experiments.length} 条记录
+          </p>
         </div>
         <Button
           variant="primary"

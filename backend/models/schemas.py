@@ -1,13 +1,16 @@
 """Pydantic 模型定义"""
-from pydantic import BaseModel, Field
-from typing import Any, Optional
-from enum import Enum
 
+from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
 
 # ========== 工作流相关（统一使用前端格式） ==========
 
+
 class NodeModel(BaseModel):
     """工作流节点模型（与前端一致）"""
+
     uuid: str
     name: str  # 对应 BaseWorkNode 子类名
     title: str = ""
@@ -21,17 +24,19 @@ class NodeModel(BaseModel):
 
 class LinkModel(BaseModel):
     """节点连线模型（与前端一致）"""
+
     uuid: str = ""
     previous_node_uuid: str
     output_field_name: str  # 前驱节点的输出字段名
     next_node_uuid: str
-    input_field_name: str   # 后继节点的输入字段名
+    input_field_name: str  # 后继节点的输入字段名
 
 
 class WorkflowCreate(BaseModel):
     id: Optional[str] = None  # 有 id 时为更新，无 id 时为创建
     name: str
     description: str = ""
+    is_favorite: bool = False
     nodes: list[NodeModel] = Field(default_factory=list)
     links: list[LinkModel] = Field(default_factory=list)
 
@@ -52,6 +57,7 @@ class WorkflowResponse(BaseModel):
     created_at: int
     updated_at: int
     last_run_id: Optional[str] = None
+    is_favorite: bool = False
 
 
 class WorkflowListItem(BaseModel):
@@ -59,9 +65,11 @@ class WorkflowListItem(BaseModel):
     name: str
     description: str
     updated_at: int
+    is_favorite: bool = False
 
 
 # ========== 运行记录相关 ==========
+
 
 class RunStatus(str, Enum):
     PENDING = "pending"
@@ -81,6 +89,7 @@ class WorkflowRunResponse(BaseModel):
 
 
 # ========== 插件相关 ==========
+
 
 class SlotSchema(BaseModel):
     name: str
@@ -105,6 +114,7 @@ class PluginListResponse(BaseModel):
 
 # ========== 运行请求 ==========
 
+
 class RunRequest(BaseModel):
     nodes: list[NodeModel] = Field(default_factory=list)
     links: list[LinkModel] = Field(default_factory=list)
@@ -112,8 +122,10 @@ class RunRequest(BaseModel):
 
 # ========== SSE 事件 ==========
 
+
 class NodeExecutionStatus(BaseModel):
     """节点执行状态（SSE 推送用）"""
+
     node_uuid: str
     status: str  # pending/running/success/failed
     message: str = ""

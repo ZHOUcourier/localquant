@@ -1,4 +1,5 @@
 from typing import Optional, Type
+
 from loguru import logger
 
 from backend.plugins.base import BaseWorkNode
@@ -12,6 +13,7 @@ def work_node(
     group: str = "自定义节点",
     type: str = "general",
     box_color: str = "black",
+    description: str = "",
 ):
     """装饰器 — 注册工作流节点到全局注册表
 
@@ -20,6 +22,7 @@ def work_node(
         class FactorBuildNode(BaseWorkNode):
             ...
     """
+
     def decorator(cls: Type[BaseWorkNode]) -> Type[BaseWorkNode]:
         if not issubclass(cls, BaseWorkNode):
             raise TypeError(f"{cls.__name__} must inherit from BaseWorkNode")
@@ -29,6 +32,7 @@ def work_node(
         cls.__work_node_group__ = group
         cls.__work_node_type__ = type
         cls.__work_node_box_color__ = box_color
+        cls.__work_node_description__ = description
 
         ALL_WORK_NODES[cls.__name__] = cls
         logger.debug(f"Registered node: {cls.__name__} ({name})")

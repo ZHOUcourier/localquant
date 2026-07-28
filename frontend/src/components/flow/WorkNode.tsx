@@ -61,7 +61,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
     ? '#30d158'
     : status === 'failed'
     ? '#ff3b30'
-    : selected ? '#007aff' : '#403b3b';
+    : selected ? '#007aff' : 'rgba(15,0,0,0.16)';
 
   // 左侧色条：success 显示绿色，其他状态显示原始 boxColor
   const leftBarColor = status === 'success' ? '#30d158' : status === 'failed' ? '#ff3b30' : boxColor;
@@ -73,7 +73,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
     <div
       className={nodeClassName}
       style={{
-        background: '#201d1d',
+        background: '#fdfcfc',
         border: `1px solid ${borderColor}`,
         borderRadius: 4,
         minWidth: 200,
@@ -81,6 +81,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
         fontSize: 12,
         overflow: 'visible',
         position: 'relative',
+        boxShadow: '0 1px 4px rgba(15,0,0,0.06)',
       }}
     >
       {/* 左侧色条 */}
@@ -103,12 +104,12 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '6px 10px 6px 12px',
-          borderBottom: '1px solid #403b3b',
-          background: '#302c2c',
+          borderBottom: '1px solid rgba(15,0,0,0.10)',
+          background: '#f1eeee',
           borderRadius: '4px 4px 0 0',
         }}
       >
-        <span style={{ color: '#fdfcfc', fontWeight: 600, fontSize: 12 }}>
+        <span style={{ color: '#201d1d', fontWeight: 600, fontSize: 12 }}>
           {data.label}
         </span>
         <span
@@ -159,7 +160,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
               <div
                 key={`in-label-${input.name}`}
                 style={{
-                  color: '#9a9898',
+                  color: '#646262',
                   fontSize: 11,
                   lineHeight: inputs.length === 1 ? undefined : '20px',
                   textAlign: 'left',
@@ -191,7 +192,7 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
               <div
                 key={`out-label-${output.name}`}
                 style={{
-                  color: '#9a9898',
+                  color: '#646262',
                   fontSize: 11,
                   lineHeight: outputs.length === 1 ? undefined : '20px',
                   textAlign: 'right',

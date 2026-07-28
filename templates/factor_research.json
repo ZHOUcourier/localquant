@@ -14,7 +14,7 @@
     },
     {
       "uuid": "n2",
-      "name": "FactorBuildFormulaNode",
+      "name": "FactorFormulaNode",
       "title": "因子构建",
       "positionX": 350,
       "positionY": 100,
@@ -24,7 +24,7 @@
     },
     {
       "uuid": "n3",
-      "name": "ICCalcNode",
+      "name": "ICNode",
       "title": "IC分析",
       "positionX": 650,
       "positionY": 50,
@@ -34,7 +34,7 @@
     },
     {
       "uuid": "n4",
-      "name": "QuantileNode",
+      "name": "GroupReturnNode",
       "title": "分层收益",
       "positionX": 650,
       "positionY": 260,
@@ -47,9 +47,9 @@
     {
       "uuid": "l1",
       "previous_node_uuid": "n1",
-      "output_field_name": "data",
+      "output_field_name": "kline_data",
       "next_node_uuid": "n2",
-      "input_field_name": "kline_data"
+      "input_field_name": "data"
     },
     {
       "uuid": "l2",

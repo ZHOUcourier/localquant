@@ -1,17 +1,34 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, FolderOpen, Layout } from 'lucide-react';
-import { useWorkflows, useDeleteWorkflow, useWorkflowTemplates, useCreateFromTemplate, useSaveWorkflow } from '../hooks/useWorkflow';
+import { Search, Star, Trash2, Eye, Copy, Plus, FolderOpen } from 'lucide-react';
+import { useWorkflows, useDeleteWorkflow, useWorkflowTemplates, useCreateFromTemplate, useSaveWorkflow, useToggleFavorite } from '../hooks/useWorkflow';
+import { Input } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+import { Dialog } from '../components/ui/Dialog';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+
+type TabKey = 'preset' | 'my' | 'favorite';
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'preset', label: '[+] 预置模板' },
+  { key: 'my', label: '[+] 我创建的' },
+  { key: 'favorite', label: '[+] 收藏' },
+];
 
 export default function WorkflowList() {
   const navigate = useNavigate();
-  const { data: workflows, isLoading } = useWorkflows();
-  const deleteMutation = useDeleteWorkflow();
+  const [activeTab, setActiveTab] = useState<TabKey>('my');
+  const [search, setSearch] = useState('');
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  const { data: workflows, isLoading } = useWorkflows(activeTab, search);
   const { data: templates } = useWorkflowTemplates();
+  const deleteMutation = useDeleteWorkflow();
   const createFromTemplate = useCreateFromTemplate();
   const saveWorkflow = useSaveWorkflow();
-  const [showTemplateMenu, setShowTemplateMenu] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const toggleFavorite = useToggleFavorite();
 
   const handleCreateNew = async () => {
     const result = await saveWorkflow.mutateAsync({
@@ -19,6 +36,7 @@ export default function WorkflowList() {
       nodes: [],
       links: [],
     });
+    setShowCreateDialog(false);
     if (result?.id) {
       navigate(`/workflow/${result.id}`);
     }
@@ -26,7 +44,7 @@ export default function WorkflowList() {
 
   const handleCreateFromTemplate = async (templateId: string) => {
     const result = await createFromTemplate.mutateAsync(templateId);
-    setShowTemplateMenu(false);
+    setShowCreateDialog(false);
     if (result?.id) {
       navigate(`/workflow/${result.id}`);
     }
@@ -34,13 +52,19 @@ export default function WorkflowList() {
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (deleteConfirm === id) {
-      deleteMutation.mutate(id);
+    setDeleteConfirm(id);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (deleteConfirm) {
+      deleteMutation.mutate(deleteConfirm);
       setDeleteConfirm(null);
-    } else {
-      setDeleteConfirm(id);
-      setTimeout(() => setDeleteConfirm(null), 3000);
     }
+  };
+
+  const handleToggleFavorite = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    toggleFavorite.mutate(id);
   };
 
   const formatTime = (ts: number) => {
@@ -58,174 +82,284 @@ export default function WorkflowList() {
   };
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto' }}>
-      {/* 顶部标题栏 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
-        <h1 style={{ color: '#201d1d', fontSize: 20, fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Layout size={20} style={{ color: '#007aff' }} />
-          工作流
-        </h1>
-        <div style={{ flex: 1 }} />
-
-        {/* 从模板创建 */}
-        <div style={{ position: 'relative' }}>
-          <button
-            onClick={() => setShowTemplateMenu(!showTemplateMenu)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '6px 14px', background: '#f8f7f7', border: '1px solid rgba(15, 0, 0, 0.12)',
-              borderRadius: 4, color: '#424245', fontSize: 13, cursor: 'pointer',
-            }}
-          >
-            <FolderOpen size={14} />
-            从模板创建
-          </button>
-          {showTemplateMenu && templates && templates.length > 0 && (
-            <div
-              style={{
-                position: 'absolute', top: '100%', right: 0, marginTop: 4,
-                background: '#fdfcfc', border: '1px solid rgba(15, 0, 0, 0.12)', borderRadius: 4,
-                minWidth: 220, zIndex: 100,
-                overflow: 'hidden',
-              }}
-            >
-              {templates.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => handleCreateFromTemplate(t.id)}
-                  style={{
-                    display: 'block', width: '100%', padding: '10px 14px',
-                    background: 'transparent', border: 'none', borderBottom: '1px solid #f8f7f7',
-                    color: '#424245', fontSize: 13, textAlign: 'left', cursor: 'pointer',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#f8f7f7')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                >
-                  <div style={{ fontWeight: 500 }}>{t.name}</div>
-                  <div style={{ color: '#646262', fontSize: 11, marginTop: 2 }}>{t.description}</div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* 新建工作流 */}
-        <button
-          onClick={handleCreateNew}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '6px 16px', background: '#007aff', border: 'none',
-            borderRadius: 4, color: '#fdfcfc', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-          }}
-        >
-          <Plus size={14} />
-          新建工作流
-        </button>
-      </div>
-
-      {/* 加载中 */}
-      {isLoading && (
-        <div style={{ color: '#646262', fontSize: 13, textAlign: 'center', padding: 60 }}>
-          加载中...
-        </div>
-      )}
-
-      {/* 空状态 */}
-      {!isLoading && (!workflows || workflows.length === 0) && (
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          padding: '80px 20px', color: '#646262',
-        }}>
-          <Layout size={48} style={{ color: '#403b3b', marginBottom: 16 }} />
-          <p style={{ fontSize: 15, marginBottom: 16, color: '#424245' }}>还没有工作流</p>
-          <button
-            onClick={handleCreateNew}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '8px 20px', background: '#007aff', border: 'none',
-              borderRadius: 4, color: '#fdfcfc', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            }}
+    <div className="min-h-screen bg-[#fdfcfc] font-mono">
+      <div className="mx-auto max-w-[960px] px-6 py-8">
+        {/* 顶部标题栏 */}
+        <div className="mb-6 flex items-center justify-between">
+          <h1 className="text-[20px] font-bold text-[#201d1d]">
+            [+] 工作流
+          </h1>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setShowCreateDialog(true)}
+            className="flex items-center gap-1.5"
           >
             <Plus size={14} />
-            创建第一个工作流
-          </button>
+            创建工作流
+          </Button>
         </div>
-      )}
 
-      {/* 工作流卡片网格 */}
-      {!isLoading && workflows && workflows.length > 0 && (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          gap: 16,
-        }}>
-          {workflows.map(wf => (
-            <div
-              key={wf.id}
-              onClick={() => navigate(`/workflow/${wf.id}`)}
-              style={{
-                background: '#fdfcfc',
-                border: '1px solid rgba(15, 0, 0, 0.12)',
-                borderRadius: 4,
-                padding: '18px 20px',
-                cursor: 'pointer',
-                transition: 'border-color 0.15s ease, transform 0.1s ease',
-                position: 'relative',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.borderColor = '#646262';
-                e.currentTarget.style.transform = 'translateY(-1px)';
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.borderColor = 'rgba(15, 0, 0, 0.12)';
-                e.currentTarget.style.transform = 'translateY(0)';
-              }}
+        {/* Tab 导航 */}
+        <div
+          className="mb-4 flex gap-0"
+          style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}
+        >
+          {TABS.map(tab => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className={`
+                relative cursor-pointer px-4 py-2 text-sm font-medium transition-colors
+                ${activeTab === tab.key
+                  ? 'text-[#201d1d]'
+                  : 'text-[#646262] hover:text-[#201d1d]'
+                }
+              `}
             >
-              {/* 删除按钮 */}
-              <button
-                onClick={(e) => handleDelete(wf.id, e)}
-                title={deleteConfirm === wf.id ? '再次点击确认删除' : '删除'}
-                style={{
-                  position: 'absolute', top: 12, right: 12,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  width: 28, height: 28,
-                  background: deleteConfirm === wf.id ? '#ff3b30' : 'transparent',
-                  border: 'none', borderRadius: 4,
-                  color: deleteConfirm === wf.id ? '#fff' : '#646262',
-                  cursor: 'pointer', opacity: 0.7,
-                  transition: 'all 0.15s ease',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#ff3b30' : '#f8f7f7'; }}
-                onMouseLeave={e => { e.currentTarget.style.opacity = '0.7'; e.currentTarget.style.background = deleteConfirm === wf.id ? '#ff3b30' : 'transparent'; }}
-              >
-                <Trash2 size={14} />
-              </button>
-
-              {/* 名称 */}
-              <div style={{ color: '#201d1d', fontSize: 14, fontWeight: 600, marginBottom: 6, paddingRight: 32 }}>
-                {wf.name}
-              </div>
-
-              {/* 描述 */}
-              <div style={{
-                color: '#646262', fontSize: 12, marginBottom: 14,
-                overflow: 'hidden', textOverflow: 'ellipsis',
-                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-                minHeight: 32, lineHeight: '16px',
-              }}>
-                {wf.description || '暂无描述'}
-              </div>
-
-              {/* 底部信息 */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ color: '#646262', fontSize: 11 }}>
-                  {formatTime(wf.updated_at)}
-                </span>
-              </div>
-            </div>
+              {tab.label}
+              {activeTab === tab.key && (
+                <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#9a9898]" />
+              )}
+            </button>
           ))}
         </div>
-      )}
+
+        {/* 搜索框 */}
+        {activeTab !== 'preset' && (
+          <div className="mb-4">
+            <Input
+              placeholder="搜索工作流名称..."
+              prefix={<Search size={14} />}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="h-9 w-full max-w-[320px]"
+            />
+          </div>
+        )}
+
+        {/* 加载中 */}
+        {isLoading && (
+          <div className="py-16 text-center text-sm text-[#646262]">
+            加载中...
+          </div>
+        )}
+
+        {/* 空状态 */}
+        {!isLoading && (!workflows || workflows.length === 0) && (
+          <div className="flex flex-col items-center justify-center py-20">
+            <div className="mb-4 text-[#9a9898]">
+              <FolderOpen size={40} />
+            </div>
+            <p className="mb-2 text-sm text-[#424245]">
+              {activeTab === 'preset' && '暂无预置模板'}
+              {activeTab === 'my' && '还没有工作流'}
+              {activeTab === 'favorite' && '还没有收藏的工作流'}
+            </p>
+            {activeTab === 'my' && (
+              <Button variant="primary" size="sm" onClick={() => setShowCreateDialog(true)}>
+                创建第一个工作流
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* 表格视图 */}
+        {!isLoading && workflows && workflows.length > 0 && (
+          <div
+            className="overflow-hidden rounded-[4px]"
+            style={{ border: '1px solid rgba(15, 0, 0, 0.12)' }}
+          >
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="bg-[#f8f7f7]">
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-[#646262]" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}>
+                    名称
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-[#646262]" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}>
+                    描述
+                  </th>
+                  {activeTab === 'preset' && (
+                    <th className="px-4 py-2.5 text-left text-xs font-medium text-[#646262]" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)', width: 80 }}>
+                      节点数
+                    </th>
+                  )}
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-[#646262]" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)', width: 120 }}>
+                    更新时间
+                  </th>
+                  <th className="px-4 py-2.5 text-right text-xs font-medium text-[#646262]" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)', width: 140 }}>
+                    操作
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {workflows.map(wf => (
+                  <tr
+                    key={wf.id}
+                    className="cursor-pointer transition-colors hover:bg-[#f1eeee]"
+                    onClick={() => {
+                      if (activeTab === 'preset') {
+                        handleCreateFromTemplate(wf.id);
+                      } else {
+                        navigate(`/workflow/${wf.id}`);
+                      }
+                    }}
+                  >
+                    {/* 名称 */}
+                    <td className="px-4 py-3 text-[#201d1d] font-medium" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.08)' }}>
+                      <div className="flex items-center gap-2">
+                        {wf.is_favorite && (
+                          <Star size={12} className="fill-[#ff9f0a] text-[#ff9f0a] flex-shrink-0" />
+                        )}
+                        <span className="truncate">{wf.name}</span>
+                      </div>
+                    </td>
+                    {/* 描述 */}
+                    <td className="px-4 py-3 text-[#646262] text-xs" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.08)' }}>
+                      <div className="truncate max-w-[280px]">
+                        {wf.description || '—'}
+                      </div>
+                    </td>
+                    {/* 节点数 (preset only) */}
+                    {activeTab === 'preset' && (
+                      <td className="px-4 py-3 text-[#646262] text-xs" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.08)' }}>
+                        <Badge variant="default">
+                          {'node_count' in wf ? (wf as any).node_count ?? 0 : (wf as any).nodes?.length ?? 0}
+                        </Badge>
+                      </td>
+                    )}
+                    {/* 更新时间 */}
+                    <td className="px-4 py-3 text-[#646262] text-xs" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.08)' }}>
+                      {wf.updated_at ? formatTime(wf.updated_at) : '—'}
+                    </td>
+                    {/* 操作 */}
+                    <td className="px-4 py-3 text-right" style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.08)' }}>
+                      <div className="flex items-center justify-end gap-1">
+                        {activeTab !== 'preset' && (
+                          <>
+                            {/* 查看 */}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); navigate(`/workflow/${wf.id}`); }}
+                              className="rounded-[4px] p-1.5 text-[#646262] transition-colors hover:bg-[#f1eeee] hover:text-[#201d1d]"
+                              title="查看"
+                            >
+                              <Eye size={14} />
+                            </button>
+                            {/* 收藏 */}
+                            <button
+                              onClick={(e) => handleToggleFavorite(wf.id, e)}
+                              className={`rounded-[4px] p-1.5 transition-colors ${
+                                wf.is_favorite
+                                  ? 'text-[#ff9f0a] hover:bg-[#ff9f0a]/10'
+                                  : 'text-[#646262] hover:bg-[#f1eeee] hover:text-[#ff9f0a]'
+                              }`}
+                              title={wf.is_favorite ? '取消收藏' : '收藏'}
+                            >
+                              <Star size={14} className={wf.is_favorite ? 'fill-current' : ''} />
+                            </button>
+                            {/* 删除 */}
+                            <button
+                              onClick={(e) => handleDelete(wf.id, e)}
+                              className="rounded-[4px] p-1.5 text-[#646262] transition-colors hover:bg-[#f1eeee] hover:text-[#ff3b30]"
+                              title="删除"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        )}
+                        {activeTab === 'preset' && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={(e) => { e.stopPropagation(); handleCreateFromTemplate(wf.id); }}
+                            className="flex items-center gap-1 text-xs"
+                          >
+                            <Copy size={12} />
+                            使用
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 删除确认对话框 */}
+      <ConfirmDialog
+        open={!!deleteConfirm}
+        title="[-] 删除工作流"
+        message="确定要删除这个工作流吗？此操作不可撤销。"
+        confirmText="删除"
+        cancelText="取消"
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteConfirm(null)}
+      />
+
+      {/* 创建工作流模态框 */}
+      <Dialog
+        open={showCreateDialog}
+        onClose={() => setShowCreateDialog(false)}
+        title="[+] 创建工作流"
+        className="w-[520px]"
+      >
+        <div className="space-y-4">
+          {/* 创建空白工作流 */}
+          <div
+            className="cursor-pointer rounded-[4px] p-4 transition-colors hover:bg-[#f8f7f7]"
+            style={{ border: '1px solid rgba(15, 0, 0, 0.12)' }}
+            onClick={handleCreateNew}
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-[4px] bg-[#f1eeee]">
+                <Plus size={16} className="text-[#201d1d]" />
+              </div>
+              <div>
+                <div className="text-sm font-medium text-[#201d1d]">空白工作流</div>
+                <div className="text-xs text-[#646262]">从零开始创建一个新工作流</div>
+              </div>
+            </div>
+          </div>
+
+          {/* 分隔线 */}
+          <div className="text-xs font-medium text-[#646262]">从模板创建</div>
+
+          {/* 模板列表 */}
+          <div className="space-y-2 max-h-[320px] overflow-y-auto">
+            {templates && templates.length > 0 ? (
+              templates.map(t => (
+                <div
+                  key={t.id}
+                  className="cursor-pointer rounded-[4px] p-3 transition-colors hover:bg-[#f8f7f7]"
+                  style={{ border: '1px solid rgba(15, 0, 0, 0.12)' }}
+                  onClick={() => handleCreateFromTemplate(t.id)}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-[#201d1d]">{t.name}</div>
+                      <div className="mt-1 text-xs text-[#646262] line-clamp-2">
+                        {t.description || '暂无描述'}
+                      </div>
+                    </div>
+                    <Badge variant="default" className="ml-2 flex-shrink-0">
+                      {t.nodes?.length ?? 0} 节点
+                    </Badge>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="py-4 text-center text-xs text-[#9a9898]">
+                暂无可用模板
+              </div>
+            )}
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }

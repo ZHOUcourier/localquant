@@ -14,7 +14,7 @@
     },
     {
       "uuid": "n2",
-      "name": "FactorBuildFormulaNode",
+      "name": "FactorFormulaNode",
       "title": "信号公式",
       "positionX": 350,
       "positionY": 100,
@@ -38,36 +38,43 @@
     },
     {
       "uuid": "n4",
-      "name": "BacktestAnalysisNode",
-      "title": "绩效分析",
+      "name": "OutputNode",
+      "title": "结果输出",
       "positionX": 950,
       "positionY": 100,
       "width": 240,
       "height": 180,
-      "static_input_data": {}
+      "static_input_data": { "output_name": "backtest_result", "format": "table" }
     }
   ],
   "links": [
     {
       "uuid": "l1",
       "previous_node_uuid": "n1",
-      "output_field_name": "data",
+      "output_field_name": "kline_data",
       "next_node_uuid": "n2",
-      "input_field_name": "kline_data"
+      "input_field_name": "data"
     },
     {
       "uuid": "l2",
       "previous_node_uuid": "n2",
       "output_field_name": "factor_data",
       "next_node_uuid": "n3",
-      "input_field_name": "signal_data"
+      "input_field_name": "signals"
     },
     {
       "uuid": "l3",
+      "previous_node_uuid": "n1",
+      "output_field_name": "kline_data",
+      "next_node_uuid": "n3",
+      "input_field_name": "prices"
+    },
+    {
+      "uuid": "l4",
       "previous_node_uuid": "n3",
-      "output_field_name": "backtest_result",
+      "output_field_name": "equity_curve",
       "next_node_uuid": "n4",
-      "input_field_name": "backtest_result"
+      "input_field_name": "data"
     }
   ]
 }

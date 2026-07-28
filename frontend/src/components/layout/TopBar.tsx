@@ -1,25 +1,48 @@
+import { useEffect, useState } from 'react';
 import { useLocation, Link } from 'react-router-dom';
 
 const routeTitles: Record<string, string> = {
   '/': '工作台',
-  '/explore': '数据探索',
+  '/data': '数据中心',
   '/factor': '因子研究',
-  '/backtest': '策略回测',
   '/workflow': '工作流',
+  '/runs': '运行中心',
   '/experiments': '实验管理',
-  '/data': '数据管理',
   '/settings': '设置',
 };
 
-function getTitle(pathname: string): string {
-  if (routeTitles[pathname]) return routeTitles[pathname];
-  if (pathname.startsWith('/workflow/')) return '工作流编辑器';
-  return '';
+/** 子路由面包屑：pathname → { text, link? }[] */
+function getBreadcrumbs(pathname: string): { text: string; link?: string }[] {
+  if (routeTitles[pathname]) return [{ text: routeTitles[pathname] }];
+  if (pathname.startsWith('/workflow/')) return [
+    { text: '工作流', link: '/workflow' },
+    { text: '编辑器' },
+  ];
+  return [{ text: '' }];
+}
+
+/** 右上角实时时钟 */
+function Clock() {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const date = now.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', weekday: 'short' });
+  const time = now.toLocaleTimeString('zh-CN', { hour12: false });
+
+  return (
+    <span className="font-mono text-[12px] text-[#646262]" style={{ fontVariantNumeric: 'tabular-nums' }}>
+      {date} {time}
+    </span>
+  );
 }
 
 export default function TopBar() {
   const location = useLocation();
-  const title = getTitle(location.pathname);
+  const crumbs = getBreadcrumbs(location.pathname);
 
   return (
     <div
@@ -30,28 +53,43 @@ export default function TopBar() {
         borderBottom: '1px solid rgba(15, 0, 0, 0.12)',
       }}
     >
-      <div className="flex items-center gap-2">
-        {location.pathname !== '/' && (
-          <span className="text-[#646262] text-[13px]">
-            <Link to="/" className="text-[#646262] no-underline hover:text-[#201d1d]">
-              工作台
-            </Link>
-            <span className="mx-1">/</span>
-          </span>
-        )}
-        <span className="text-[13px] text-[#201d1d]">{title}</span>
+      <div className="flex items-center gap-1">
+        {crumbs.map((crumb, i) => {
+          const isLast = i === crumbs.length - 1;
+          if (isLast || !crumb.link) {
+            return (
+              <span key={i} className="text-[13px] text-[#201d1d]">
+                {crumb.text}
+              </span>
+            );
+          }
+          return (
+            <span key={i} className="flex items-center gap-1">
+              <Link
+                to={crumb.link}
+                className="text-[13px] text-[#646262] no-underline hover:text-[#201d1d]"
+              >
+                {crumb.text}
+              </Link>
+              <span className="text-[13px] text-[#9a9898]">/</span>
+            </span>
+          );
+        })}
       </div>
 
-      <div className="flex items-center gap-1.5">
-        <span
-          className="inline-block rounded-full"
-          style={{
-            width: 8,
-            height: 8,
-            background: '#6e6e73',
-          }}
-        />
-        <span className="text-[12px] text-[#646262]">QMT 未连接</span>
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1.5">
+          <span
+            className="inline-block rounded-full"
+            style={{
+              width: 8,
+              height: 8,
+              background: '#6e6e73',
+            }}
+          />
+          <span className="text-[12px] text-[#646262]">QMT 未连接</span>
+        </div>
+        <Clock />
       </div>
     </div>
   );

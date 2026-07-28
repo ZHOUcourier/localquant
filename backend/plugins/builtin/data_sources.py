@@ -1,20 +1,24 @@
 # QMT 数据获取节点
-from pydantic import BaseModel, Field
 from typing import Optional
+
 import pandas as pd
+from pydantic import BaseModel, Field
 
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
 from backend.plugins.ui_control import ui
 
-
 # ============================================================
 # 1. QMT K线数据节点
 # ============================================================
 
+
 @ui(
     code_list={"input_type": "text_field", "placeholder": "000001.SZ,600000.SH"},
-    period={"input_type": "combobox", "options": ["1d", "1w", "1mon", "1m", "5m", "15m", "30m", "1h"]},
+    period={
+        "input_type": "combobox",
+        "options": ["1d", "1w", "1mon", "1m", "5m", "15m", "30m", "1h"],
+    },
     start_date={"input_type": "date_picker"},
     end_date={"input_type": "date_picker"},
     dividend_type={"input_type": "combobox", "options": ["front", "back", "none"]},
@@ -34,7 +38,12 @@ class QMTKlineOutput(BaseModel):
         arbitrary_types_allowed = True
 
 
-@work_node(name="QMT行情数据", group="01-数据获取", box_color="orange")
+@work_node(
+    name="QMT行情数据",
+    group="01-数据获取",
+    box_color="orange",
+    description="获取QMT行情K线数据，支持日K/分钟K等多种周期",
+)
 class QMTKlineNode(BaseWorkNode):
     @classmethod
     def input_model(cls):
@@ -52,7 +61,10 @@ class QMTKlineNode(BaseWorkNode):
             return QMTKlineOutput(kline_data={})
 
         data = qmt_client.get_kline(
-            codes, input.period, input.start_date, input.end_date,
+            codes,
+            input.period,
+            input.start_date,
+            input.end_date,
             dividend_type=input.dividend_type,
         )
         result = {}
@@ -65,12 +77,21 @@ class QMTKlineNode(BaseWorkNode):
 # 2. QMT 财务数据节点
 # ============================================================
 
+
 @ui(
     code_list={"input_type": "text_field", "placeholder": "000001.SZ,600000.SH"},
-    tables={"input_type": "combobox", "options": [
-        "Balance", "Income", "CashFlow", "Top10Holders",
-        "Capital", "PerShare", "Valuation",
-    ]},
+    tables={
+        "input_type": "combobox",
+        "options": [
+            "Balance",
+            "Income",
+            "CashFlow",
+            "Top10Holders",
+            "Capital",
+            "PerShare",
+            "Valuation",
+        ],
+    },
     start_date={"input_type": "date_picker"},
     end_date={"input_type": "date_picker"},
 )
@@ -88,7 +109,12 @@ class QMTFinancialOutput(BaseModel):
         arbitrary_types_allowed = True
 
 
-@work_node(name="QMT财务数据", group="01-数据获取", box_color="orange")
+@work_node(
+    name="QMT财务数据",
+    group="01-数据获取",
+    box_color="orange",
+    description="获取QMT财务报表数据，包括资产负债表、利润表、现金流量表",
+)
 class QMTFinancialNode(BaseWorkNode):
     @classmethod
     def input_model(cls):
@@ -107,8 +133,10 @@ class QMTFinancialNode(BaseWorkNode):
             return QMTFinancialOutput(financial_data={})
 
         raw = qmt_client.get_financial(
-            codes, tables=tables,
-            start_time=input.start_date, end_time=input.end_date,
+            codes,
+            tables=tables,
+            start_time=input.start_date,
+            end_time=input.end_date,
         )
         # 将 DataFrame 值转为 dict 以便序列化
         result = {}
@@ -124,8 +152,12 @@ class QMTFinancialNode(BaseWorkNode):
 # 3. QMT 板块数据节点
 # ============================================================
 
+
 @ui(
-    sector_name={"input_type": "text_field", "placeholder": "留空获取板块列表，填写板块名获取成分股"},
+    sector_name={
+        "input_type": "text_field",
+        "placeholder": "留空获取板块列表，填写板块名获取成分股",
+    },
 )
 class QMTSectorInput(BaseModel):
     sector_name: str = Field(default="", title="板块名称(留空=板块列表)")
@@ -136,7 +168,12 @@ class QMTSectorOutput(BaseModel):
     mode: str = Field(default="", title="返回模式")
 
 
-@work_node(name="QMT板块数据", group="01-数据获取", box_color="orange")
+@work_node(
+    name="QMT板块数据",
+    group="01-数据获取",
+    box_color="orange",
+    description="获取QMT板块分类及成分股数据",
+)
 class QMTSectorNode(BaseWorkNode):
     @classmethod
     def input_model(cls):
@@ -161,6 +198,7 @@ class QMTSectorNode(BaseWorkNode):
 # 4. 交易日历节点
 # ============================================================
 
+
 @ui(
     market={"input_type": "combobox", "options": ["SH", "SZ"]},
     start_date={"input_type": "date_picker"},
@@ -176,7 +214,12 @@ class TradingCalendarOutput(BaseModel):
     trading_dates: list = Field(default_factory=list, title="交易日列表")
 
 
-@work_node(name="交易日历", group="01-数据获取", box_color="orange")
+@work_node(
+    name="交易日历",
+    group="01-数据获取",
+    box_color="orange",
+    description="获取A股交易日历，支持判断交易日与非交易日",
+)
 class TradingCalendarNode(BaseWorkNode):
     @classmethod
     def input_model(cls):
@@ -201,8 +244,12 @@ class TradingCalendarNode(BaseWorkNode):
 # 5. 股票列表节点
 # ============================================================
 
+
 @ui(
-    sector={"input_type": "text_field", "placeholder": "留空获取全市场，填写板块名获取板块成分股"},
+    sector={
+        "input_type": "text_field",
+        "placeholder": "留空获取全市场，填写板块名获取板块成分股",
+    },
 )
 class StockListInput(BaseModel):
     sector: str = Field(default="", title="板块名称(可选)")
@@ -213,7 +260,12 @@ class StockListOutput(BaseModel):
     count: int = Field(default=0, title="数量")
 
 
-@work_node(name="股票列表", group="01-数据获取", box_color="orange")
+@work_node(
+    name="股票列表",
+    group="01-数据获取",
+    box_color="orange",
+    description="获取A股全部股票列表，返回股票代码与名称",
+)
 class StockListNode(BaseWorkNode):
     @classmethod
     def input_model(cls):

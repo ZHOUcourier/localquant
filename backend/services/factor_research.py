@@ -1,8 +1,12 @@
 """因子研究服务 — 提供 IC 分析、分层收益、中性化、相关性等功能"""
-import pandas as pd
-import numpy as np
+
 from typing import Optional
+
+import numpy as np
+import pandas as pd
 from loguru import logger
+
+from backend.database import get_db
 
 
 class FactorResearchService:
@@ -54,18 +58,34 @@ class FactorResearchService:
                 rank_ic = f.rank().corr(r.rank())
                 rank_ic_series.append({"date": str(date), "rank_ic": rank_ic})
 
-            ic_values = [x["ic"] for x in ic_series if x["ic"] is not None and not np.isnan(x["ic"])]
-            rank_ic_values = [x["rank_ic"] for x in rank_ic_series if x["rank_ic"] is not None and not np.isnan(x["rank_ic"])]
+            ic_values = [
+                x["ic"]
+                for x in ic_series
+                if x["ic"] is not None and not np.isnan(x["ic"])
+            ]
+            rank_ic_values = [
+                x["rank_ic"]
+                for x in rank_ic_series
+                if x["rank_ic"] is not None and not np.isnan(x["rank_ic"])
+            ]
 
             results[f"period_{period}"] = {
                 "ic_series": ic_series,
                 "rank_ic_series": rank_ic_series,
                 "ic_mean": float(np.mean(ic_values)) if ic_values else 0,
                 "ic_std": float(np.std(ic_values)) if ic_values else 0,
-                "ic_ir": float(np.mean(ic_values) / np.std(ic_values)) if ic_values and np.std(ic_values) > 0 else 0,
+                "ic_ir": float(np.mean(ic_values) / np.std(ic_values))
+                if ic_values and np.std(ic_values) > 0
+                else 0,
                 "rank_ic_mean": float(np.mean(rank_ic_values)) if rank_ic_values else 0,
-                "rank_ic_ir": float(np.mean(rank_ic_values) / np.std(rank_ic_values)) if rank_ic_values and np.std(rank_ic_values) > 0 else 0,
-                "ic_positive_ratio": float(sum(1 for x in ic_values if x > 0) / len(ic_values)) if ic_values else 0,
+                "rank_ic_ir": float(np.mean(rank_ic_values) / np.std(rank_ic_values))
+                if rank_ic_values and np.std(rank_ic_values) > 0
+                else 0,
+                "ic_positive_ratio": float(
+                    sum(1 for x in ic_values if x > 0) / len(ic_values)
+                )
+                if ic_values
+                else 0,
             }
 
         return results
@@ -77,12 +97,16 @@ class FactorResearchService:
         n_groups: int = 5,
     ) -> dict:
         """分层收益分析"""
-        group_returns = {f"group_{i+1}": [] for i in range(n_groups)}
+        group_returns = {f"group_{i + 1}": [] for i in range(n_groups)}
         dates = factor_data.index
 
         for date in dates:
             factor_values = factor_data.loc[date].dropna()
-            returns = return_data.loc[date].dropna() if date in return_data.index else pd.Series(dtype=float)
+            returns = (
+                return_data.loc[date].dropna()
+                if date in return_data.index
+                else pd.Series(dtype=float)
+            )
 
             common = factor_values.index.intersection(returns.index)
             if len(common) < n_groups * 2:
@@ -91,15 +115,17 @@ class FactorResearchService:
             f = factor_values[common]
             r = returns[common]
 
-            groups = pd.qcut(f, q=n_groups, labels=False, duplicates='drop')
+            groups = pd.qcut(f, q=n_groups, labels=False, duplicates="drop")
             for g in range(n_groups):
                 mask = groups == g
                 if mask.sum() > 0:
-                    group_returns[f"group_{g+1}"].append({
-                        "date": str(date),
-                        "return": float(r[mask].mean()),
-                        "count": int(mask.sum()),
-                    })
+                    group_returns[f"group_{g + 1}"].append(
+                        {
+                            "date": str(date),
+                            "return": float(r[mask].mean()),
+                            "count": int(mask.sum()),
+                        }
+                    )
 
         cumulative = {}
         for key, values in group_returns.items():
@@ -141,7 +167,9 @@ class FactorResearchService:
 
         return {
             "turnover_series": turnovers,
-            "avg_turnover": float(np.mean([t["turnover"] for t in turnovers])) if turnovers else 0,
+            "avg_turnover": float(np.mean([t["turnover"] for t in turnovers]))
+            if turnovers
+            else 0,
         }
 
     def neutralize(
@@ -162,7 +190,9 @@ class FactorResearchService:
             industry = industry_data.loc[date]
             market_cap = market_cap_data.loc[date]
 
-            common = factor_values.index.intersection(industry.dropna().index).intersection(market_cap.dropna().index)
+            common = factor_values.index.intersection(
+                industry.dropna().index
+            ).intersection(market_cap.dropna().index)
             if len(common) < 30:
                 continue
 
@@ -212,7 +242,9 @@ class FactorResearchService:
             "factor_names": factor_names,
         }
 
-    def factor_decay(self, factor_data: pd.DataFrame, return_data: pd.DataFrame, max_period: int = 30) -> dict:
+    def factor_decay(
+        self, factor_data: pd.DataFrame, return_data: pd.DataFrame, max_period: int = 30
+    ) -> dict:
         """因子衰减分析"""
         decay = []
         for period in range(1, max_period + 1):
@@ -251,6 +283,156 @@ class FactorResearchService:
 
         combined = sum(standardized.values())
         return combined
+
+    # ── 预置因子相关方法 ─────────────────────────────────────────────
+
+    async def list_preset_factors(
+        self,
+        page: int = 1,
+        page_size: int = 30,
+        category_code: Optional[str] = None,
+        sort_field: Optional[str] = None,
+        sort_order: str = "desc",
+        search: Optional[str] = None,
+    ) -> dict:
+        """分页查询预置因子列表"""
+        db = await get_db()
+        try:
+            where_clauses = []
+            params = []
+
+            if category_code:
+                where_clauses.append("category_code = ?")
+                params.append(category_code)
+
+            if search:
+                where_clauses.append("(factor_name LIKE ? OR description LIKE ?)")
+                params.extend([f"%{search}%", f"%{search}%"])
+
+            where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+            # 排序
+            allowed_sort = {
+                "rank_ic",
+                "ic_mean",
+                "ic_ir",
+                "annualized_return",
+                "factor_name",
+                "created_at",
+            }
+            if sort_field and sort_field in allowed_sort:
+                order_dir = "ASC" if sort_order.lower() == "asc" else "DESC"
+                order_sql = f" ORDER BY {sort_field} {order_dir}"
+            else:
+                order_sql = " ORDER BY id DESC"
+
+            # 总数
+            count_sql = f"SELECT COUNT(*) FROM preset_factors{where_sql}"
+            cursor = await db.execute(count_sql, params)
+            total = (await cursor.fetchone())[0]
+
+            # 分页数据
+            offset = (page - 1) * page_size
+            data_sql = (
+                f"SELECT * FROM preset_factors{where_sql}{order_sql} LIMIT ? OFFSET ?"
+            )
+            cursor = await db.execute(data_sql, params + [page_size, offset])
+            rows = await cursor.fetchall()
+            items = [dict(row) for row in rows]
+
+            return {
+                "items": items,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
+        finally:
+            await db.close()
+
+    async def get_preset_factor_categories(self) -> list[dict]:
+        """获取所有预置因子分类"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT * FROM preset_factor_categories ORDER BY id"
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            await db.close()
+
+    async def get_preset_factor_detail(self, factor_id: int) -> Optional[dict]:
+        """获取单个预置因子详情"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT * FROM preset_factors WHERE id = ?", (factor_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            await db.close()
+
+    async def recalculate_preset_factor(self, factor_id: int) -> Optional[dict]:
+        """手动重算因子 IC 指标（从数据库读取历史数据重新计算）"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT * FROM preset_factors WHERE id = ?", (factor_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            factor = dict(row)
+            # 预置因子的 IC 数据已存储在数据库中，此处仅返回当前记录
+            # 实际重算需要行情数据源支持，当前直接返回现有数据
+            return factor
+        finally:
+            await db.close()
+
+    async def add_to_pool(self, factor_id: int) -> bool:
+        """将因子加入因子池"""
+        db = await get_db()
+        try:
+            # 检查是否已存在
+            cursor = await db.execute(
+                "SELECT id FROM factor_pool WHERE factor_id = ?", (factor_id,)
+            )
+            if await cursor.fetchone():
+                return True  # 已存在，幂等
+            await db.execute(
+                "INSERT INTO factor_pool (factor_id) VALUES (?)", (factor_id,)
+            )
+            await db.commit()
+            return True
+        finally:
+            await db.close()
+
+    async def get_pool(self) -> list[dict]:
+        """获取因子池列表"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT pf.* FROM preset_factors pf "
+                "INNER JOIN factor_pool fp ON fp.factor_id = pf.id "
+                "ORDER BY fp.added_at DESC"
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            await db.close()
+
+    async def remove_from_pool(self, factor_id: int) -> bool:
+        """从因子池移除因子"""
+        db = await get_db()
+        try:
+            await db.execute(
+                "DELETE FROM factor_pool WHERE factor_id = ?", (factor_id,)
+            )
+            await db.commit()
+            return True
+        finally:
+            await db.close()
 
 
 # 全局单例

@@ -1,23 +1,29 @@
 """因子构建节点 — 公式/代码构建因子、标准化、中性化"""
-import pandas as pd
-import numpy as np
-from pydantic import BaseModel, ConfigDict
+
 from typing import Optional, Type
+
+import numpy as np
+import pandas as pd
+from pydantic import BaseModel, ConfigDict
 
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
 from backend.plugins.ui_control import ui
 
-
 # ────────────────────────── 1. 因子构建（公式） ──────────────────────────
+
 
 @ui(
     stock_pool={"input_type": "stock_picker"},
     start_date={"input_type": "date_picker"},
     end_date={"input_type": "date_picker"},
     formula={"input_type": "code_editor", "language": "python"},
+    data={"input_type": "None"},
 )
 class FactorFormulaInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # 上游行情/特征数据，run 中作为公式求值上下文
+    data: Optional[pd.DataFrame] = None
     stock_pool: list[str] = []
     start_date: str = "20200101"
     end_date: str = "20231231"
@@ -30,7 +36,12 @@ class FactorFormulaOutput(BaseModel):
     factor_data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="因子构建（公式）", group="04-因子构建", box_color="#4CAF50")
+@work_node(
+    name="因子构建（公式）",
+    group="04-因子构建",
+    box_color="#4CAF50",
+    description="通过公式表达式构建因子，自动生成截面因子值",
+)
 class FactorFormulaNode(BaseWorkNode):
     """通过公式表达式构建因子"""
 
@@ -89,14 +100,24 @@ class FactorFormulaNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 2. 因子构建（代码） ──────────────────────────
 
-@ui(code={"input_type": "code_editor", "language": "python"})
+
+@ui(
+    code={"input_type": "code_editor", "language": "python"},
+    data={"input_type": "None"},
+)
 class FactorCodeInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # 上游行情/特征数据，run 中以 df 变量暴露给代码
+    data: Optional[pd.DataFrame] = None
     code: str = "# 请编写因子计算代码\n# 可用变量: df (DataFrame), np, pd\n# 返回: factor_data (DataFrame)\nfactor_data = df.copy()\n"
     factor_name: str = "factor"
 
@@ -106,7 +127,12 @@ class FactorCodeOutput(BaseModel):
     factor_data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="因子构建（代码）", group="04-因子构建", box_color="#4CAF50")
+@work_node(
+    name="因子构建（代码）",
+    group="04-因子构建",
+    box_color="#4CAF50",
+    description="通过自定义Python代码构建复杂因子逻辑",
+)
 class FactorCodeNode(BaseWorkNode):
     """通过 Python 代码构建因子"""
 
@@ -137,13 +163,33 @@ class FactorCodeNode(BaseWorkNode):
         }
 
         try:
-            exec(code, {"__builtins__": {"print": print, "range": range, "len": len,
-                                          "list": list, "dict": dict, "set": set,
-                                          "tuple": tuple, "int": int, "float": float,
-                                          "str": str, "bool": bool, "abs": abs,
-                                          "min": min, "max": max, "sum": sum,
-                                          "enumerate": enumerate, "zip": zip,
-                                          "map": map, "filter": filter}}, exec_ctx)  # noqa: S102
+            exec(
+                code,
+                {
+                    "__builtins__": {
+                        "print": print,
+                        "range": range,
+                        "len": len,
+                        "list": list,
+                        "dict": dict,
+                        "set": set,
+                        "tuple": tuple,
+                        "int": int,
+                        "float": float,
+                        "str": str,
+                        "bool": bool,
+                        "abs": abs,
+                        "min": min,
+                        "max": max,
+                        "sum": sum,
+                        "enumerate": enumerate,
+                        "zip": zip,
+                        "map": map,
+                        "filter": filter,
+                    }
+                },
+                exec_ctx,
+            )  # noqa: S102
             factor_data = exec_ctx.get("factor_data")
             if isinstance(factor_data, pd.DataFrame):
                 return {"factor_data": factor_data}
@@ -157,11 +203,15 @@ class FactorCodeNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 3. 因子标准化 ──────────────────────────
+
 
 @ui(method={"input_type": "combobox", "options": ["zscore", "minmax", "rank"]})
 class FactorStandardizeInput(BaseModel):
@@ -176,7 +226,12 @@ class FactorStandardizeOutput(BaseModel):
     factor_data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="因子标准化", group="04-因子构建", box_color="#4CAF50")
+@work_node(
+    name="因子标准化",
+    group="04-因子构建",
+    box_color="#4CAF50",
+    description="对因子值进行Z-Score等标准化处理，消除量纲差异",
+)
 class FactorStandardizeNode(BaseWorkNode):
     """因子标准化（Z-Score / MinMax / Rank）"""
 
@@ -220,11 +275,15 @@ class FactorStandardizeNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 4. 因子中性化 ──────────────────────────
+
 
 class FactorNeutralizeInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -239,7 +298,12 @@ class FactorNeutralizeOutput(BaseModel):
     factor_data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="因子中性化", group="04-因子构建", box_color="#4CAF50")
+@work_node(
+    name="因子中性化",
+    group="04-因子构建",
+    box_color="#4CAF50",
+    description="对因子做行业/市值中性化回归，剥离风格暴露",
+)
 class FactorNeutralizeNode(BaseWorkNode):
     """因子中性化（回归残差法）"""
 
@@ -272,21 +336,29 @@ class FactorNeutralizeNode(BaseWorkNode):
         # 行业哑变量
         if industry_data is not None and not industry_data.empty:
             # 取第一个数值列作为行业编码
-            ind_col = industry_data.columns[0] if len(industry_data.columns) > 0 else None
+            ind_col = (
+                industry_data.columns[0] if len(industry_data.columns) > 0 else None
+            )
             if ind_col:
-                dummies = pd.get_dummies(industry_data[ind_col], prefix="ind", drop_first=True)
+                dummies = pd.get_dummies(
+                    industry_data[ind_col], prefix="ind", drop_first=True
+                )
                 dummies.index = result.index if len(dummies) == len(result) else None
                 X_parts.append(dummies.astype(float))
 
         # 市值变量
         if market_cap_data is not None and not market_cap_data.empty:
-            cap_col = market_cap_data.columns[0] if len(market_cap_data.columns) > 0 else None
+            cap_col = (
+                market_cap_data.columns[0] if len(market_cap_data.columns) > 0 else None
+            )
             if cap_col:
                 cap_series = market_cap_data[cap_col].astype(float)
                 if len(cap_series) == len(result):
-                    X_parts.append(cap_series.to_frame("log_cap").assign(
-                        log_cap=lambda x: np.log(x["log_cap"].clip(lower=1))
-                    ))
+                    X_parts.append(
+                        cap_series.to_frame("log_cap").assign(
+                            log_cap=lambda x: np.log(x["log_cap"].clip(lower=1))
+                        )
+                    )
 
         if not X_parts:
             # 无行业/市值数据，仅去均值
@@ -317,5 +389,8 @@ class FactorNeutralizeNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__

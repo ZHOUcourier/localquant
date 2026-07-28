@@ -1,15 +1,17 @@
 """因子分析节点 — IC / 分组收益 / 相关性 / 衰减 / 多因子合成"""
-import pandas as pd
-import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+
 from typing import Optional, Type
+
+import numpy as np
+import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
 from backend.plugins.ui_control import ui
 
-
 # ────────────────────────── 1. IC 计算 ──────────────────────────
+
 
 @ui(
     periods={"input_type": "text_field"},
@@ -29,7 +31,12 @@ class ICOutput(BaseModel):
     ic_result: Optional[pd.DataFrame] = None
 
 
-@work_node(name="IC 计算", group="05-因子分析", box_color="#FF9800")
+@work_node(
+    name="IC 计算",
+    group="05-因子分析",
+    box_color="#FF9800",
+    description="计算因子IC/RankIC，评估因子预测能力",
+)
 class ICNode(BaseWorkNode):
     """计算因子 IC / Rank IC 序列"""
 
@@ -62,7 +69,11 @@ class ICNode(BaseWorkNode):
             if len(common_idx) == 0:
                 continue
 
-            f = factor_data.loc[common_idx, factor_col].astype(float) if factor_col in factor_data.columns else pd.Series(dtype=float)
+            f = (
+                factor_data.loc[common_idx, factor_col].astype(float)
+                if factor_col in factor_data.columns
+                else pd.Series(dtype=float)
+            )
             # 取第 period 列作为远期收益
             ret_cols = [c for c in return_data.columns if str(period) in c]
             if ret_cols:
@@ -85,11 +96,15 @@ class ICNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 2. 分组收益 ──────────────────────────
+
 
 @ui(n_groups={"input_type": "number_field"})
 class GroupReturnInput(BaseModel):
@@ -105,7 +120,12 @@ class GroupReturnOutput(BaseModel):
     group_return: Optional[pd.DataFrame] = None
 
 
-@work_node(name="分组收益", group="05-因子分析", box_color="#FF9800")
+@work_node(
+    name="分组收益",
+    group="05-因子分析",
+    box_color="#FF9800",
+    description="按因子值分组计算各组收益率，分析因子单调性",
+)
 class GroupReturnNode(BaseWorkNode):
     """按因子值分组计算分层收益"""
 
@@ -141,7 +161,12 @@ class GroupReturnNode(BaseWorkNode):
 
         # 分组
         try:
-            groups = pd.qcut(f, q=n_groups, labels=[f"G{i+1}" for i in range(n_groups)], duplicates="drop")
+            groups = pd.qcut(
+                f,
+                q=n_groups,
+                labels=[f"G{i + 1}" for i in range(n_groups)],
+                duplicates="drop",
+            )
         except Exception:
             return {"group_return": pd.DataFrame()}
 
@@ -153,11 +178,15 @@ class GroupReturnNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 3. 因子相关性 ──────────────────────────
+
 
 class FactorCorrelationInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -170,7 +199,12 @@ class FactorCorrelationOutput(BaseModel):
     correlation_matrix: Optional[pd.DataFrame] = None
 
 
-@work_node(name="因子相关性", group="05-因子分析", box_color="#FF9800")
+@work_node(
+    name="因子相关性",
+    group="05-因子分析",
+    box_color="#FF9800",
+    description="计算多因子间的相关性矩阵，辅助因子筛选",
+)
 class FactorCorrelationNode(BaseWorkNode):
     """计算多因子之间的相关性矩阵"""
 
@@ -196,11 +230,15 @@ class FactorCorrelationNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 4. 因子衰减 ──────────────────────────
+
 
 @ui(max_period={"input_type": "number_field"})
 class FactorDecayInput(BaseModel):
@@ -216,7 +254,12 @@ class FactorDecayOutput(BaseModel):
     decay_result: Optional[pd.DataFrame] = None
 
 
-@work_node(name="因子衰减", group="05-因子分析", box_color="#FF9800")
+@work_node(
+    name="因子衰减",
+    group="05-因子分析",
+    box_color="#FF9800",
+    description="分析因子IC随时间衰减速率，确定调仓周期",
+)
 class FactorDecayNode(BaseWorkNode):
     """计算因子 IC 随持有期的衰减序列"""
 
@@ -267,14 +310,21 @@ class FactorDecayNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 5. 多因子合成 ──────────────────────────
 
+
 @ui(
-    method={"input_type": "combobox", "options": ["weighted_sum", "equal_weight", "ic_weighted"]},
+    method={
+        "input_type": "combobox",
+        "options": ["weighted_sum", "equal_weight", "ic_weighted"],
+    },
 )
 class FactorCombineInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -289,7 +339,12 @@ class FactorCombineOutput(BaseModel):
     combined_factor: Optional[pd.DataFrame] = None
 
 
-@work_node(name="多因子合成", group="05-因子分析", box_color="#FF9800")
+@work_node(
+    name="多因子合成",
+    group="05-因子分析",
+    box_color="#FF9800",
+    description="将多个因子按权重合成为综合因子",
+)
 class FactorCombineNode(BaseWorkNode):
     """多因子合成（加权求和 / 等权 / IC 加权）"""
 
@@ -333,5 +388,8 @@ class FactorCombineNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__

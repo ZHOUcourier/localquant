@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend install install-backend install-frontend clean
+.PHONY: dev dev-backend dev-frontend install install-backend install-frontend install-ml clean
 
 # 安装所有依赖
 install: install-backend install-frontend

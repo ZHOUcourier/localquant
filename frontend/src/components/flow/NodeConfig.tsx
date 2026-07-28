@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Editor from '@monaco-editor/react';
 import { usePlugins, type PluginNodeSchema, type SchemaProperty } from '../../hooks/usePlugins';
 import { useFlowStore } from '../../store/flowStore';
 
@@ -262,6 +263,40 @@ export function NodeConfig() {
     [selectedNodeId, widgets, updateNodeData]
   );
 
+  // Tab 切换状态
+  const [activeTab, setActiveTab] = useState<'params' | 'source'>('params');
+  const [sourceCode, setSourceCode] = useState<string>('');
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+
+  // 获取节点源码
+  useEffect(() => {
+    if (activeTab !== 'source' || !nodeType) {
+      return;
+    }
+    let cancelled = false;
+    setSourceLoading(true);
+    setSourceError(null);
+    fetch(`/api/plugins/${nodeType}/source`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled) {
+          setSourceCode(data.source || '');
+          setSourceLoading(false);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setSourceError(e instanceof Error ? e.message : String(e));
+          setSourceLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [activeTab, nodeType]);
+
   const handleClose = useCallback(() => {
     selectNode(null);
   }, [selectNode]);
@@ -350,22 +385,124 @@ export function NodeConfig() {
         </button>
       </div>
 
-      {/* 中间：参数表单 */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
-        {Object.keys(properties).length === 0 ? (
-          <div style={{ color: '#646262', fontSize: 12 }}>该节点无可配置参数</div>
-        ) : (
-          Object.entries(properties).map(([key, prop]) => (
-            <ParamField
-              key={key}
-              fieldKey={key}
-              prop={prop}
-              value={widgetMap[key]}
-              onChange={handleChange}
-            />
-          ))
-        )}
+      {/* Tab 切换栏 */}
+      <div
+        style={{
+          display: 'flex',
+          borderBottom: '1px solid rgba(15,0,0,0.12)',
+          flexShrink: 0,
+        }}
+      >
+        {([
+          { key: 'params' as const, label: '参数配置' },
+          { key: 'source' as const, label: '节点代码' },
+        ]).map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              borderBottom: activeTab === tab.key ? '2px solid #9a9898' : '2px solid transparent',
+              color: activeTab === tab.key ? '#201d1d' : '#646262',
+              fontWeight: 500,
+              fontSize: 12,
+              fontFamily: "var(--font-mono, monospace)",
+              padding: '8px 14px',
+              cursor: 'pointer',
+              lineHeight: 1.5,
+              transition: 'color 0.15s',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
+
+      {/* 中间：参数表单 或 源码 */}
+      {activeTab === 'params' ? (
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
+          {Object.keys(properties).length === 0 ? (
+            <div style={{ color: '#646262', fontSize: 12 }}>该节点无可配置参数</div>
+          ) : (
+            Object.entries(properties).map(([key, prop]) => (
+              <ParamField
+                key={key}
+                fieldKey={key}
+                prop={prop}
+                value={widgetMap[key]}
+                onChange={handleChange}
+              />
+            ))
+          )}
+        </div>
+      ) : (
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {sourceLoading && (
+            <div style={{ color: '#646262', fontSize: 12, padding: '12px 14px' }}>加载中...</div>
+          )}
+          {sourceError && (
+            <div style={{
+              color: '#ff3b30',
+              fontSize: 12,
+              padding: '12px 14px',
+              fontFamily: "var(--font-mono, monospace)",
+            }}>
+              加载失败: {sourceError}
+            </div>
+          )}
+          {!sourceLoading && !sourceError && (
+            <div style={{ flex: 1, borderTop: '1px solid rgba(15,0,0,0.12)' }}>
+              <Editor
+                height="100%"
+                language="python"
+                theme="light"
+                value={sourceCode}
+                options={{
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  fontSize: 12,
+                  lineNumbers: 'on',
+                  scrollBeyondLastLine: false,
+                  automaticLayout: true,
+                  tabSize: 4,
+                  wordWrap: 'on',
+                  padding: { top: 8 },
+                  renderValidationDecorations: 'on',
+                }}
+                onMount={(editor, monaco) => {
+                  // Monaco 对 Python 提供语法高亮，
+                  // 通过 setModelMarkers API 可展示行内错误标记
+                  const model = editor.getModel();
+                  if (model) {
+                    // 尝试基本语法检查：检测缩进问题
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const markers: any[] = [];
+                    const lines = model.getLinesContent();
+                    for (let i = 0; i < lines.length; i++) {
+                      const line = lines[i];
+                      // 检测 Tab 和空格混用
+                      if (/^\t+ /.test(line) || /^ +\t/.test(line)) {
+                        markers.push({
+                          severity: monaco.MarkerSeverity.Error,
+                          message: 'Tab 和空格缩进混用',
+                          startLineNumber: i + 1,
+                          startColumn: 1,
+                          endLineNumber: i + 1,
+                          endColumn: line.length + 1,
+                        });
+                      }
+                    }
+                    if (markers.length > 0) {
+                      monaco.editor.setModelMarkers(model, 'python', markers);
+                    }
+                  }
+                }}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 底部：节点描述 */}
       <div

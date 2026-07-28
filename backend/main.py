@@ -55,6 +55,9 @@ from backend.routes import (
     plugins,
     workflow,
 )
+from backend.routes import (
+    settings as settings_routes,
+)
 
 app.include_router(workflow.router, prefix="/api/workflow", tags=["workflow"])
 app.include_router(plugins.router, prefix="/api/plugins", tags=["plugins"])
@@ -63,6 +66,7 @@ app.include_router(explorer.router, prefix="/api/explorer", tags=["explorer"])
 app.include_router(factor.router, prefix="/api/factor", tags=["factor"])
 app.include_router(backtest.router, prefix="/api/backtest", tags=["backtest"])
 app.include_router(experiment.router, prefix="/api/experiment", tags=["experiment"])
+app.include_router(settings_routes.router, prefix="/api/config", tags=["config"])
 
 
 @app.get("/", include_in_schema=False)

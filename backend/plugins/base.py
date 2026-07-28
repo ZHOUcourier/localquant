@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional, Type
+
 from pydantic import BaseModel
 
 
@@ -7,11 +8,12 @@ class BaseWorkNode(ABC):
     """工作流节点抽象基类 — 复刻 panda_quantflow 的 BaseWorkNode"""
 
     # 类属性（由 @work_node 装饰器设置）
-    __work_node_name__: str = ""           # 类名，内部标识
-    __work_node_display_name__: str = ""   # 显示名称
-    __work_node_group__: str = ""          # 分组（如 "01-数据获取"）
-    __work_node_type__: str = "general"    # 节点类型
-    __work_node_box_color__: str = "black" # 节点颜色标识
+    __work_node_name__: str = ""  # 类名，内部标识
+    __work_node_display_name__: str = ""  # 显示名称
+    __work_node_group__: str = ""  # 分组（如 "01-数据获取"）
+    __work_node_type__: str = "general"  # 节点类型
+    __work_node_box_color__: str = "black"  # 节点颜色标识
+    __work_node_description__: str = ""  # 节点描述
 
     @classmethod
     @abstractmethod
@@ -38,7 +40,8 @@ class BaseWorkNode(ABC):
             "name": self.__work_node_name__,
             "display_name": self.__work_node_display_name__,
             "group": self.__work_node_group__,
-            "type": self.__work_node_type__,
+            "type_name": self.__work_node_type__,
+            "description": self.__work_node_description__,
             "box_color": self.__work_node_box_color__,
             "input_schema": _safe_json_schema(input_cls) if input_cls else None,
             "output_schema": _safe_json_schema(output_cls) if output_cls else None,
@@ -56,11 +59,22 @@ def _safe_json_schema(model_cls: type) -> dict:
             try:
                 field_schema = field.annotation
                 # 对基本类型做简单映射
-                type_map = {str: "string", int: "integer", float: "number", bool: "boolean"}
+                type_map = {
+                    str: "string",
+                    int: "integer",
+                    float: "number",
+                    bool: "boolean",
+                }
                 if field.annotation in type_map:
                     schema["properties"][name] = {"type": type_map[field.annotation]}
                 else:
-                    schema["properties"][name] = {"type": "object", "description": "non-serializable"}
+                    schema["properties"][name] = {
+                        "type": "object",
+                        "description": "non-serializable",
+                    }
             except Exception:
-                schema["properties"][name] = {"type": "object", "description": "non-serializable"}
+                schema["properties"][name] = {
+                    "type": "object",
+                    "description": "non-serializable",
+                }
         return schema

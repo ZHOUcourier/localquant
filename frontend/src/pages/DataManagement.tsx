@@ -68,11 +68,6 @@ export default function DataManagement() {
 
   return (
     <div>
-      <div className="mb-4">
-        <h1 className="text-xl font-semibold text-[#201d1d] mb-1">数据管理</h1>
-        <p className="text-[13px] text-[#646262]">管理 QMT 数据源连接与本地缓存</p>
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* QMT 连接状态 */}
         <Card title="QMT 连接状态">

@@ -5,6 +5,8 @@ export interface WorkflowListItem {
   name: string;
   description: string;
   updated_at: number;
+  is_favorite?: boolean;
+  node_count?: number;
 }
 
 export interface WorkflowDetail {
@@ -32,6 +34,7 @@ export interface WorkflowDetail {
   created_at: number;
   updated_at: number;
   last_run_id?: string | null;
+  is_favorite?: boolean;
 }
 
 export interface WorkflowTemplate {
@@ -42,10 +45,13 @@ export interface WorkflowTemplate {
   links: WorkflowDetail['links'];
 }
 
-export function useWorkflows() {
+export function useWorkflows(tab: string = 'my', search: string = '') {
   return useQuery<WorkflowListItem[]>({
-    queryKey: ['workflows'],
-    queryFn: () => fetch('/api/workflow/').then(r => r.json()),
+    queryKey: ['workflows', tab, search],
+    queryFn: () => {
+      const params = new URLSearchParams({ tab, search });
+      return fetch(`/api/workflow/?${params}`).then(r => r.json());
+    },
   });
 }
 
@@ -104,6 +110,41 @@ export function useWorkflowTemplates() {
 }
 
 export function useCreateFromTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (templateId: string) => {
+      return fetch('/api/workflow/from-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template_id: templateId }),
+      }).then(r => r.json());
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+  });
+}
+
+export function useToggleFavorite() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      return fetch(`/api/workflow/${id}/favorite`, {
+        method: 'PUT',
+      }).then(r => r.json());
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
+  });
+}
+
+export function useGetTemplates() {
+  return useQuery<WorkflowTemplate[]>({
+    queryKey: ['workflow-templates'],
+    queryFn: () => fetch('/api/workflow/templates').then(r => r.json()),
+  });
+}
+
+export function useCreateFromTemplateHook() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (templateId: string) => {

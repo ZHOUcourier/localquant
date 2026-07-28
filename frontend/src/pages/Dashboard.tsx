@@ -1,14 +1,8 @@
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { GitBranch, Search, FlaskConical, BarChart3, Wifi, WifiOff, Database } from 'lucide-react';
-import { Card, Badge } from '@/components/ui';
+import { useBackendHealth } from '@/hooks/useBackendHealth';
 
-const quickActions = [
-  { title: '新建工作流', description: '创建自动化数据处理与分析流程', icon: GitBranch, path: '/workflow', color: '#007aff' },
-  { title: '数据探索', description: '浏览和搜索市场数据', icon: Search, path: '/explore', color: '#64d2ff' },
-  { title: '因子研究', description: '构建和分析 Alpha 因子', icon: FlaskConical, path: '/factor', color: '#30d158' },
-  { title: '运行回测', description: '执行策略回测并查看结果', icon: BarChart3, path: '/backtest', color: '#ff9f0a' },
-];
+// ── Types ──────────────────────────────────────────────────────────
 
 interface WorkflowItem {
   id: string;
@@ -30,144 +24,406 @@ interface DataStatus {
   qmt_connected?: boolean;
   cache_count?: number;
   cache_size?: string;
+  total_records?: number;
   [key: string]: unknown;
 }
 
-function formatTime(ts: number) {
-  if (!ts) return '-';
-  return new Date(ts * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+interface PresetFactorResult {
+  total: number;
+  items: unknown[];
+  [key: string]: unknown;
 }
 
-const statusVariant: Record<string, 'success' | 'warning' | 'error' | 'info' | 'default'> = {
-  success: 'success', completed: 'success', running: 'warning', failed: 'error', pending: 'default',
-};
+// ── Helpers ────────────────────────────────────────────────────────
+
+function formatTime(ts: number) {
+  if (!ts) return '-';
+  return new Date(ts * 1000).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+// ── Reusable section components ────────────────────────────────────
+
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-3">
+      <h2
+        className="text-base font-bold text-[#201d1d]"
+        style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}
+      >
+        {children}
+      </h2>
+      <div className="mt-1" style={{ borderBottom: '1px solid rgba(15,0,0,0.12)' }} />
+    </div>
+  );
+}
+
+function StatusCard({
+  label,
+  value,
+  indicator,
+}: {
+  label: string;
+  value: string;
+  indicator?: 'ok' | 'warn' | 'error';
+}) {
+  const indicatorChar = indicator === 'ok' ? '+' : indicator === 'error' ? 'x' : '-';
+  const indicatorColor =
+    indicator === 'ok' ? '#30d158' : indicator === 'error' ? '#ff3b30' : '#646262';
+
+  return (
+    <div
+      className="rounded-[4px] px-4 py-3"
+      style={{
+        backgroundColor: '#f1eeee',
+        border: '1px solid rgba(15,0,0,0.12)',
+      }}
+    >
+      <div className="flex items-center justify-between">
+        <span
+          className="text-sm text-[#646262]"
+          style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace' }}
+        >
+          [{indicatorChar}] {label}
+        </span>
+      </div>
+      <div
+        className="mt-1 text-base font-medium text-[#201d1d]"
+        style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace' }}
+      >
+        <span style={{ color: indicatorColor }}>{value}</span>
+      </div>
+    </div>
+  );
+}
+
+function StatRow({
+  label,
+  detail,
+  onClick,
+}: {
+  label: string;
+  detail: string;
+  onClick?: () => void;
+}) {
+  return (
+    <div
+      className="flex items-center justify-between py-2 cursor-pointer hover:bg-[#f1eeee] px-2 rounded-[4px] transition-colors"
+      onClick={onClick}
+    >
+      <span
+        className="text-sm text-[#201d1d]"
+        style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace' }}
+      >
+        [+] {label}
+      </span>
+      <span
+        className="text-sm text-[#646262]"
+        style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace' }}
+      >
+        {detail}
+      </span>
+    </div>
+  );
+}
+
+function ActivityRow({
+  name,
+  right,
+  onClick,
+}: {
+  name: string;
+  right: React.ReactNode;
+  onClick?: () => void;
+}) {
+  return (
+    <div
+      className="flex items-center justify-between py-2 px-2 rounded-[4px] cursor-pointer hover:bg-[#f1eeee] transition-colors"
+      onClick={onClick}
+    >
+      <span
+        className="text-sm text-[#201d1d] truncate mr-3"
+        style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace' }}
+      >
+        {name}
+      </span>
+      <span
+        className="text-xs text-[#646262] flex-shrink-0"
+        style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace' }}
+      >
+        {right}
+      </span>
+    </div>
+  );
+}
+
+// ── Main Component ─────────────────────────────────────────────────
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { online, checking, version } = useBackendHealth();
 
+  // Data fetching
   const { data: workflows = [] } = useQuery<WorkflowItem[]>({
-    queryKey: ['workflows'],
-    queryFn: () => fetch('/api/workflow/').then(r => r.json()),
+    queryKey: ['workflows', 'my', ''],
+    queryFn: () =>
+      fetch('/api/workflow/?tab=my&search=').then((r) => r.json()),
+  });
+
+  const { data: presetWorkflows = [] } = useQuery<WorkflowItem[]>({
+    queryKey: ['workflows', 'preset', ''],
+    queryFn: () => fetch('/api/workflow/?tab=preset&search=').then((r) => r.json()),
   });
 
   const { data: experiments = [] } = useQuery<Experiment[]>({
-    queryKey: ['experiments'],
-    queryFn: () => fetch('/api/experiment/?limit=5').then(r => r.json()),
+    queryKey: ['experiments', 'dashboard'],
+    queryFn: () => fetch('/api/experiment/?limit=50').then((r) => r.json()),
   });
 
   const { data: dataStatus } = useQuery<DataStatus>({
     queryKey: ['data-status'],
-    queryFn: () => fetch('/api/data/status').then(r => r.json()),
+    queryFn: () => fetch('/api/data/status').then((r) => r.json()),
   });
 
-  const recentWorkflows = [...workflows].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, 5);
+  const { data: presetFactorData } = useQuery<PresetFactorResult>({
+    queryKey: ['preset-factors-count'],
+    queryFn: () =>
+      fetch('/api/factor/preset?page=1&page_size=1').then((r) => r.json()),
+  });
+
+  const { data: libraryFactors = [] } = useQuery<unknown[]>({
+    queryKey: ['factor-library'],
+    queryFn: () => fetch('/api/factor/library').then((r) => r.json()),
+  });
+
+  // Derived data
+  const myWorkflows = workflows;
+  const totalWorkflows = myWorkflows.length + presetWorkflows.length;
+  const myWorkflowCount = myWorkflows.length;
+  const presetFactorCount = presetFactorData?.total ?? 0;
+  const customFactorCount = libraryFactors.length;
+  const experimentCount = experiments.length;
   const recentExperiments = experiments.slice(0, 5);
 
+  const recentWorkflows = [...myWorkflows]
+    .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
+    .slice(0, 5);
+
+  const mono = 'Berkeley Mono, IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+
   return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold text-[#201d1d] mb-1">工作台</h1>
-        <p className="text-[13px] text-[#646262]">欢迎使用 LocalQuant 本地投研平台</p>
+    <div className="max-w-[960px] mx-auto">
+      {/* Page title */}
+      <div className="mb-8">
+        <h1
+          className="text-base font-bold text-[#201d1d] mb-1"
+          style={{ fontFamily: mono }}
+        >
+          [+] 工作台
+        </h1>
+        <p className="text-sm text-[#646262]" style={{ fontFamily: mono }}>
+          LocalQuant 本地投研平台
+        </p>
       </div>
 
-      {/* 快速操作 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        {quickActions.map(({ title, description, icon: Icon, path, color }) => (
-          <Card
-            key={title}
-            className="cursor-pointer hover:border-[#646262] transition-colors duration-150"
-            onClick={() => navigate(path)}
-          >
-            <div className="flex flex-col gap-3 py-2">
-              <div className="flex items-center justify-center w-9 h-9 rounded" style={{ background: `${color}20` }}>
-                <Icon size={20} style={{ color }} />
-              </div>
-              <div>
-                <div className="text-sm font-medium text-[#201d1d] mb-1">{title}</div>
-                <div className="text-[12px] text-[#646262] leading-relaxed">{description}</div>
-              </div>
-            </div>
-          </Card>
-        ))}
+      {/* ── 系统状态概览 ─────────────────────────────────────────── */}
+      <div className="mb-12">
+        <SectionHeader>系统状态</SectionHeader>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatusCard
+            label="后端"
+            value={
+              checking
+                ? '检查中...'
+                : online
+                  ? `在线 v${version ?? ''}`
+                  : '离线'
+            }
+            indicator={checking ? undefined : online ? 'ok' : 'error'}
+          />
+          <StatusCard
+            label="QMT"
+            value={
+              dataStatus?.qmt_connected ? '已连接' : '未连接'
+            }
+            indicator={dataStatus?.qmt_connected ? 'ok' : 'error'}
+          />
+          <StatusCard
+            label="缓存"
+            value={`${dataStatus?.cache_count ?? 0} 品种 / ${dataStatus?.cache_size ?? '0 B'}`}
+            indicator={dataStatus?.cache_count ? 'ok' : undefined}
+          />
+          <StatusCard
+            label="记录数"
+            value={`${dataStatus?.total_records ?? 0} 条`}
+            indicator={dataStatus?.total_records ? 'ok' : undefined}
+          />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* 最近工作流 */}
-        <Card title="最近工作流" extra={<button className="text-xs text-[#007aff] hover:underline cursor-pointer" onClick={() => navigate('/workflow')}>查看全部</button>}>
-          {recentWorkflows.length === 0 ? (
-            <p className="text-xs text-[#646262] py-4 text-center">暂无工作流</p>
-          ) : (
-            <div className="space-y-2">
-              {recentWorkflows.map(wf => (
-                <div
-                  key={wf.id}
-                  className="flex items-center justify-between p-2 rounded hover:bg-[#f1eeee] cursor-pointer transition-colors"
-                  onClick={() => navigate(`/workflow/${wf.id}`)}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <GitBranch size={14} className="text-[#007aff] flex-shrink-0" />
-                    <span className="text-sm text-[#201d1d] truncate">{wf.name || '未命名工作流'}</span>
-                  </div>
-                  <span className="text-xs text-[#646262] flex-shrink-0 ml-2">{formatTime(wf.updated_at)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
+      {/* ── 模块统计 ─────────────────────────────────────────────── */}
+      <div className="mb-12">
+        <SectionHeader>内容统计</SectionHeader>
+        <div
+          className="rounded-[4px]"
+          style={{
+            border: '1px solid rgba(15,0,0,0.12)',
+            backgroundColor: '#fdfcfc',
+          }}
+        >
+          <StatRow
+            label="工作流"
+            detail={`预置 ${totalWorkflows - myWorkflowCount} 个，我的 ${myWorkflowCount} 个`}
+            onClick={() => navigate('/workflow')}
+          />
+          <div style={{ borderBottom: '1px solid rgba(15,0,0,0.12)' }} />
+          <StatRow
+            label="因子库"
+            detail={`预置 ${presetFactorCount} 个，自建 ${customFactorCount} 个`}
+            onClick={() => navigate('/factor')}
+          />
+          <div style={{ borderBottom: '1px solid rgba(15,0,0,0.12)' }} />
+          <StatRow
+            label="实验"
+            detail={`${experimentCount} 个`}
+            onClick={() => navigate('/experiments')}
+          />
+        </div>
+      </div>
 
-        {/* 最近实验 */}
-        <Card title="最近实验" extra={<button className="text-xs text-[#007aff] hover:underline cursor-pointer" onClick={() => navigate('/experiments')}>查看全部</button>}>
-          {recentExperiments.length === 0 ? (
-            <p className="text-xs text-[#646262] py-4 text-center">暂无实验</p>
-          ) : (
-            <div className="space-y-2">
-              {recentExperiments.map(exp => (
-                <div key={exp.id} className="flex items-center justify-between p-2 rounded hover:bg-[#f1eeee] cursor-pointer transition-colors" onClick={() => navigate('/experiments')}>
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FlaskConical size={14} className="text-[#30d158] flex-shrink-0" />
-                    <span className="text-sm text-[#201d1d] truncate">{exp.name || exp.id.slice(0, 8)}</span>
-                    <Badge variant={statusVariant[exp.status] || 'default'} className="flex-shrink-0">{exp.status}</Badge>
-                  </div>
-                  <div className="flex gap-1 flex-shrink-0 ml-2">
-                    {Object.entries(exp.metrics || {}).slice(0, 1).map(([k, v]) => (
-                      <span key={k} className="text-xs text-[#646262]">
-                        {k}: {typeof v === 'number' ? v.toFixed(4) : String(v)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-
-        {/* 数据状态 */}
-        <Card title="数据状态">
-          <div className="space-y-3 py-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {dataStatus?.qmt_connected ? (
-                  <Wifi size={16} className="text-[#30d158]" />
-                ) : (
-                  <WifiOff size={16} className="text-[#ff3b30]" />
-                )}
-                <span className="text-sm text-[#201d1d]">QMT 连接</span>
-              </div>
-              <Badge variant={dataStatus?.qmt_connected ? 'success' : 'error'}>
-                {dataStatus?.qmt_connected ? '已连接' : '未连接'}
-              </Badge>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Database size={16} className="text-[#64d2ff]" />
-                <span className="text-sm text-[#201d1d]">缓存数据</span>
-              </div>
-              <span className="text-sm text-[#646262]">
-                {dataStatus?.cache_count ?? 0} 品种 / {dataStatus?.cache_size ?? '0 B'}
+      {/* ── 最近活动 ─────────────────────────────────────────────── */}
+      <div className="mb-12">
+        <SectionHeader>最近活动</SectionHeader>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 最近工作流 */}
+          <div>
+            <div
+              className="flex items-center justify-between mb-2"
+            >
+              <span
+                className="text-sm font-medium text-[#201d1d]"
+                style={{ fontFamily: mono }}
+              >
+                工作流
               </span>
+              <button
+                className="text-xs text-[#646262] hover:text-[#201d1d] cursor-pointer transition-colors"
+                style={{ fontFamily: mono }}
+                onClick={() => navigate('/workflow')}
+              >
+                查看全部 →
+              </button>
+            </div>
+            <div
+              className="rounded-[4px]"
+              style={{
+                border: '1px solid rgba(15,0,0,0.12)',
+                backgroundColor: '#fdfcfc',
+              }}
+            >
+              {recentWorkflows.length === 0 ? (
+                <div
+                  className="py-4 text-center text-sm text-[#646262]"
+                  style={{ fontFamily: mono }}
+                >
+                  [-] 暂无工作流
+                </div>
+              ) : (
+                recentWorkflows.map((wf, i) => (
+                  <div key={wf.id}>
+                    <ActivityRow
+                      name={wf.name || '未命名工作流'}
+                      right={formatTime(wf.updated_at)}
+                      onClick={() => navigate(`/workflow/${wf.id}`)}
+                    />
+                    {i < recentWorkflows.length - 1 && (
+                      <div style={{ borderBottom: '1px solid rgba(15,0,0,0.12)' }} />
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </div>
-        </Card>
+
+          {/* 最近实验 */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span
+                className="text-sm font-medium text-[#201d1d]"
+                style={{ fontFamily: mono }}
+              >
+                实验
+              </span>
+              <button
+                className="text-xs text-[#646262] hover:text-[#201d1d] cursor-pointer transition-colors"
+                style={{ fontFamily: mono }}
+                onClick={() => navigate('/experiments')}
+              >
+                查看全部 →
+              </button>
+            </div>
+            <div
+              className="rounded-[4px]"
+              style={{
+                border: '1px solid rgba(15,0,0,0.12)',
+                backgroundColor: '#fdfcfc',
+              }}
+            >
+              {recentExperiments.length === 0 ? (
+                <div
+                  className="py-4 text-center text-sm text-[#646262]"
+                  style={{ fontFamily: mono }}
+                >
+                  [-] 暂无实验
+                </div>
+              ) : (
+                recentExperiments.map((exp, i) => (
+                  <div key={exp.id}>
+                    <ActivityRow
+                      name={exp.name || exp.id.slice(0, 8)}
+                      right={
+                        <span className="flex items-center gap-2">
+                          <span
+                            className="text-xs px-1.5 py-0.5 rounded-[4px]"
+                            style={{
+                              backgroundColor:
+                                exp.status === 'completed'
+                                  ? '#30d15820'
+                                  : exp.status === 'running'
+                                    ? '#ff9f0a20'
+                                    : exp.status === 'failed'
+                                      ? '#ff3b3020'
+                                      : '#f8f7f7',
+                              color:
+                                exp.status === 'completed'
+                                  ? '#30d158'
+                                  : exp.status === 'running'
+                                    ? '#cc7f08'
+                                    : exp.status === 'failed'
+                                      ? '#d70015'
+                                      : '#646262',
+                            }}
+                          >
+                            {exp.status}
+                          </span>
+                          <span>{formatTime(exp.created_at)}</span>
+                        </span>
+                      }
+                      onClick={() => navigate('/experiments')}
+                    />
+                    {i < recentExperiments.length - 1 && (
+                      <div style={{ borderBottom: '1px solid rgba(15,0,0,0.12)' }} />
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

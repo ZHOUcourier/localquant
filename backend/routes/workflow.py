@@ -1,5 +1,8 @@
 """工作流路由"""
-from fastapi import APIRouter, HTTPException
+
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -26,9 +29,21 @@ async def create_from_template(body: FromTemplateRequest):
     return wf
 
 
+@router.post("/import")
+async def import_workflow(data: dict[str, Any]):
+    """导入工作流：接受 JSON 数据创建新工作流"""
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="JSON 格式错误，需要对象类型")
+    wf = await workflow_service.import_workflow(data)
+    return wf
+
+
 @router.get("/")
-async def list_workflows():
-    return await workflow_service.list_workflows()
+async def list_workflows(
+    tab: str = Query("my", description="Tab filter: preset/my/favorite"),
+    search: str = Query("", description="Search by name"),
+):
+    return await workflow_service.list_workflows(tab=tab, search=search)
 
 
 @router.post("/")
@@ -50,6 +65,7 @@ async def create_or_update_workflow(body: WorkflowCreate):
         description=body.description,
         nodes=[n.model_dump() for n in body.nodes],
         links=[l.model_dump() for l in body.links],
+        is_favorite=body.is_favorite,
     )
 
 
@@ -59,6 +75,14 @@ async def get_workflow(workflow_id: str):
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
     return wf
+
+
+@router.put("/{workflow_id}/favorite")
+async def toggle_favorite(workflow_id: str):
+    result = await workflow_service.toggle_favorite(workflow_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return result
 
 
 @router.put("/{workflow_id}")

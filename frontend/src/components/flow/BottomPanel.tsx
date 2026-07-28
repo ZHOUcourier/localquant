@@ -43,14 +43,17 @@ export const BottomPanel: React.FC = () => {
         }}
         onClick={() => setExpanded((prev) => !prev)}
       >
-        <Tabs
-          items={tabItems}
-          activeKey={activeTab}
-          onChange={(key) => {
-            setActiveTab(key);
-            if (!expanded) setExpanded(true);
-          }}
-        />
+        {/* 阻止冒泡：切换 tab 不应触发标题栏的展开/折叠 */}
+        <div onClick={(e) => e.stopPropagation()}>
+          <Tabs
+            items={tabItems}
+            activeKey={activeTab}
+            onChange={(key) => {
+              setActiveTab(key);
+              if (!expanded) setExpanded(true);
+            }}
+          />
+        </div>
         <span
           style={{
             color: '#646262',

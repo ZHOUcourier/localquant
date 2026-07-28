@@ -24,7 +24,8 @@ export interface PluginNodeSchema {
   name: string;
   display_name: string;
   group: string;
-  type: string;
+  type_name: string;
+  description: string;
   box_color: string;
   input_schema: {
     properties: Record<string, SchemaProperty>;

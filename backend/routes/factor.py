@@ -225,3 +225,71 @@ async def delete_factor(factor_id: str):
     await db.commit()
     await db.close()
     return {"deleted": factor_id}
+
+
+# ── 预置因子路由 ─────────────────────────────────────────────────────
+
+
+@router.get("/preset")
+async def list_preset_factors(
+    page: int = 1,
+    page_size: int = 30,
+    category_code: str = None,
+    sort_field: str = None,
+    sort_order: str = "desc",
+    search: str = None,
+):
+    """预置因子分页列表"""
+    result = await factor_research.list_preset_factors(
+        page=page,
+        page_size=page_size,
+        category_code=category_code,
+        sort_field=sort_field,
+        sort_order=sort_order,
+        search=search,
+    )
+    return result
+
+
+@router.get("/preset/categories")
+async def list_preset_categories():
+    """预置因子分类列表"""
+    return await factor_research.get_preset_factor_categories()
+
+
+@router.get("/preset/pool")
+async def get_factor_pool():
+    """获取因子池列表"""
+    return await factor_research.get_pool()
+
+
+@router.delete("/preset/pool/{factor_id}")
+async def remove_from_pool(factor_id: int):
+    """从因子池移除"""
+    await factor_research.remove_from_pool(factor_id)
+    return {"success": True}
+
+
+@router.get("/preset/{factor_id}")
+async def get_preset_factor(factor_id: int):
+    """单个预置因子详情"""
+    factor = await factor_research.get_preset_factor_detail(factor_id)
+    if not factor:
+        raise HTTPException(status_code=404, detail="因子不存在")
+    return factor
+
+
+@router.post("/preset/{factor_id}/recalculate")
+async def recalculate_preset_factor(factor_id: int):
+    """手动重算因子 IC"""
+    factor = await factor_research.recalculate_preset_factor(factor_id)
+    if not factor:
+        raise HTTPException(status_code=404, detail="因子不存在")
+    return factor
+
+
+@router.post("/preset/{factor_id}/add-to-pool")
+async def add_to_pool(factor_id: int):
+    """加入因子池"""
+    await factor_research.add_to_pool(factor_id)
+    return {"success": True}

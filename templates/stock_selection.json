@@ -24,7 +24,7 @@
     },
     {
       "uuid": "n3",
-      "name": "FactorBuildFormulaNode",
+      "name": "FactorFormulaNode",
       "title": "技术因子",
       "positionX": 350,
       "positionY": 100,
@@ -34,7 +34,7 @@
     },
     {
       "uuid": "n4",
-      "name": "FactorBuildFormulaNode",
+      "name": "FactorFormulaNode",
       "title": "基本面因子",
       "positionX": 350,
       "positionY": 320,
@@ -67,16 +67,16 @@
     {
       "uuid": "l1",
       "previous_node_uuid": "n1",
-      "output_field_name": "data",
+      "output_field_name": "kline_data",
       "next_node_uuid": "n3",
-      "input_field_name": "kline_data"
+      "input_field_name": "data"
     },
     {
       "uuid": "l2",
       "previous_node_uuid": "n2",
-      "output_field_name": "data",
+      "output_field_name": "financial_data",
       "next_node_uuid": "n4",
-      "input_field_name": "financial_data"
+      "input_field_name": "data"
     },
     {
       "uuid": "l3",

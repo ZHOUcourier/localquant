@@ -1,15 +1,17 @@
 """技术指标节点 — 基于 pandas_ta 计算各类技术指标"""
+
+from typing import Optional, Type
+
 import pandas as pd
 import pandas_ta as ta
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, Type
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
 from backend.plugins.ui_control import ui
 
-
 # ────────────────────────── 通用 I/O 模型 ──────────────────────────
+
 
 class DataFrameIO(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -17,6 +19,7 @@ class DataFrameIO(BaseModel):
 
 
 # ────────────────────────── 1. MA / EMA ──────────────────────────
+
 
 @ui(
     period={"input_type": "number_field"},
@@ -34,7 +37,12 @@ class MAOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="MA/EMA 均线", group="03-技术指标", box_color="#2196F3")
+@work_node(
+    name="MA/EMA 均线",
+    group="03-技术指标",
+    box_color="#2196F3",
+    description="计算移动平均线(MA)和指数移动平均线(EMA)",
+)
 class MANode(BaseWorkNode):
     """简单/指数移动平均线"""
 
@@ -65,11 +73,15 @@ class MANode(BaseWorkNode):
         """合并连入输入与节点自身参数"""
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 2. MACD ──────────────────────────
+
 
 @ui(
     fast_period={"input_type": "number_field"},
@@ -89,7 +101,12 @@ class MACDOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="MACD", group="03-技术指标", box_color="#2196F3")
+@work_node(
+    name="MACD",
+    group="03-技术指标",
+    box_color="#2196F3",
+    description="计算MACD指标，包括DIF、DEA和柱状图",
+)
 class MACDNode(BaseWorkNode):
     """MACD 指标（DIF / DEA / MACD 柱）"""
 
@@ -119,11 +136,15 @@ class MACDNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 3. RSI ──────────────────────────
+
 
 @ui(period={"input_type": "number_field"})
 class RSIInput(BaseModel):
@@ -137,7 +158,12 @@ class RSIOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="RSI", group="03-技术指标", box_color="#2196F3")
+@work_node(
+    name="RSI",
+    group="03-技术指标",
+    box_color="#2196F3",
+    description="计算相对强弱指标(RSI)，衡量价格涨跌力度",
+)
 class RSINode(BaseWorkNode):
     """相对强弱指标"""
 
@@ -162,11 +188,15 @@ class RSINode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 4. KDJ（Stochastic） ──────────────────────────
+
 
 @ui(period={"input_type": "number_field"})
 class KDJInput(BaseModel):
@@ -180,7 +210,12 @@ class KDJOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="KDJ", group="03-技术指标", box_color="#2196F3")
+@work_node(
+    name="KDJ",
+    group="03-技术指标",
+    box_color="#2196F3",
+    description="计算KDJ随机指标，判断超买超卖信号",
+)
 class KDJNode(BaseWorkNode):
     """KDJ 随机指标（基于 Stochastic）"""
 
@@ -205,8 +240,16 @@ class KDJNode(BaseWorkNode):
         result.ta.stoch(k=period, d=3, smooth_k=3, append=True)
 
         # 计算 J 列: J = 3*K - 2*D
-        k_cols = [c for c in result.columns if c.upper().startswith("STOCHk") or c.upper().startswith("STOCH_k")]
-        d_cols = [c for c in result.columns if c.upper().startswith("STOCHd") or c.upper().startswith("STOCH_d")]
+        k_cols = [
+            c
+            for c in result.columns
+            if c.upper().startswith("STOCHk") or c.upper().startswith("STOCH_k")
+        ]
+        d_cols = [
+            c
+            for c in result.columns
+            if c.upper().startswith("STOCHd") or c.upper().startswith("STOCH_d")
+        ]
         if k_cols and d_cols:
             result["J"] = 3 * result[k_cols[0]] - 2 * result[d_cols[0]]
 
@@ -215,11 +258,15 @@ class KDJNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 5. BOLL（布林带） ──────────────────────────
+
 
 @ui(
     period={"input_type": "number_field"},
@@ -237,7 +284,12 @@ class BOLLOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="BOLL 布林带", group="03-技术指标", box_color="#2196F3")
+@work_node(
+    name="BOLL 布林带",
+    group="03-技术指标",
+    box_color="#2196F3",
+    description="计算布林带指标，包括上轨、中轨、下轨",
+)
 class BOLLNode(BaseWorkNode):
     """布林带指标"""
 
@@ -266,11 +318,15 @@ class BOLLNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 6. ATR ──────────────────────────
+
 
 @ui(period={"input_type": "number_field"})
 class ATRInput(BaseModel):
@@ -284,7 +340,12 @@ class ATROutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="ATR", group="03-技术指标", box_color="#2196F3")
+@work_node(
+    name="ATR",
+    group="03-技术指标",
+    box_color="#2196F3",
+    description="计算平均真实波幅(ATR)，衡量市场波动性",
+)
 class ATRNode(BaseWorkNode):
     """平均真实波幅"""
 
@@ -309,11 +370,15 @@ class ATRNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__
 
 
 # ────────────────────────── 7. 自定义公式 ──────────────────────────
+
 
 @ui(formula={"input_type": "code_editor", "language": "python"})
 class CustomFormulaInput(BaseModel):
@@ -328,7 +393,12 @@ class CustomFormulaOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="自定义公式指标", group="03-技术指标", box_color="#2196F3")
+@work_node(
+    name="自定义公式指标",
+    group="03-技术指标",
+    box_color="#2196F3",
+    description="用自定义公式表达式计算技术指标",
+)
 class CustomFormulaNode(BaseWorkNode):
     """基于自定义公式计算指标"""
 
@@ -372,5 +442,8 @@ class CustomFormulaNode(BaseWorkNode):
     def _get_params(self, ctx) -> dict:
         if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
             inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {**self.__dict__, **{k: v for k, v in inputs.items() if v is not None}}
+            return {
+                **self.__dict__,
+                **{k: v for k, v in inputs.items() if v is not None},
+            }
         return self.__dict__

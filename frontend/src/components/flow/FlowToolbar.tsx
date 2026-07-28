@@ -1,20 +1,41 @@
 import { useCallback, useState } from 'react';
-import { Play, Square, Save, Circle, Loader2, Check } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Play, Square, Save, Circle, Loader2, Check, ArrowLeft, Download, Upload } from 'lucide-react';
 import { useFlowStore } from '../../store/flowStore';
 import { useExecution } from '../../hooks/useExecution';
 import { useSaveWorkflow } from '../../hooks/useWorkflow';
+import { extractStaticInputData } from '../../lib/nodeSchema';
+import { Dialog } from '../ui/Dialog';
+import { Button } from '../ui/Button';
 
 interface FlowToolbarProps {
   onSave?: () => void;
 }
 
 export function FlowToolbar({ onSave }: FlowToolbarProps) {
-  const { workflowId, workflowName, nodes, edges, setWorkflowName, setWorkflow, isRunning, nodeStatuses } = useFlowStore();
+  const navigate = useNavigate();
+  const { workflowId, workflowName, nodes, edges, setWorkflowName, setWorkflow, isRunning, nodeStatuses, isDirty, markClean } = useFlowStore();
   const { runWorkflow, stopExecution } = useExecution();
   const saveMutation = useSaveWorkflow();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workflowName);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [showBackConfirm, setShowBackConfirm] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useCallback(() => document.getElementById('workflow-import-input') as HTMLInputElement | null, []);
+
+  const handleBack = useCallback(() => {
+    if (isDirty) {
+      setShowBackConfirm(true);
+    } else {
+      navigate('/workflow');
+    }
+  }, [isDirty, navigate]);
+
+  const handleConfirmBack = useCallback(() => {
+    setShowBackConfirm(false);
+    navigate('/workflow');
+  }, [navigate]);
 
   const handleNameSubmit = useCallback(() => {
     setWorkflowName(draft.trim() || '未命名工作流');
@@ -40,16 +61,19 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
     setSaveStatus('saving');
     try {
       // 将 ReactFlow nodes/edges 转换为后端格式
-      const backendNodes = nodes.map(n => ({
-        uuid: n.id,
-        name: (n.data as Record<string, unknown>)?.pluginName as string || '',
-        title: (n.data as Record<string, unknown>)?.title as string || n.id,
-        positionX: n.position?.x ?? 0,
-        positionY: n.position?.y ?? 0,
-        width: n.measured?.width ?? (n.data as Record<string, unknown>)?.width as number ?? 240,
-        height: n.measured?.height ?? (n.data as Record<string, unknown>)?.height as number ?? 180,
-        static_input_data: ((n.data as Record<string, unknown>)?.static_input_data as Record<string, unknown>) || {},
-      }));
+      const backendNodes = nodes.map(n => {
+        const data = (n.data || {}) as Record<string, unknown>;
+        return {
+          uuid: n.id,
+          name: (data.nodeType as string) || '',
+          title: (data.label as string) || n.id,
+          positionX: n.position?.x ?? 0,
+          positionY: n.position?.y ?? 0,
+          width: n.measured?.width ?? 240,
+          height: n.measured?.height ?? 180,
+          static_input_data: extractStaticInputData(data),
+        };
+      });
       const backendLinks = edges.map((e, i) => ({
         uuid: e.id || `l${i}`,
         previous_node_uuid: e.source,
@@ -71,12 +95,13 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
       }
 
       setSaveStatus('saved');
+      markClean();
       setTimeout(() => setSaveStatus('idle'), 2000);
     } catch {
       setSaveStatus('error');
       setTimeout(() => setSaveStatus('idle'), 2000);
     }
-  }, [onSave, nodes, edges, workflowId, workflowName, saveMutation, setWorkflow]);
+  }, [onSave, nodes, edges, workflowId, workflowName, saveMutation, setWorkflow, markClean]);
 
   const handleRunClick = useCallback(() => {
     if (!workflowId) return;
@@ -86,6 +111,72 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
       runWorkflow(workflowId);
     }
   }, [workflowId, isRunning, runWorkflow, stopExecution]);
+
+  // 导出工作流
+  const handleExport = useCallback(() => {
+    const backendNodes = nodes.map(n => {
+      const data = (n.data || {}) as Record<string, unknown>;
+      return {
+        uuid: n.id,
+        name: (data.nodeType as string) || '',
+        title: (data.label as string) || n.id,
+        positionX: n.position?.x ?? 0,
+        positionY: n.position?.y ?? 0,
+        width: n.measured?.width ?? 240,
+        height: n.measured?.height ?? 180,
+        static_input_data: extractStaticInputData(data),
+      };
+    });
+    const backendLinks = edges.map((e, i) => ({
+      uuid: e.id || `l${i}`,
+      previous_node_uuid: e.source,
+      output_field_name: (e.sourceHandle as string) || 'output',
+      next_node_uuid: e.target,
+      input_field_name: (e.targetHandle as string) || 'input',
+    }));
+    const exportData = {
+      name: workflowName,
+      description: '',
+      nodes: backendNodes,
+      links: backendLinks,
+    };
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${workflowName || 'workflow'}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [nodes, edges, workflowName]);
+
+  // 导入工作流
+  const handleImportClick = useCallback(() => {
+    const input = fileInputRef();
+    if (input) input.click();
+  }, [fileInputRef]);
+
+  const handleImportFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await fetch('/api/workflow/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error('导入失败');
+      const wf = await res.json();
+      navigate(`/workflow/${wf.id}`);
+    } catch {
+      // 静默失败，可以后续加 toast
+    } finally {
+      setImporting(false);
+    }
+  }, [navigate, fileInputRef]);
 
   // 统计运行状态
   const totalNodes = Object.keys(nodeStatuses).length;
@@ -126,6 +217,48 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         flexShrink: 0,
       }}
     >
+      {/* 返回按钮 */}
+      <button
+        onClick={handleBack}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '4px 10px',
+          background: 'transparent',
+          border: '1px solid rgba(15,0,0,0.12)',
+          borderRadius: 4,
+          color: '#201d1d',
+          fontSize: 12,
+          fontWeight: 500,
+          cursor: 'pointer',
+          transition: 'background 0.15s ease',
+        }}
+        title="返回工作流列表"
+      >
+        <ArrowLeft size={13} />
+        返回
+      </button>
+
+      {/* 取消按钮 */}
+      <button
+        onClick={handleBack}
+        style={{
+          padding: '4px 10px',
+          background: 'transparent',
+          border: '1px solid rgba(15,0,0,0.12)',
+          borderRadius: 4,
+          color: '#646262',
+          fontSize: 12,
+          fontWeight: 500,
+          cursor: 'pointer',
+          transition: 'background 0.15s ease',
+        }}
+        title="取消编辑"
+      >
+        取消
+      </button>
+
       {/* 工作流名称 */}
       {editing ? (
         <input
@@ -184,6 +317,60 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         <span style={{ color: statusColor, fontSize: 12 }}>{statusText}</span>
       </div>
 
+      {/* 导出按钮 */}
+      <button
+        onClick={handleExport}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '4px 10px',
+          background: 'transparent',
+          border: '1px solid rgba(15,0,0,0.12)',
+          borderRadius: 4,
+          color: '#646262',
+          fontSize: 12,
+          fontWeight: 500,
+          cursor: 'pointer',
+          transition: 'background 0.15s ease',
+        }}
+        title="导出工作流为 JSON"
+      >
+        <Download size={13} />
+        导出
+      </button>
+
+      {/* 导入按钮 */}
+      <button
+        onClick={handleImportClick}
+        disabled={importing}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '4px 10px',
+          background: 'transparent',
+          border: '1px solid rgba(15,0,0,0.12)',
+          borderRadius: 4,
+          color: importing ? '#9a9898' : '#646262',
+          fontSize: 12,
+          fontWeight: 500,
+          cursor: importing ? 'not-allowed' : 'pointer',
+          transition: 'background 0.15s ease',
+        }}
+        title="从 JSON 文件导入工作流"
+      >
+        {importing ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Upload size={13} />}
+        {importing ? '导入中...' : '导入'}
+      </button>
+      <input
+        id="workflow-import-input"
+        type="file"
+        accept=".json"
+        onChange={handleImportFile}
+        style={{ display: 'none' }}
+      />
+
       {/* 保存按钮 */}
       <button
         onClick={handleSave}
@@ -231,6 +418,25 @@ export function FlowToolbar({ onSave }: FlowToolbarProps) {
         {isRunning ? <Square size={13} fill="currentColor" /> : <Play size={13} />}
         {isRunning ? '停止' : '运行'}
       </button>
+
+      {/* 离开确认对话框 */}
+      <Dialog
+        open={showBackConfirm}
+        onClose={() => setShowBackConfirm(false)}
+        title="未保存的更改"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setShowBackConfirm(false)}>
+              继续编辑
+            </Button>
+            <Button variant="danger" onClick={handleConfirmBack}>
+              确定离开
+            </Button>
+          </>
+        }
+      >
+        工作流有未保存的更改，确定要离开吗？
+      </Dialog>
     </div>
   );
 }

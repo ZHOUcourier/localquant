@@ -1,24 +1,29 @@
 import importlib
 import importlib.util
 from pathlib import Path
+
 from loguru import logger
 
 
 def load_all_nodes():
     """加载所有内置节点和自定义节点"""
     # 1. 确保注册表和基类已导入
-    from backend.plugins.registry import ALL_WORK_NODES
     from backend.plugins.base import BaseWorkNode
+    from backend.plugins.registry import ALL_WORK_NODES
 
     # 2. 加载内置节点模块
     builtin_modules = [
-        'backend.plugins.builtin.data_sources',
-        'backend.plugins.builtin.data_processing',
-        'backend.plugins.builtin.indicators',
-        'backend.plugins.builtin.factor_build',
-        'backend.plugins.builtin.factor_analysis',
-        'backend.plugins.builtin.backtest',
-        'backend.plugins.builtin.output',
+        "backend.plugins.builtin.data_sources",
+        "backend.plugins.builtin.data_processing",
+        "backend.plugins.builtin.indicators",
+        "backend.plugins.builtin.feature_engineering",
+        "backend.plugins.builtin.factor_build",
+        "backend.plugins.builtin.factor_analysis",
+        "backend.plugins.builtin.backtest",
+        "backend.plugins.builtin.output",
+        "backend.plugins.builtin.ml_models",
+        "backend.plugins.builtin.basic_tools",
+        "backend.plugins.builtin.agent_nodes",
     ]
 
     for module_path in builtin_modules:

@@ -1,10 +1,9 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Search,
   FlaskConical,
-  BarChart3,
   GitBranch,
+  Play,
   History,
   Database,
   Settings,
@@ -12,12 +11,11 @@ import {
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: '工作台', end: true },
-  { to: '/explore', icon: Search, label: '数据探索', end: false },
+  { to: '/data', icon: Database, label: '数据中心', end: false },
   { to: '/factor', icon: FlaskConical, label: '因子研究', end: false },
-  { to: '/backtest', icon: BarChart3, label: '策略回测', end: false },
   { to: '/workflow', icon: GitBranch, label: '工作流', end: false },
+  { to: '/runs', icon: Play, label: '运行中心', end: false },
   { to: '/experiments', icon: History, label: '实验管理', end: false },
-  { to: '/data', icon: Database, label: '数据管理', end: false },
   { to: '/settings', icon: Settings, label: '设置', end: false },
 ];
 

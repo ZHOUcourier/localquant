@@ -1,10 +1,13 @@
 """工作流相关 Pydantic 模型"""
-from pydantic import BaseModel, Field
+
 from typing import Optional
+
+from pydantic import BaseModel, Field
 
 
 class WorkNodeModel(BaseModel):
     """工作流节点模型"""
+
     uuid: str
     name: str  # 对应 BaseWorkNode 子类名
     title: str = ""
@@ -18,6 +21,7 @@ class WorkNodeModel(BaseModel):
 
 class LinkModel(BaseModel):
     """节点连线模型"""
+
     uuid: str
     previous_node_uuid: str
     input_field_name: str  # 前驱节点的输出字段名
@@ -27,14 +31,17 @@ class LinkModel(BaseModel):
 
 class WorkflowCreate(BaseModel):
     """创建工作流请求"""
+
     name: str
     description: str = ""
+    is_favorite: bool = False
     nodes: list[WorkNodeModel] = Field(default_factory=list)
     links: list[LinkModel] = Field(default_factory=list)
 
 
 class WorkflowUpdate(BaseModel):
     """更新工作流请求"""
+
     name: Optional[str] = None
     description: Optional[str] = None
     nodes: Optional[list[WorkNodeModel]] = None
@@ -43,6 +50,7 @@ class WorkflowUpdate(BaseModel):
 
 class WorkflowResponse(BaseModel):
     """工作流响应"""
+
     id: str
     name: str
     description: str
@@ -51,6 +59,7 @@ class WorkflowResponse(BaseModel):
     created_at: int
     updated_at: int
     last_run_id: Optional[str] = None
+    is_favorite: bool = False
 
     class Config:
         from_attributes = True
@@ -58,6 +67,7 @@ class WorkflowResponse(BaseModel):
 
 class WorkflowListItem(BaseModel):
     """工作流列表项（简化版）"""
+
     id: str
     name: str
     description: str
@@ -65,3 +75,4 @@ class WorkflowListItem(BaseModel):
     created_at: int
     updated_at: int
     last_run_id: Optional[str] = None
+    is_favorite: bool = False
