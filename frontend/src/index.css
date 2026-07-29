@@ -27,7 +27,8 @@ html, body, #root {
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-family: var(--font-mono);
-  font-size: 14px;
+  /* 对齐 opencode 官网的体量感：正文基准字号放大、行高 1.5 */
+  font-size: 15px;
   line-height: 1.5;
 }
 
@@ -58,14 +59,15 @@ a {
 
 .react-flow__edge-path {
   stroke: #9a9898;
-  stroke-width: 1.5;
+  stroke-width: 2.5;
 }
 .react-flow__edge.selected .react-flow__edge-path {
   stroke: #007aff;
-  stroke-width: 2;
+  stroke-width: 3;
 }
 .react-flow__connection-line .react-flow__edge-path {
   stroke: #007aff;
+  stroke-width: 2.5;
 }
 .react-flow__controls {
   background: #f1eeee !important;

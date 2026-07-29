@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
-import Editor from '@monaco-editor/react';
-import { Button } from '@/components/ui';
+import { Sparkles } from 'lucide-react';
+import { Button, CodeEditor, Input } from '@/components/ui';
 
 interface QueryResult {
   columns: string[];
@@ -13,10 +13,17 @@ export function SQLPanel() {
   const [sql, setSql] = useState('SELECT * FROM read_parquet(\'data/cache/1d/*.parquet\') LIMIT 20;');
   const [result, setResult] = useState<QueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // AI：自然语言生成 SQL / 结果解读
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiGenLoading, setAiGenLoading] = useState(false);
+  const [aiInsight, setAiInsight] = useState<string | null>(null);
+  const [aiInsightLoading, setAiInsightLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const execute = useCallback(async () => {
     if (!sql.trim()) return;
     setLoading(true);
+    setAiInsight(null);
     try {
       const res = await fetch('/api/explorer/query', {
         method: 'POST',
@@ -32,26 +39,96 @@ export function SQLPanel() {
     }
   }, [sql]);
 
+  // AI：自然语言 → SQL（填入编辑器，由用户确认执行）
+  const handleAIGenerate = useCallback(async () => {
+    if (!aiQuestion.trim()) return;
+    setAiGenLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch('/api/ai/explore-sql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: aiQuestion }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (data.sql) setSql(data.sql);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiGenLoading(false);
+    }
+  }, [aiQuestion]);
+
+  // AI：解读查询结果
+  const handleAIInsight = useCallback(async () => {
+    if (!result || result.columns.length === 0) return;
+    setAiInsightLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch('/api/ai/explore-insight', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          columns: result.columns,
+          rows: result.data.slice(0, 50),
+          context: `SQL: ${sql}`,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setAiInsight(data.insight || '');
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiInsightLoading(false);
+    }
+  }, [result, sql]);
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] overflow-hidden">
-        <Editor
-          height="200px"
-          defaultLanguage="sql"
-          theme="light"
-          value={sql}
-          onChange={(v) => setSql(v ?? '')}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 13,
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            automaticLayout: true,
-            tabSize: 2,
-            wordWrap: 'on',
+      {/* AI 生成 SQL */}
+      <div className="flex items-center gap-2">
+        <Input
+          placeholder="✦ 用自然语言描述查询，AI 生成 SQL（如：查平安银行最近 30 天收盘价）"
+          value={aiQuestion}
+          onChange={(e) => setAiQuestion(e.target.value)}
+          className="flex-1"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleAIGenerate();
           }}
         />
+        <button
+          type="button"
+          disabled={aiGenLoading || !aiQuestion.trim()}
+          onClick={handleAIGenerate}
+          className="flex shrink-0 items-center gap-1.5 rounded-[4px] border border-[rgba(124,58,237,0.4)] bg-[#fdfcfc] px-3 py-1.5 text-xs font-medium text-[#7c3aed] transition-colors hover:bg-[#f8f7f7] disabled:opacity-50 cursor-pointer"
+        >
+          <Sparkles size={12} />
+          {aiGenLoading ? '生成中...' : 'AI 生成 SQL'}
+        </button>
       </div>
+
+      {aiError && (
+        <div className="rounded-[4px] border border-[#ff3b30]/30 bg-[#ff3b30]/10 px-3 py-2 text-xs text-[#ff3b30]">
+          {aiError}
+        </div>
+      )}
+
+      <CodeEditor
+        value={sql}
+        onChange={setSql}
+        language="sql"
+        height={200}
+        title="SQL 查询编辑"
+        fontSize={13}
+      />
 
       <div className="flex items-center gap-2">
         <Button variant="primary" onClick={execute} loading={loading}>
@@ -62,7 +139,24 @@ export function SQLPanel() {
             返回 {result.row_count} 行
           </span>
         )}
+        {result && !result.error && result.columns.length > 0 && (
+          <button
+            type="button"
+            disabled={aiInsightLoading}
+            onClick={handleAIInsight}
+            className="flex items-center gap-1 rounded-[4px] border border-[rgba(124,58,237,0.4)] bg-[#fdfcfc] px-2.5 py-1 text-xs text-[#7c3aed] transition-colors hover:bg-[#f8f7f7] disabled:opacity-50 cursor-pointer"
+          >
+            <Sparkles size={11} />
+            {aiInsightLoading ? '解读中...' : 'AI 解读结果'}
+          </button>
+        )}
       </div>
+
+      {aiInsight && (
+        <div className="whitespace-pre-wrap rounded-[4px] border border-[rgba(124,58,237,0.3)] bg-[#f8f7f7] px-3 py-2.5 text-xs leading-relaxed text-[#424245]">
+          {aiInsight}
+        </div>
+      )}
 
       {result?.error && (
         <div className="rounded-[4px] border border-[#ff3b30]/30 bg-[#ff3b30]/10 px-3 py-2 text-sm text-[#ff3b30]">

@@ -40,7 +40,12 @@ class DataFilterOutput(BaseModel):
     name="数据筛选",
     group="02-数据处理",
     box_color="blue",
-    description="按条件筛选DataFrame中的行，支持多条件组合",
+    description="按单个条件筛选 DataFrame 行，支持比较运算与包含/不包含判断；多条件可串联多个筛选节点",
+    example="QMT行情数据 → 数据筛选 → 排序过滤",
+    notes=[
+        "筛选值会尝试转为数字，失败时按字符串比较",
+        "列名不存在时原样返回数据，不会报错",
+    ],
 )
 class DataFilterNode(BaseWorkNode):
     @classmethod
@@ -118,7 +123,11 @@ class ColumnSelectOutput(BaseModel):
     name="列选择",
     group="02-数据处理",
     box_color="blue",
-    description="选择DataFrame中的指定列，支持重命名与类型转换",
+    description="从 DataFrame 中选取指定列，不存在的列名会被自动忽略",
+    example="QMT行情数据 → 列选择 → 因子构建",
+    notes=[
+        "列名用逗号分隔；留空时原样输出全部列",
+    ],
 )
 class ColumnSelectNode(BaseWorkNode):
     @classmethod
@@ -178,7 +187,12 @@ class FormulaCalcOutput(BaseModel):
     name="公式计算",
     group="02-数据处理",
     box_color="blue",
-    description="基于DataFrame列执行自定义公式计算，生成新列",
+    description="对 DataFrame 执行自定义赋值语句生成新列，如 df['new'] = df['a'] * df['b']",
+    example="合并数据 → 公式计算 → 排序过滤",
+    notes=[
+        "公式中可用 df、pd、np 三个变量，需直接对 df 赋值",
+        "计算失败时原样返回输入数据，不会中断工作流",
+    ],
 )
 class FormulaCalcNode(BaseWorkNode):
     @classmethod
@@ -236,7 +250,12 @@ class MergeDataOutput(BaseModel):
     name="合并数据",
     group="02-数据处理",
     box_color="blue",
-    description="合并多个DataFrame，支持内连接、外连接、左连接等方式",
+    description="合并两个 DataFrame，支持 inner/left/right/outer 连接与 concat 拼接",
+    example="QMT行情数据 + QMT财务数据 → 合并数据 → 因子构建（代码）",
+    notes=[
+        "data 与 data2 两个输入口均需连线提供；任一为空时直接返回另一个",
+        "merge 方式需指定关联列，concat 方式按行拼接",
+    ],
 )
 class MergeDataNode(BaseWorkNode):
     @classmethod
@@ -297,7 +316,11 @@ class SortFilterOutput(BaseModel):
     name="排序过滤",
     group="02-数据处理",
     box_color="blue",
-    description="对DataFrame进行排序和过滤操作",
+    description="对 DataFrame 按指定列排序，并可取前 N 条",
+    example="数据筛选 → 排序过滤 → 股票排名",
+    notes=[
+        "top_n 为 0 时返回全部行",
+    ],
 )
 class SortFilterNode(BaseWorkNode):
     @classmethod
@@ -353,8 +376,13 @@ class CodeExecOutput(BaseModel):
 @work_node(
     name="代码执行",
     group="02-数据处理",
-    box_color="red",
-    description="执行自定义Python代码，对输入数据做任意转换",
+    box_color="blue",
+    description="执行自定义 Python 代码块，对输入数据做任意转换（可用 df/input_data/pd/np）",
+    example="QMT行情数据 → 代码执行 → 输出",
+    notes=[
+        "需把结果写回 df 变量；执行失败时原样返回输入数据",
+        "与「Python代码输入」节点功能类似，但不限制内置函数，请谨慎使用",
+    ],
 )
 class CodeExecNode(BaseWorkNode):
     @classmethod

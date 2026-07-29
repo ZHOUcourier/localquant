@@ -9,18 +9,20 @@
   2. 逐节点：查找节点类 → 合并输入(static_input_data + 上游输出) → 构造 input_model → 调用 run() → 保存输出
   3. SSE 事件推送（节点开始/完成/失败/整体完成）
 """
+
 import json
 import pickle
+from datetime import datetime
 from typing import Any
 
 from backend.config import settings
 from backend.engine.context import WorkflowContext
 from backend.plugins.registry import ALL_WORK_NODES
 
-
 # ---------------------------------------------------------------------------
 # 辅助：保存节点输出到文件
 # ---------------------------------------------------------------------------
+
 
 def _save_node_output(run_id: str, node_uuid: str, output: dict[str, Any]) -> str:
     """将节点输出序列化保存到 data/outputs/{run_id}/{node_uuid}.pkl，返回路径"""
@@ -36,7 +38,10 @@ def _save_node_output(run_id: str, node_uuid: str, output: dict[str, Any]) -> st
 # 拓扑排序（Kahn 算法）
 # ---------------------------------------------------------------------------
 
-def _topological_sort(nodes: list[dict], links: list[dict]) -> tuple[list[str], dict[str, list[dict]]]:
+
+def _topological_sort(
+    nodes: list[dict], links: list[dict]
+) -> tuple[list[str], dict[str, list[dict]]]:
     """
     Kahn 拓扑排序
 
@@ -81,6 +86,7 @@ def _topological_sort(nodes: list[dict], links: list[dict]) -> tuple[list[str], 
 # 单节点执行
 # ---------------------------------------------------------------------------
 
+
 def _execute_node(
     node_def: dict,
     ctx: WorkflowContext,
@@ -105,7 +111,7 @@ def _execute_node(
     for link in incoming_links:
         src_uuid = link["previous_node_uuid"]
         src_field = link.get("output_field_name", "")  # 上游输出的字段名
-        tgt_field = link.get("input_field_name", "")    # 当前节点的输入字段名
+        tgt_field = link.get("input_field_name", "")  # 当前节点的输入字段名
         src_output = ctx.get_node_output(src_uuid)
         if src_output is not None and src_field:
             upstream_data[tgt_field] = src_output.get(src_field)
@@ -143,7 +149,10 @@ def _execute_node(
 # 主入口：run_workflow（同步版本，向后兼容）
 # ---------------------------------------------------------------------------
 
-async def run_workflow(run_id: str, nodes: list[dict], links: list[dict]) -> WorkflowContext:
+
+async def run_workflow(
+    run_id: str, nodes: list[dict], links: list[dict]
+) -> WorkflowContext:
     """
     执行工作流（同步等待全部节点完成后返回 context）
 
@@ -174,12 +183,15 @@ async def run_workflow(run_id: str, nodes: list[dict], links: list[dict]) -> Wor
         incoming = link_map.get(node_uuid, [])
 
         # SSE: 节点开始
-        await ctx.emit_sse("node_start", {
-            "node_uuid": node_uuid,
-            "node_name": node_name,
-            "status": "running",
-            "message": f"开始执行: {node_def.get('title', node_name)}",
-        })
+        await ctx.emit_sse(
+            "node_start",
+            {
+                "node_uuid": node_uuid,
+                "node_name": node_name,
+                "status": "running",
+                "message": f"开始执行: {node_def.get('title', node_name)}",
+            },
+        )
         ctx._log(f"开始执行节点: {node_name}", node_uuid=node_uuid)
 
         try:
@@ -190,13 +202,16 @@ async def run_workflow(run_id: str, nodes: list[dict], links: list[dict]) -> Wor
             ctx.set_node_output(node_uuid, output)
 
             # SSE: 节点完成
-            await ctx.emit_sse("node_complete", {
-                "node_uuid": node_uuid,
-                "node_name": node_name,
-                "status": "success",
-                "message": f"执行完成: {node_def.get('title', node_name)}",
-                "output_path": output_path,
-            })
+            await ctx.emit_sse(
+                "node_complete",
+                {
+                    "node_uuid": node_uuid,
+                    "node_name": node_name,
+                    "status": "success",
+                    "message": f"执行完成: {node_def.get('title', node_name)}",
+                    "output_path": output_path,
+                },
+            )
             ctx._log(f"节点完成: {node_name}", node_uuid=node_uuid)
 
         except Exception as e:
@@ -204,23 +219,29 @@ async def run_workflow(run_id: str, nodes: list[dict], links: list[dict]) -> Wor
             ctx._log(err_msg, "error", node_uuid=node_uuid)
 
             # SSE: 节点失败
-            await ctx.emit_sse("node_failed", {
-                "node_uuid": node_uuid,
-                "node_name": node_name,
-                "status": "failed",
-                "message": err_msg,
-            })
+            await ctx.emit_sse(
+                "node_failed",
+                {
+                    "node_uuid": node_uuid,
+                    "node_name": node_name,
+                    "status": "failed",
+                    "message": err_msg,
+                },
+            )
             ctx.finish("failed")
             return ctx
 
     ctx.finish("completed")
 
     # SSE: 整体完成
-    await ctx.emit_sse("workflow_complete", {
-        "status": ctx.status,
-        "run_id": run_id,
-        "message": f"工作流执行完成，共 {len(nodes)} 个节点",
-    })
+    await ctx.emit_sse(
+        "workflow_complete",
+        {
+            "status": ctx.status,
+            "run_id": run_id,
+            "message": f"工作流执行完成，共 {len(nodes)} 个节点",
+        },
+    )
 
     return ctx
 
@@ -228,6 +249,7 @@ async def run_workflow(run_id: str, nodes: list[dict], links: list[dict]) -> Wor
 # ---------------------------------------------------------------------------
 # SSE 流式版本：run_workflow_stream（生成器，逐节点 yield 事件）
 # ---------------------------------------------------------------------------
+
 
 async def run_workflow_stream(
     run_id: str,
@@ -243,7 +265,10 @@ async def run_workflow_stream(
 
     if not nodes:
         ctx.finish("completed")
-        yield _sse_event("workflow_complete", {"status": "completed", "run_id": run_id, "message": "空工作流"})
+        yield _sse_event(
+            "workflow_complete",
+            {"status": "completed", "run_id": run_id, "message": "空工作流"},
+        )
         return
 
     node_map: dict[str, dict] = {n["uuid"]: n for n in nodes}
@@ -253,27 +278,35 @@ async def run_workflow_stream(
     except ValueError as e:
         ctx._log(str(e), "error")
         ctx.finish("failed")
-        yield _sse_event("workflow_failed", {"status": "failed", "run_id": run_id, "message": str(e)})
+        yield _sse_event(
+            "workflow_failed", {"status": "failed", "run_id": run_id, "message": str(e)}
+        )
         return
 
     # 发送执行顺序
-    yield _sse_event("execution_order", {
-        "run_id": run_id,
-        "node_uuids": execution_order,
-        "total_nodes": len(execution_order),
-    })
+    yield _sse_event(
+        "execution_order",
+        {
+            "run_id": run_id,
+            "node_uuids": execution_order,
+            "total_nodes": len(execution_order),
+        },
+    )
 
     for node_uuid in execution_order:
         node_def = node_map[node_uuid]
         node_name = node_def["name"]
         incoming = link_map.get(node_uuid, [])
 
-        yield _sse_event("node_start", {
-            "node_uuid": node_uuid,
-            "node_name": node_name,
-            "status": "running",
-            "message": f"开始执行: {node_def.get('title', node_name)}",
-        })
+        yield _sse_event(
+            "node_start",
+            {
+                "node_uuid": node_uuid,
+                "node_name": node_name,
+                "status": "running",
+                "message": f"开始执行: {node_def.get('title', node_name)}",
+            },
+        )
         ctx._log(f"开始执行节点: {node_name}", node_uuid=node_uuid)
 
         try:
@@ -281,41 +314,57 @@ async def run_workflow_stream(
             output_path = _save_node_output(run_id, node_uuid, output)
             ctx.set_node_output(node_uuid, output)
 
-            yield _sse_event("node_complete", {
-                "node_uuid": node_uuid,
-                "node_name": node_name,
-                "status": "success",
-                "message": f"执行完成: {node_def.get('title', node_name)}",
-                "output_path": output_path,
-            })
+            yield _sse_event(
+                "node_complete",
+                {
+                    "node_uuid": node_uuid,
+                    "node_name": node_name,
+                    "status": "success",
+                    "message": f"执行完成: {node_def.get('title', node_name)}",
+                    "output_path": output_path,
+                },
+            )
             ctx._log(f"节点完成: {node_name}", node_uuid=node_uuid)
 
         except Exception as e:
             err_msg = f"节点 {node_name} 执行失败: {e}"
             ctx._log(err_msg, "error", node_uuid=node_uuid)
-            yield _sse_event("node_failed", {
-                "node_uuid": node_uuid,
-                "node_name": node_name,
-                "status": "failed",
-                "message": err_msg,
-            })
+            yield _sse_event(
+                "node_failed",
+                {
+                    "node_uuid": node_uuid,
+                    "node_name": node_name,
+                    "status": "failed",
+                    "message": err_msg,
+                },
+            )
             ctx.finish("failed")
-            yield _sse_event("workflow_failed", {
-                "status": "failed",
-                "run_id": run_id,
-                "message": err_msg,
-            })
+            yield _sse_event(
+                "workflow_failed",
+                {
+                    "status": "failed",
+                    "run_id": run_id,
+                    "message": err_msg,
+                },
+            )
             return
 
     ctx.finish("completed")
-    yield _sse_event("workflow_complete", {
-        "status": "completed",
-        "run_id": run_id,
-        "message": f"工作流执行完成，共 {len(nodes)} 个节点",
-    })
+    yield _sse_event(
+        "workflow_complete",
+        {
+            "status": "completed",
+            "run_id": run_id,
+            "message": f"工作流执行完成，共 {len(nodes)} 个节点",
+        },
+    )
 
 
 def _sse_event(event_type: str, data: dict[str, Any]) -> str:
-    """构造 SSE 格式字符串"""
+    """构造 SSE 格式字符串（自动附加时间戳与日志级别，供前端筛选/排序）"""
+    data.setdefault("timestamp", datetime.now().isoformat())
+    if "level" not in data:
+        status = data.get("status", "")
+        data["level"] = "error" if status == "failed" else "info" if status else "info"
     payload = json.dumps(data, ensure_ascii=False, default=str)
     return f"event: {event_type}\ndata: {payload}\n\n"

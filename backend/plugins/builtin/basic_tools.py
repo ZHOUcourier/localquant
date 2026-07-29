@@ -47,7 +47,18 @@ class PythonCodeOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="Python代码输入", group="10-基础工具", box_color="#607D8B")
+@work_node(
+    name="Python代码输入",
+    group="10-基础工具",
+    box_color="#607D8B",
+    description="输入并执行自定义 Python 代码，对上游 DataFrame 做任意加工，主要用于因子编写 / 策略编写场景",
+    example="QMT行情数据 → Python代码输入 → 因子构建 / 策略回测",
+    notes=[
+        "代码中可用变量：df（上游 DataFrame）、pd、np；需把结果写回 df 变量",
+        "仅支持受限的内置函数，不允许 os.system、文件读写等危险操作",
+        "代码执行报错时会回退为原样输出上游数据",
+    ],
+)
 class PythonCodeInputNode(BaseWorkNode):
     """自定义Python代码编写，接收DataFrame，输出DataFrame"""
 
@@ -130,7 +141,17 @@ class StockPoolOutput(BaseModel):
     count: int = Field(default=0, title="数量")
 
 
-@work_node(name="自定义股票池", group="10-基础工具", box_color="#607D8B")
+@work_node(
+    name="自定义股票池",
+    group="10-基础工具",
+    box_color="#607D8B",
+    description="手工定义股票选择范围，输出股票代码列表供下游节点使用",
+    example="自定义股票池 → 因子构建（公式） → IC 分析",
+    notes=[
+        "股票代码用逗号分隔，如 000001.SZ,600000.SH",
+        "输出 stock_list（列表）与 count（数量）两个字段",
+    ],
+)
 class StockPoolNode(BaseWorkNode):
     """定义股票选择范围（股票代码列表），输出股票池"""
 
@@ -169,7 +190,17 @@ class FormulaOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
-@work_node(name="公式输入", group="10-基础工具", box_color="#607D8B")
+@work_node(
+    name="公式输入",
+    group="10-基础工具",
+    box_color="#607D8B",
+    description="对上游 DataFrame 按数学公式计算新列，公式中可直接引用列名（小写）",
+    example="QMT行情数据 → 公式输入 → 数据筛选",
+    notes=[
+        "公式示例：df['close'] * 2 或 close / open - 1",
+        "公式计算失败时输出列为 NaN，不会中断工作流",
+    ],
+)
 class FormulaInputNode(BaseWorkNode):
     """数学公式定义，输入DataFrame+公式，输出计算结果"""
 
@@ -227,7 +258,17 @@ class DataDownloadOutput(BaseModel):
     success: bool = Field(default=False, title="是否成功")
 
 
-@work_node(name="数据下载", group="10-基础工具", box_color="#607D8B")
+@work_node(
+    name="数据下载",
+    group="10-基础工具",
+    box_color="#607D8B",
+    description="从 URL 下载数据文件到本地并读入为 DataFrame，支持 csv/parquet/excel/json",
+    example="数据下载 → 数据筛选 → 因子构建",
+    notes=[
+        "未填保存路径时默认存到临时目录",
+        "下载失败时 success 输出 false，不会中断工作流",
+    ],
+)
 class DataDownloadNode(BaseWorkNode):
     """下载行情数据到本地"""
 

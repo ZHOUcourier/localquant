@@ -1,11 +1,14 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { Input } from '@/components/ui';
+import { Sparkles, BookOpen } from 'lucide-react';
 import {
   usePresetFactors,
   usePresetFactorCategories,
   useAddToFactorPool,
 } from '@/hooks/usePresetFactors';
 import type { PresetFactor, PresetFactorParams } from '@/hooks/usePresetFactors';
+import { FactorDetailDialog } from './FactorDetailDialog';
+import { FactorReferenceDialog } from './FactorReferenceDialog';
 
 /* ── 工具函数 ── */
 function fmt(v: number | null, digits = 4): string {
@@ -33,15 +36,21 @@ const SORT_OPTIONS: { field: SortField; label: string }[] = [
 function FactorCard({
   factor,
   onAddToPool,
+  onOpenDetail,
+  onOpenAI,
   adding,
 }: {
   factor: PresetFactor;
   onAddToPool: (id: number) => void;
+  onOpenDetail: (id: number, tab?: string) => void;
+  onOpenAI: (id: number) => void;
   adding: boolean;
 }) {
   return (
     <div
-      className="flex flex-col rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f1eeee] p-3"
+      className="flex flex-col rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f1eeee] p-4 cursor-pointer transition-colors hover:border-[#9a9898]"
+      onClick={() => onOpenDetail(factor.id)}
+      title="点击查看公式与具体数据"
     >
       {/* 头部：名称 + 分类 */}
       <div className="mb-2 flex items-start justify-between gap-2">
@@ -93,14 +102,31 @@ function FactorCard({
       </div>
 
       {/* 操作 */}
-      <button
-        type="button"
-        disabled={adding}
-        className="mt-auto w-full rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1.5 text-xs font-medium text-[#201d1d] transition-colors hover:bg-[#f8f7f7] disabled:text-[#9a9898] cursor-pointer"
-        onClick={() => onAddToPool(factor.id)}
-      >
-        {adding ? '加入中...' : '[+] 加入因子池'}
-      </button>
+      <div className="mt-auto flex gap-2">
+        <button
+          type="button"
+          disabled={adding}
+          className="flex-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1.5 text-xs font-medium text-[#201d1d] transition-colors hover:bg-[#f8f7f7] disabled:text-[#9a9898] cursor-pointer"
+          onClick={(e) => {
+            e.stopPropagation();
+            onAddToPool(factor.id);
+          }}
+        >
+          {adding ? '加入中...' : '[+] 加入因子池'}
+        </button>
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded-[4px] border border-[rgba(124,58,237,0.4)] bg-[#fdfcfc] px-2 py-1.5 text-xs font-medium text-[#7c3aed] transition-colors hover:bg-[#f8f7f7] cursor-pointer"
+          title="AI 分析该因子"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenAI(factor.id);
+          }}
+        >
+          <Sparkles size={11} />
+          AI
+        </button>
+      </div>
     </div>
   );
 }
@@ -112,6 +138,8 @@ function FactorListView({
   sortOrder,
   onSort,
   onAddToPool,
+  onOpenDetail,
+  onOpenAI,
   addingId,
 }: {
   factors: PresetFactor[];
@@ -119,6 +147,8 @@ function FactorListView({
   sortOrder: 'asc' | 'desc';
   onSort: (field: SortField) => void;
   onAddToPool: (id: number) => void;
+  onOpenDetail: (id: number) => void;
+  onOpenAI: (id: number) => void;
   addingId: number | null;
 }) {
   const SortHeader = ({ field, label }: { field: SortField; label: string }) => (
@@ -173,7 +203,9 @@ function FactorListView({
           factors.map((f) => (
             <tr
               key={f.id}
-              className="border-b border-[rgba(15,0,0,0.12)] transition-colors hover:bg-[#f1eeee]"
+              className="border-b border-[rgba(15,0,0,0.12)] transition-colors hover:bg-[#f1eeee] cursor-pointer"
+              onClick={() => onOpenDetail(f.id)}
+              title="点击查看公式与具体数据"
             >
               <td className="px-3 py-2 text-sm font-medium text-[#201d1d]">
                 {f.factor_name}
@@ -194,14 +226,31 @@ function FactorListView({
               <td className="px-3 py-2 text-xs text-[#201d1d]">{fmtPct(f.maximum_drawdown)}</td>
               <td className="px-3 py-2 text-xs text-[#201d1d]">{fmt(f.sharpe_ratio, 2)}</td>
               <td className="px-3 py-2">
-                <button
-                  type="button"
-                  disabled={addingId === f.id}
-                  className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-xs text-[#201d1d] transition-colors hover:bg-[#f8f7f7] disabled:text-[#9a9898] cursor-pointer"
-                  onClick={() => onAddToPool(f.id)}
-                >
-                  {addingId === f.id ? '...' : '[+]'}
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={addingId === f.id}
+                    className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-xs text-[#201d1d] transition-colors hover:bg-[#f8f7f7] disabled:text-[#9a9898] cursor-pointer"
+                    title="加入因子池"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddToPool(f.id);
+                    }}
+                  >
+                    {addingId === f.id ? '...' : '[+]'}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-[4px] border border-[rgba(124,58,237,0.4)] bg-[#fdfcfc] px-2 py-1 text-xs text-[#7c3aed] transition-colors hover:bg-[#f8f7f7] cursor-pointer"
+                    title="AI 分析该因子"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenAI(f.id);
+                    }}
+                  >
+                    ✦
+                  </button>
+                </div>
               </td>
             </tr>
           ))
@@ -320,6 +369,13 @@ export default function FactorLibrary() {
   const { data: categories } = usePresetFactorCategories();
   const addToPoolMutation = useAddToFactorPool();
   const [addingId, setAddingId] = useState<number | null>(null);
+  // 因子详情弹窗（点击因子打开；可直接定位到 AI 分析）
+  const [detail, setDetail] = useState<{ id: number; tab: 'formula' | 'ai' } | null>(null);
+
+  const openDetail = useCallback((id: number) => setDetail({ id, tab: 'formula' }), []);
+  const openAI = useCallback((id: number) => setDetail({ id, tab: 'ai' }), []);
+  // 变量与算子参考弹窗
+  const [showReference, setShowReference] = useState(false);
 
   // 分类切换
   const handleCategoryClick = useCallback((code: string) => {
@@ -374,6 +430,16 @@ export default function FactorLibrary() {
           />
         </div>
         <div className="flex items-center gap-1">
+          {/* 变量与算子参考 */}
+          <button
+            type="button"
+            onClick={() => setShowReference(true)}
+            className="flex items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1.5 text-xs text-[#646262] transition-colors hover:text-[#201d1d] cursor-pointer"
+            title="查看公式/代码可用的变量与算子"
+          >
+            <BookOpen size={12} />
+            变量参考
+          </button>
           {/* 排序选择 */}
           <select
             className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1.5 text-xs text-[#646262] cursor-pointer"
@@ -471,12 +537,14 @@ export default function FactorLibrary() {
             <span className="text-xs text-[#646262]">加载中...</span>
           </div>
         ) : viewMode === 'card' ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {factors.map((f) => (
               <FactorCard
                 key={f.id}
                 factor={f}
                 onAddToPool={handleAddToPool}
+                onOpenDetail={openDetail}
+                onOpenAI={openAI}
                 adding={addingId === f.id}
               />
             ))}
@@ -493,6 +561,8 @@ export default function FactorLibrary() {
             sortOrder={sortOrder}
             onSort={handleSort}
             onAddToPool={handleAddToPool}
+            onOpenDetail={openDetail}
+            onOpenAI={openAI}
             addingId={addingId}
           />
         )}
@@ -500,6 +570,16 @@ export default function FactorLibrary() {
 
       {/* 分页 */}
       <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+
+      {/* 因子详情弹窗（公式 LaTeX/代码 + 具体数据 + 重算历史 + AI 分析） */}
+      <FactorDetailDialog
+        factorId={detail?.id ?? null}
+        initialTab={detail?.tab ?? 'formula'}
+        onClose={() => setDetail(null)}
+      />
+
+      {/* 变量与算子参考 */}
+      <FactorReferenceDialog open={showReference} onClose={() => setShowReference(false)} />
     </div>
   );
 }

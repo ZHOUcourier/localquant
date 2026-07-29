@@ -47,7 +47,12 @@ class OutputOutput(BaseModel):
     name="输出",
     group="09-输出",
     box_color="purple",
-    description="将数据输出到指定目标，支持文件/数据库等",
+    description="将上游数据保存到本地 outputs 目录，支持 table(pickle)/csv/json 格式并输出预览",
+    example="任意数据节点 → 输出",
+    notes=[
+        "data 需连线提供；始终额外保存一份 pickle 副本",
+        "预览仅展示前 10 行",
+    ],
 )
 class OutputNode(BaseWorkNode):
     @classmethod
@@ -139,7 +144,12 @@ class StockRankOutput(BaseModel):
     name="股票排名",
     group="09-输出",
     box_color="purple",
-    description="根据因子值对股票进行排名筛选输出",
+    description="合并最多两路因子数据，按指定字段排序并输出前 N 名股票",
+    example="因子构建 ×2 → 股票排名 → 输出",
+    notes=[
+        "factor_data_1 / factor_data_2 需连线提供，可只连一路",
+        "排序字段留空时默认取最后一列，默认降序（得分高在前）",
+    ],
 )
 class StockRankNode(BaseWorkNode):
     @classmethod

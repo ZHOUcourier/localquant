@@ -42,7 +42,12 @@ class DingTalkInput(BaseModel):
     name="钉钉推送",
     group="11-信息推送",
     box_color="#795548",
-    description="通过钉钉机器人 Webhook 推送消息通知",
+    description="通过钉钉机器人 Webhook 推送消息，可附带上游数据摘要",
+    example="回测 / 股票排名 → 钉钉推送",
+    notes=[
+        "需先在钉钉群创建自定义机器人并填入 Webhook URL",
+        "data 为可选连线输入，提供时会拼接数据摘要到消息中",
+    ],
 )
 class DingTalkNode(BaseWorkNode):
     """钉钉机器人推送节点"""

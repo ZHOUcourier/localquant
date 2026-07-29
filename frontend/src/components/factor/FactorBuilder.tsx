@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
-import Editor from '@monaco-editor/react';
-import { Card, Tabs, Input, Button, ScrollArea } from '@/components/ui';
+import { Card, Tabs, Input, Button, ScrollArea, CodeEditor } from '@/components/ui';
 import type { TabItem } from '@/components/ui';
 
 export interface FactorResult {
@@ -123,23 +122,14 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {mode === 'code' && (
           <div className="flex flex-col gap-2">
             <label className="text-xs text-[#646262]">Python 代码</label>
-            <div className="rounded-[4px] border border-[rgba(15,0,0,0.12)] overflow-hidden" style={{ height: 220 }}>
-              <Editor
-                height="220px"
-                language="python"
-                theme="light"
-                value={code}
-                onChange={(v) => setCode(v ?? '')}
-                options={{
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  lineNumbers: 'on',
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                  tabSize: 4,
-                }}
-              />
-            </div>
+            <CodeEditor
+              value={code}
+              onChange={setCode}
+              language="python"
+              height={220}
+              title="因子代码编辑"
+              fontSize={13}
+            />
           </div>
         )}
 

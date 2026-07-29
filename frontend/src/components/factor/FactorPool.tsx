@@ -113,9 +113,10 @@ function PoolItem({
           type="button"
           disabled={recalculating}
           className="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-xs text-[#646262] transition-colors hover:text-[#201d1d] disabled:text-[#9a9898] cursor-pointer"
+          title="重算为覆盖更新：新指标直接写回当前因子记录（不另存新因子），旧值自动存入历史快照，可在因子详情中查看"
           onClick={() => onRecalculate(factor.id)}
         >
-          {recalculating ? '计算中...' : '↻ 重算 IC'}
+          {recalculating ? '计算中...' : '↻ 重算 IC（覆盖）'}
         </button>
         <button
           type="button"

@@ -42,7 +42,13 @@ class QMTKlineOutput(BaseModel):
     name="QMT行情数据",
     group="01-数据获取",
     box_color="orange",
-    description="获取QMT行情K线数据，支持日K/分钟K等多种周期",
+    description="获取QMT行情K线数据，支持日K/周K/月K/分钟K等多种周期，输出按股票代码组织的K线字典",
+    example="QMT行情数据 → 因子构建 / 技术指标 / 回测",
+    notes=[
+        "需本地有 QMT 行情缓存或 QMT 客户端在线，否则返回空数据",
+        "输出 kline_data 为 {股票代码: K线字典} 结构，只能通过连线传给下游",
+        "股票代码用逗号分隔，如 000001.SZ,600000.SH",
+    ],
 )
 class QMTKlineNode(BaseWorkNode):
     @classmethod
@@ -113,7 +119,12 @@ class QMTFinancialOutput(BaseModel):
     name="QMT财务数据",
     group="01-数据获取",
     box_color="orange",
-    description="获取QMT财务报表数据，包括资产负债表、利润表、现金流量表",
+    description="获取QMT财务报表数据，包括资产负债表、利润表、现金流量表、估值等多张表",
+    example="QMT财务数据 → 合并数据 → 因子构建（代码）",
+    notes=[
+        "可选表：Balance/Income/CashFlow/Top10Holders/Capital/PerShare/Valuation",
+        "输出 financial_data 为嵌套字典，只能通过连线传给下游",
+    ],
 )
 class QMTFinancialNode(BaseWorkNode):
     @classmethod
@@ -172,7 +183,12 @@ class QMTSectorOutput(BaseModel):
     name="QMT板块数据",
     group="01-数据获取",
     box_color="orange",
-    description="获取QMT板块分类及成分股数据",
+    description="获取QMT板块列表或指定板块的成分股列表",
+    example="QMT板块数据 → QMT行情数据（按成分股拉行情）",
+    notes=[
+        "板块名留空时返回全部板块列表，填写板块名时返回该板块成分股",
+        "mode 输出字段标识返回的是板块列表还是成分股",
+    ],
 )
 class QMTSectorNode(BaseWorkNode):
     @classmethod
@@ -218,7 +234,11 @@ class TradingCalendarOutput(BaseModel):
     name="交易日历",
     group="01-数据获取",
     box_color="orange",
-    description="获取A股交易日历，支持判断交易日与非交易日",
+    description="获取A股交易日历，输出指定区间内的交易日列表",
+    example="交易日历 → Python代码输入（按交易日对齐数据）",
+    notes=[
+        "需本地 QMT 数据支持，无数据时返回空列表",
+    ],
 )
 class TradingCalendarNode(BaseWorkNode):
     @classmethod
@@ -264,7 +284,11 @@ class StockListOutput(BaseModel):
     name="股票列表",
     group="01-数据获取",
     box_color="orange",
-    description="获取A股全部股票列表，返回股票代码与名称",
+    description="获取股票列表：填写板块名返回板块成分股，留空时返回板块列表供筛选",
+    example="股票列表 → QMT行情数据",
+    notes=[
+        "留空时当前实现返回的是板块列表（非全市场股票），建议填写板块名使用",
+    ],
 )
 class StockListNode(BaseWorkNode):
     @classmethod

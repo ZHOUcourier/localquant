@@ -23,6 +23,99 @@ from backend.services.factor_research import factor_research
 router = APIRouter()
 
 
+# 因子编写参考（字段 + 算子）— 供前端「变量参考」面板展示，与求值环境对齐
+_FACTOR_REFERENCE = {
+    "fields": [
+        {"name": "open / OPEN", "desc": "开盘价", "available": True},
+        {"name": "high / HIGH", "desc": "最高价", "available": True},
+        {"name": "low / LOW", "desc": "最低价", "available": True},
+        {"name": "close / CLOSE", "desc": "收盘价", "available": True},
+        {"name": "volume / VOLUME", "desc": "成交量", "available": True},
+        {"name": "amount / AMOUNT", "desc": "成交额", "available": True},
+        {
+            "name": "vwap / VWAP",
+            "desc": "成交均价（≈amount/volume）",
+            "available": True,
+        },
+        {"name": "returns", "desc": "日收益率", "available": True},
+        {"name": "adv20", "desc": "20 日平均成交量", "available": True},
+        {
+            "name": "turnover / market_cap",
+            "desc": "换手率 / 市值（需已下载）",
+            "available": False,
+        },
+    ],
+    "operator_groups": [
+        {
+            "group": "逐元素",
+            "ops": ["ABS(X)", "LOG(X)", "SIGN(X)", "POWER(X,N)", "SIGNEDPOWER(X,N)"],
+        },
+        {
+            "group": "截面",
+            "ops": ["RANK(X) 排名分位数", "SCALE(X,a) 缩放", "ZSCORE(X) 标准化"],
+        },
+        {
+            "group": "时序",
+            "ops": [
+                "DELAY(X,N) 延后",
+                "DELTA(X,N) 差分",
+                "MA(X,N) 均值",
+                "SUM(X,N)",
+                "STD(X,N) 标准差",
+                "TS_MAX/TS_MIN(X,N)",
+                "TS_RANK(X,N) 时序排名",
+                "DECAYLINEAR(X,N) 衰减加权",
+                "EMA/WMA/SMA(X,N)",
+                "RETURNS(X,N)",
+                "COUNT(cond,N)",
+            ],
+        },
+        {
+            "group": "双序列",
+            "ops": ["MAX(A,B)", "MIN(A,B)", "MEAN(A,B)", "IF(cond,A,B)"],
+        },
+        {
+            "group": "双面板滚动",
+            "ops": [
+                "CORR(A,B,N) 滚动相关",
+                "COV(A,B,N) 协方差",
+                "SUMIF(cond,B,N)",
+                "REGBETA/REGRESI(A,B,N) 回归",
+            ],
+        },
+        {
+            "group": "技术指标",
+            "ops": [
+                "ADV(VOLUME,N)",
+                "RSI(X,N)",
+                "MACD/MACD_DIF/MACD_DEA(close)",
+                "BOLL_UPPER/MID/LOWER(close,20,2)",
+                "ATR(high,low,close,N)",
+                "CCI(high,low,close,N)",
+                "WR(close,high,low,N)",
+                "BIAS(close,N)",
+                "KDJ_K/D/J(close,high,low)",
+                "OBV(close,volume)",
+            ],
+        },
+    ],
+    "examples": [
+        {"title": "20 日动量排名", "formula": "RANK((CLOSE / DELAY(CLOSE, 20)) - 1)"},
+        {"title": "价量相关性", "formula": "CORRELATION(CLOSE, VOLUME, 20)"},
+        {
+            "title": "Alpha101 #40",
+            "formula": "((-1 * RANK(STDDEV(HIGH, 10))) * CORRELATION(HIGH, VOLUME, 10))",
+        },
+    ],
+}
+
+
+@router.get("/reference")
+async def factor_reference():
+    """因子编写参考：可用字段、算子与示例（与公式求值环境一致）"""
+    return _FACTOR_REFERENCE
+
+
 def _dict_to_df(d: dict) -> pd.DataFrame:
     """将 {date: {code: value}} 嵌套字典转为 DataFrame (index=date, columns=stocks)"""
     return pd.DataFrame.from_dict(d, orient="index")
@@ -50,24 +143,31 @@ async def compute_factor(req: FactorComputeRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     close = panels["close"]
-    eval_ctx = {
-        "np": np,
-        "pd": pd,
-        "open": panels.get("open"),
-        "high": panels.get("high"),
-        "low": panels.get("low"),
-        "close": close,
-        "volume": panels.get("volume"),
-        "amount": panels.get("amount"),
-    }
+    # 构建公式求值命名空间：基础字段 + vwap/returns + 全部量化算子
+    # （RANK/DELAY/DELTA/CORR/TS_RANK/DECAYLINEAR 等，大小写均可），
+    # 使因子库中的 Alpha101/Alpha191 公式可直接运行。
+    from backend.services.factor_operators import build_operator_namespace
+
+    eval_ctx = build_operator_namespace(panels)
 
     try:
         if req.mode == "formula":
             if not req.formula.strip():
                 raise ValueError(
-                    "因子公式为空，请输入表达式，如: close / close.shift(5) - 1"
+                    "因子公式为空，请输入表达式，如: RANK(close / DELAY(close, 5) - 1)"
                 )
-            factor = eval(req.formula, {"__builtins__": {}}, eval_ctx)  # noqa: S307
+            # 支持多行公式：取最后一个非空表达式作为因子值（对齐官网中间变量写法）
+            formula_lines = [
+                ln
+                for ln in req.formula.strip().splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+            if len(formula_lines) > 1:
+                exec_ctx = dict(eval_ctx)
+                exec("\n".join(formula_lines[:-1]), {"__builtins__": {}}, exec_ctx)  # noqa: S102
+                factor = eval(formula_lines[-1], {"__builtins__": {}}, exec_ctx)  # noqa: S307
+            else:
+                factor = eval(req.formula, {"__builtins__": {}}, eval_ctx)  # noqa: S307
         else:
             if not req.code.strip():
                 raise ValueError("因子代码为空")
@@ -137,6 +237,53 @@ async def quantile_analysis(req: QuantileRequest):
     except Exception as e:
         logger.error(f"分层分析失败: {e}")
         raise HTTPException(status_code=500, detail=f"分层分析失败: {e}")
+
+
+@router.post("/decay")
+async def factor_decay(req: ICAnalysisRequest):
+    """因子衰减：IC 随持有期增长的变化（与因子分析节点同源）"""
+    try:
+        factor_df = _dict_to_df(req.factor_data)
+        return_df = _dict_to_df(req.return_data)
+        factor_df.index = pd.to_datetime(factor_df.index)
+        return_df.index = pd.to_datetime(return_df.index)
+        max_period = max(req.periods) if req.periods else 20
+        return factor_research.factor_decay(factor_df, return_df, max_period)
+    except Exception as e:
+        logger.error(f"因子衰减分析失败: {e}")
+        raise HTTPException(status_code=500, detail=f"因子衰减分析失败: {e}")
+
+
+@router.post("/turnover")
+async def factor_turnover(req: ICAnalysisRequest):
+    """因子换手率（与因子分析节点同源）"""
+    try:
+        factor_df = _dict_to_df(req.factor_data)
+        factor_df.index = pd.to_datetime(factor_df.index)
+        return factor_research.turnover_analysis(factor_df)
+    except Exception as e:
+        logger.error(f"换手率分析失败: {e}")
+        raise HTTPException(status_code=500, detail=f"换手率分析失败: {e}")
+
+
+@router.post("/analysis")
+async def full_analysis(req: QuantileRequest):
+    """完整单因子分析报告（与工作流「因子分析」节点同源、同口径）
+
+    返回数据卡指标、分组绩效表、分组/超额累计收益、IC 与 Rank_IC 的
+    时序/累计/分布/自相关/衰减、最新一期因子值排名。
+    """
+    try:
+        factor_df = _dict_to_df(req.factor_data)
+        return_df = _dict_to_df(req.return_data)
+        factor_df.index = pd.to_datetime(factor_df.index)
+        return_df.index = pd.to_datetime(return_df.index)
+        return factor_research.full_factor_analysis(
+            factor_df, return_df, n_groups=req.n_groups
+        )
+    except Exception as e:
+        logger.error(f"因子分析失败: {e}")
+        raise HTTPException(status_code=500, detail=f"因子分析失败: {e}")
 
 
 @router.post("/neutralize")
@@ -272,16 +419,22 @@ async def remove_from_pool(factor_id: int):
 
 @router.get("/preset/{factor_id}")
 async def get_preset_factor(factor_id: int):
-    """单个预置因子详情"""
+    """单个预置因子详情（含公式文本/LaTeX/代码）"""
     factor = await factor_research.get_preset_factor_detail(factor_id)
     if not factor:
         raise HTTPException(status_code=404, detail="因子不存在")
     return factor
 
 
+@router.get("/preset/{factor_id}/history")
+async def get_preset_factor_history(factor_id: int):
+    """因子 IC 指标历史快照（每次重算覆盖前自动留存）"""
+    return await factor_research.get_factor_ic_history(factor_id)
+
+
 @router.post("/preset/{factor_id}/recalculate")
 async def recalculate_preset_factor(factor_id: int):
-    """手动重算因子 IC"""
+    """手动重算因子 IC（覆盖更新，旧值存入历史快照）"""
     factor = await factor_research.recalculate_preset_factor(factor_id)
     if not factor:
         raise HTTPException(status_code=404, detail="因子不存在")

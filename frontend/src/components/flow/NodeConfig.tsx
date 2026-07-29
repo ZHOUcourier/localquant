@@ -1,25 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Editor from '@monaco-editor/react';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePlugins, type PluginNodeSchema, type SchemaProperty } from '../../hooks/usePlugins';
 import { useFlowStore } from '../../store/flowStore';
-import { buildWidgets, buildPorts } from '../../lib/nodeSchema';
+import { buildWidgets, buildPorts, isConnectableInput } from '../../lib/nodeSchema';
+import { resolveNodeColor } from '../../lib/nodeColors';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
-
-const COLOR_MAP: Record<string, string> = {
-  orange: '#007aff',
-  green: '#30d158',
-  yellow: '#ff9f0a',
-  '#ffd60a': '#ffd60a',
-  cyan: '#64d2ff',
-  red: '#ff3b30',
-  black: '#9a9898',
-};
-
-function resolveColor(c: string) {
-  return COLOR_MAP[c] || c || '#007aff';
-}
+import { CodeEditor } from '../ui/CodeEditor';
 
 const labelStyle: React.CSSProperties = {
   color: '#646262',
@@ -126,23 +113,18 @@ function ParamField({
     );
   }
 
-  // code_editor → textarea（mini Monaco 替代）
+  // code_editor → 内嵌 Monaco（支持网页全屏）
   if (uiType === 'code_editor') {
     return (
       <div style={{ marginBottom: 10 }}>
         <label style={labelStyle}>{label}</label>
-        <textarea
+        <CodeEditor
           value={val}
-          onChange={(e) => onChange(fieldKey, e.target.value)}
-          placeholder={`输入 ${prop.ui?.language || 'code'} 代码...`}
-          spellCheck={false}
-          style={{
-            ...fieldInputStyle,
-            height: 200,
-            resize: 'vertical',
-            lineHeight: 1.5,
-            tabSize: 4,
-          }}
+          onChange={(v) => onChange(fieldKey, v)}
+          language={prop.ui?.language || 'python'}
+          height={200}
+          title={label}
+          fontSize={12}
         />
       </div>
     );
@@ -241,7 +223,7 @@ export function NodeConfig() {
   // 参数草稿：仅在点保存后才写回节点数据
   const [draftValues, setDraftValues] = useState<Record<string, unknown>>({});
   // Tab / 源码状态
-  const [activeTab, setActiveTab] = useState<'params' | 'source'>('params');
+  const [activeTab, setActiveTab] = useState<'params' | 'source' | 'doc'>('params');
   const [sourceCode, setSourceCode] = useState('');
   const [originalSource, setOriginalSource] = useState('');
   const [sourceMeta, setSourceMeta] = useState<SourceMeta | null>(null);
@@ -279,7 +261,7 @@ export function NodeConfig() {
   const schema: PluginNodeSchema | null =
     (nodeType ? schemaMap[nodeType] : null) ||
     (schemaOverride && schemaOverride.name === nodeType ? schemaOverride : null);
-  const boxColor = resolveColor((displayedNode?.data?.box_color as string) || 'orange');
+  const boxColor = resolveNodeColor((displayedNode?.data?.box_color as string) || 'orange');
   const nodeLabel = (displayedNode?.data?.label as string) || schema?.display_name || '';
 
   // 从 widgets 中取当前已保存值
@@ -486,7 +468,7 @@ export function NodeConfig() {
     setPendingSwitch(null);
   }, [selectNode, displayedNodeId]);
 
-  const panelWidth = activeTab === 'source' ? 460 : 280;
+  const panelWidth = activeTab === 'source' ? 460 : activeTab === 'doc' ? 320 : 280;
 
   // 未选中节点
   if (!displayedNode || !schema) {
@@ -627,6 +609,7 @@ export function NodeConfig() {
         {([
           { key: 'params' as const, label: `参数配置${paramsDirty ? ' ●' : ''}` },
           { key: 'source' as const, label: `节点代码${codeDirty ? ' ●' : ''}` },
+          { key: 'doc' as const, label: '节点说明' },
         ]).map((tab) => (
           <button
             key={tab.key}
@@ -691,7 +674,7 @@ export function NodeConfig() {
         </div>
       )}
 
-      {/* 中间：参数表单 或 源码 */}
+      {/* 中间：参数表单 / 源码 / 节点说明 */}
       {activeTab === 'params' ? (
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
           {Object.keys(properties).length === 0 ? (
@@ -708,6 +691,8 @@ export function NodeConfig() {
             ))
           )}
         </div>
+      ) : activeTab === 'doc' ? (
+        <NodeDocPanel schema={schema} boxColor={boxColor} />
       ) : (
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {sourceLoading && (
@@ -738,25 +723,14 @@ export function NodeConfig() {
                   ? '自定义节点：保存后直接更新该节点代码'
                   : '内置节点：修改代码保存后会生成一个新的自定义节点（原节点不受影响）'}
               </div>
-              <div style={{ flex: 1 }}>
-                <Editor
-                  height="100%"
-                  language="python"
-                  theme="light"
+              <div style={{ flex: 1, padding: '8px 10px', minHeight: 0 }}>
+                <CodeEditor
                   value={sourceCode}
-                  onChange={(v) => setSourceCode(v ?? '')}
-                  options={{
-                    readOnly: false,
-                    minimap: { enabled: false },
-                    fontSize: 12,
-                    lineNumbers: 'on',
-                    scrollBeyondLastLine: false,
-                    automaticLayout: true,
-                    tabSize: 4,
-                    wordWrap: 'on',
-                    padding: { top: 8 },
-                    renderValidationDecorations: 'on',
-                  }}
+                  onChange={setSourceCode}
+                  language="python"
+                  height="100%"
+                  title={`节点代码 — ${nodeLabel}`}
+                  fontSize={12}
                 />
               </div>
             </>
@@ -867,6 +841,106 @@ export function NodeConfig() {
           }}
         />
       </Dialog>
+    </div>
+  );
+}
+
+/** 节点说明面板 — 描述 / 工作流示例 / 输入输出端口 / 注意事项 */
+function NodeDocPanel({ schema, boxColor }: { schema: PluginNodeSchema; boxColor: string }) {
+  const inputPorts = schema.input_schema?.properties
+    ? Object.entries(schema.input_schema.properties)
+        .filter(([, p]) => isConnectableInput(p))
+        .map(([name, p]) => ({ name, label: p.title || name }))
+    : [];
+  const paramFields = schema.input_schema?.properties
+    ? Object.entries(schema.input_schema.properties)
+        .filter(([, p]) => !isConnectableInput(p))
+        .map(([name, p]) => ({ name, label: p.title || name }))
+    : [];
+  const outputPorts = schema.output_schema?.properties
+    ? Object.entries(schema.output_schema.properties).map(([name, p]) => ({
+        name,
+        label: p.title || name,
+      }))
+    : [];
+
+  const sectionTitle: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#201d1d',
+    margin: '14px 0 6px',
+    paddingBottom: 4,
+    borderBottom: '1px dashed rgba(15,0,0,0.16)',
+  };
+  const chip: React.CSSProperties = {
+    display: 'inline-block',
+    background: '#f1eeee',
+    border: '1px solid rgba(15,0,0,0.10)',
+    borderRadius: 3,
+    padding: '1px 7px',
+    margin: '2px 5px 2px 0',
+    fontSize: 11,
+    color: '#201d1d',
+  };
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', fontSize: 12, lineHeight: 1.6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <span style={{ width: 8, height: 8, background: boxColor, borderRadius: 2, flexShrink: 0 }} />
+        <span style={{ color: '#646262', fontSize: 11 }}>{schema.group}</span>
+        {schema.is_custom && (
+          <span style={{ fontSize: 10, color: '#007aff', border: '1px solid #007aff', borderRadius: 3, padding: '0 4px' }}>
+            自定义
+          </span>
+        )}
+      </div>
+      <div style={{ color: '#424245' }}>{schema.description || '暂无描述'}</div>
+
+      {schema.example && (
+        <>
+          <div style={sectionTitle}>工作流示例</div>
+          <div style={{ color: '#424245', fontSize: 11 }}>{schema.example}</div>
+        </>
+      )}
+
+      <div style={sectionTitle}>输入端口（需连线提供）</div>
+      <div>
+        {inputPorts.length > 0
+          ? inputPorts.map((p) => <span key={p.name} style={chip}>{p.label}</span>)
+          : <span style={{ color: '#9a9898', fontSize: 11 }}>无（源节点）</span>}
+      </div>
+
+      <div style={sectionTitle}>节点参数（面板配置）</div>
+      <div>
+        {paramFields.length > 0
+          ? paramFields.map((p) => <span key={p.name} style={chip}>{p.label}</span>)
+          : <span style={{ color: '#9a9898', fontSize: 11 }}>无可配置参数</span>}
+      </div>
+
+      <div style={sectionTitle}>输出端口（可连接属性）</div>
+      <div>
+        {outputPorts.length > 0
+          ? outputPorts.map((p) => <span key={p.name} style={chip}>{p.label}</span>)
+          : <span style={{ color: '#9a9898', fontSize: 11 }}>无输出</span>}
+      </div>
+
+      {schema.notes && schema.notes.length > 0 && (
+        <>
+          <div style={{ ...sectionTitle, color: '#cc7f08', borderBottomColor: 'rgba(255,159,10,0.35)' }}>
+            注意事项
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 16, color: '#424245', fontSize: 11 }}>
+            {schema.notes.map((n, i) => (
+              <li key={i} style={{ marginBottom: 3 }}>{n}</li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <div style={{ ...sectionTitle, color: '#646262' }}>类型标识</div>
+      <div style={{ color: '#9a9898', fontSize: 11, fontFamily: 'var(--font-mono, monospace)' }}>
+        {schema.name}
+      </div>
     </div>
   );
 }

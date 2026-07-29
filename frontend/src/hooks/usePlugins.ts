@@ -26,6 +26,10 @@ export interface PluginNodeSchema {
   group: string;
   type_name: string;
   description: string;
+  /** 典型工作流示例，如 "代码输入 → 因子构建" */
+  example?: string;
+  /** 使用注意事项 */
+  notes?: string[];
   box_color: string;
   is_custom?: boolean;
   base_name?: string;

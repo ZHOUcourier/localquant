@@ -1,27 +1,14 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 import { useReactFlow } from '@xyflow/react';
-import Editor from '@monaco-editor/react';
 import { useQueryClient } from '@tanstack/react-query';
+import { Settings2, Trash2, Undo2 } from 'lucide-react';
 import { usePlugins, type PluginNodeSchema } from '../../hooks/usePlugins';
 import { useFlowStore } from '../../store/flowStore';
-import { buildWidgets, buildPorts } from '../../lib/nodeSchema';
+import { buildWidgets, buildPorts, isConnectableInput } from '../../lib/nodeSchema';
+import { resolveNodeColor } from '../../lib/nodeColors';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
-
-// box_color 名称 → 实际色值
-const COLOR_MAP: Record<string, string> = {
-  orange: '#007aff',
-  green: '#30d158',
-  yellow: '#ff9f0a',
-  '#ffd60a': '#ffd60a',
-  cyan: '#64d2ff',
-  red: '#ff3b30',
-  black: '#9a9898',
-};
-
-function resolveColor(c: string) {
-  return COLOR_MAP[c] || c || '#007aff';
-}
+import { CodeEditor } from '../ui/CodeEditor';
 
 let nodeCounter = 0;
 
@@ -78,13 +65,125 @@ class MyCustomNode(BaseWorkNode):
         return MyNodeOutput(data=df)
 `;
 
+/** 回收站条目 */
+interface TrashEntry {
+  type: 'group' | 'node' | 'custom_node';
+  key: string;
+  label: string;
+  group?: string;
+  deleted_at: number;
+}
+
+/** 管理模式下的选择项 */
+interface SelectedItem {
+  type: 'group' | 'node' | 'custom_node';
+  key: string;
+  label: string;
+}
+
+/** 富悬停说明面板（对齐官网：介绍 / 工作流示例 / 输入输出 / 注意事项） */
+function NodeTooltip({ node, pos }: { node: PluginNodeSchema; pos: { x: number; y: number } }) {
+  const inputPorts = node.input_schema?.properties
+    ? Object.entries(node.input_schema.properties)
+        .filter(([, p]) => isConnectableInput(p))
+        .map(([name, p]) => p.title || name)
+    : [];
+  const outputPorts = node.output_schema?.properties
+    ? Object.entries(node.output_schema.properties).map(([name, p]) => p.title || name)
+    : [];
+  const top = Math.min(pos.y, Math.max(window.innerHeight - 380, 8));
+
+  const sectionTitle: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#64d2ff',
+    margin: '10px 0 4px',
+    borderBottom: '1px dashed rgba(253,252,252,0.25)',
+    paddingBottom: 3,
+  };
+  const chip: React.CSSProperties = {
+    display: 'inline-block',
+    background: 'rgba(253,252,252,0.12)',
+    borderRadius: 3,
+    padding: '1px 6px',
+    margin: '2px 4px 2px 0',
+    fontSize: 10.5,
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: pos.x,
+        top,
+        width: 264,
+        maxHeight: 400,
+        overflowY: 'auto',
+        background: '#201d1d',
+        color: '#fdfcfc',
+        fontSize: 11,
+        fontFamily: 'inherit',
+        padding: '10px 12px',
+        borderRadius: 4,
+        lineHeight: 1.55,
+        pointerEvents: 'none',
+        zIndex: 9999,
+        boxShadow: '0 6px 24px rgba(15,0,0,0.25)',
+      }}
+    >
+      <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 2 }}>
+        {node.display_name}
+        <span style={{ fontWeight: 400, color: '#9a9898', marginLeft: 6, fontSize: 10 }}>
+          {node.group}
+        </span>
+      </div>
+      <div style={{ color: 'rgba(253,252,252,0.85)' }}>
+        {node.description || '暂无描述'}
+      </div>
+
+      {node.example && (
+        <>
+          <div style={sectionTitle}>工作流示例</div>
+          <div style={{ color: 'rgba(253,252,252,0.85)' }}>{node.example}</div>
+        </>
+      )}
+
+      <div style={sectionTitle}>输入端口（连线）</div>
+      <div>
+        {inputPorts.length > 0
+          ? inputPorts.map((p) => <span key={p} style={chip}>{p}</span>)
+          : <span style={{ color: '#9a9898' }}>无（源节点，参数在节点上配置）</span>}
+      </div>
+
+      <div style={sectionTitle}>输出端口（可连接属性）</div>
+      <div>
+        {outputPorts.length > 0
+          ? outputPorts.map((p) => <span key={p} style={chip}>{p}</span>)
+          : <span style={{ color: '#9a9898' }}>无输出</span>}
+      </div>
+
+      {node.notes && node.notes.length > 0 && (
+        <>
+          <div style={{ ...sectionTitle, color: '#ff9f0a' }}>注意事项</div>
+          <ul style={{ margin: 0, paddingLeft: 14, color: 'rgba(253,252,252,0.85)' }}>
+            {node.notes.map((n, i) => (
+              <li key={i} style={{ marginBottom: 2 }}>{n}</li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function NodePalette() {
   const { data: groups, isLoading } = usePlugins();
   const queryClient = useQueryClient();
   const addNode = useFlowStore((s) => s.addNode);
+  const locked = useFlowStore((s) => s.locked);
   const { screenToFlowPosition } = useReactFlow();
   const [search, setSearch] = useState('');
-  // 默认全部收起：只有显式设为 false 的分组才展开
+  // 默认全部收起：只有显式设为 true 的分组才展开
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const paletteRef = useRef<HTMLDivElement>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
@@ -94,9 +193,16 @@ export function NodePalette() {
   const [creatorSource, setCreatorSource] = useState(CUSTOM_NODE_TEMPLATE);
   const [creatorSaving, setCreatorSaving] = useState(false);
   const [creatorError, setCreatorError] = useState<string | null>(null);
-  // 自定义节点删除确认
-  const [deleteTarget, setDeleteTarget] = useState<PluginNodeSchema | null>(null);
+  // 管理模式（批量删除节点/类目 → 回收站）
+  const [manageMode, setManageMode] = useState(false);
+  const [selected, setSelected] = useState<Record<string, SelectedItem>>({});
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // 回收站
+  const [showTrash, setShowTrash] = useState(false);
+  const [trashItems, setTrashItems] = useState<TrashEntry[]>([]);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [restoringKey, setRestoringKey] = useState<string | null>(null);
 
   // 过滤节点 + 搜索时自动展开匹配分组
   const { filteredGroups, visibleExpanded } = useMemo(() => {
@@ -116,14 +222,10 @@ export function NodePalette() {
         : nodes;
       if (matched.length > 0) {
         result[group] = matched;
-        // 搜索时自动展开有匹配结果的分组
-        if (q) {
-          newExpanded[group] = true;
-        }
+        if (q) newExpanded[group] = true;
       }
     }
 
-    // 非搜索时，使用用户手动展开的状态
     const visible = q ? newExpanded : Object.fromEntries(
       Object.entries(expanded).filter(([k]) => k in result)
     );
@@ -133,6 +235,7 @@ export function NodePalette() {
 
   const handleAddNode = useCallback(
     (schema: PluginNodeSchema) => {
+      if (locked) return;
       const flowEl = document.querySelector('.react-flow') as HTMLElement | null;
       if (!flowEl) return;
       const rect = flowEl.getBoundingClientRect();
@@ -157,10 +260,9 @@ export function NodePalette() {
         },
       });
     },
-    [addNode, screenToFlowPosition]
+    [addNode, screenToFlowPosition, locked]
   );
 
-  // 拖拽开始
   const handleDragStart = useCallback(
     (e: React.DragEvent, schema: PluginNodeSchema) => {
       e.dataTransfer.setData('application/localquant-node', JSON.stringify(schema));
@@ -198,26 +300,85 @@ export function NodePalette() {
     }
   }, [creatorSource, queryClient]);
 
-  // 删除自定义节点
-  const handleDeleteCustom = useCallback(async () => {
-    if (!deleteTarget) return;
+  // ── 管理模式：批量选择与删除 ──
+  const toggleSelect = useCallback((item: SelectedItem) => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      const k = `${item.type}:${item.key}`;
+      if (next[k]) delete next[k];
+      else next[k] = item;
+      return next;
+    });
+  }, []);
+
+  const selectedCount = Object.keys(selected).length;
+
+  const handleBatchDelete = useCallback(async () => {
     setDeleting(true);
     try {
-      await fetch(`/api/plugins/custom/${deleteTarget.name}`, { method: 'DELETE' });
+      await fetch('/api/plugins/palette/hide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: Object.values(selected) }),
+      });
       await queryClient.invalidateQueries({ queryKey: ['plugins'] });
+      setSelected({});
+      setManageMode(false);
     } finally {
       setDeleting(false);
-      setDeleteTarget(null);
+      setConfirmDelete(false);
     }
-  }, [deleteTarget, queryClient]);
+  }, [selected, queryClient]);
+
+  // ── 回收站 ──
+  const loadTrash = useCallback(async () => {
+    setTrashLoading(true);
+    try {
+      const res = await fetch('/api/plugins/palette/trash');
+      const data = await res.json();
+      setTrashItems(data.items || []);
+    } finally {
+      setTrashLoading(false);
+    }
+  }, []);
+
+  const openTrash = useCallback(() => {
+    setShowTrash(true);
+    loadTrash();
+  }, [loadTrash]);
+
+  const handleRestore = useCallback(async (entry: TrashEntry) => {
+    setRestoringKey(`${entry.type}:${entry.key}`);
+    try {
+      await fetch('/api/plugins/palette/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [{ type: entry.type, key: entry.key }] }),
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['plugins'] }),
+        loadTrash(),
+      ]);
+    } finally {
+      setRestoringKey(null);
+    }
+  }, [queryClient, loadTrash]);
 
   const hasResults = Object.keys(filteredGroups).length > 0;
+
+  const checkboxStyle: React.CSSProperties = {
+    width: 12,
+    height: 12,
+    accentColor: '#007aff',
+    cursor: 'pointer',
+    flexShrink: 0,
+  };
 
   return (
     <div
       ref={paletteRef}
       style={{
-        width: 200,
+        width: 216,
         flexShrink: 0,
         background: '#fdfcfc',
         borderRight: '1px solid rgba(15,0,0,0.12)',
@@ -257,18 +418,18 @@ export function NodePalette() {
         />
       </div>
 
-      {/* 新建自定义节点 */}
-      <div style={{ padding: '0 8px 4px' }}>
+      {/* 新建自定义节点 + 管理/回收站 */}
+      <div style={{ padding: '0 8px 4px', display: 'flex', gap: 4 }}>
         <button
           onClick={() => setShowCreator(true)}
           style={{
-            width: '100%',
+            flex: 1,
             background: 'transparent',
             border: '1px dashed rgba(15,0,0,0.25)',
             borderRadius: 4,
             color: '#646262',
             fontSize: 11,
-            padding: '5px 8px',
+            padding: '5px 6px',
             cursor: 'pointer',
             fontFamily: 'inherit',
             transition: 'all 0.15s',
@@ -282,9 +443,82 @@ export function NodePalette() {
             e.currentTarget.style.borderColor = 'rgba(15,0,0,0.25)';
           }}
         >
-          ＋ 新建自定义节点
+          ＋ 新建节点
+        </button>
+        <button
+          onClick={() => { setManageMode((v) => !v); setSelected({}); }}
+          title="管理节点/类目（批量删除到回收站）"
+          style={{
+            background: manageMode ? '#201d1d' : 'transparent',
+            border: '1px solid rgba(15,0,0,0.25)',
+            borderRadius: 4,
+            color: manageMode ? '#fdfcfc' : '#646262',
+            padding: '5px 7px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          <Settings2 size={12} />
+        </button>
+        <button
+          onClick={openTrash}
+          title="回收站（还原已删除的节点/类目）"
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(15,0,0,0.25)',
+            borderRadius: 4,
+            color: '#646262',
+            padding: '5px 7px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          <Undo2 size={12} />
         </button>
       </div>
+
+      {/* 管理模式提示 + 批量删除栏 */}
+      {manageMode && (
+        <div
+          style={{
+            margin: '0 8px 4px',
+            padding: '5px 8px',
+            background: '#f8f7f7',
+            border: '1px solid rgba(15,0,0,0.12)',
+            borderRadius: 4,
+            fontSize: 10.5,
+            color: '#646262',
+            lineHeight: 1.5,
+          }}
+        >
+          勾选节点或整个类目后批量删除，删除项进入回收站可还原。
+          <button
+            disabled={selectedCount === 0}
+            onClick={() => setConfirmDelete(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              width: '100%',
+              justifyContent: 'center',
+              marginTop: 5,
+              padding: '4px 0',
+              background: selectedCount > 0 ? '#ff3b30' : '#f1eeee',
+              border: 'none',
+              borderRadius: 4,
+              color: selectedCount > 0 ? '#fff' : '#9a9898',
+              fontSize: 11,
+              cursor: selectedCount > 0 ? 'pointer' : 'not-allowed',
+              fontFamily: 'inherit',
+            }}
+          >
+            <Trash2 size={11} />
+            删除所选（{selectedCount}）
+          </button>
+        </div>
+      )}
 
       {/* 节点列表 */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
@@ -302,6 +536,7 @@ export function NodePalette() {
 
         {Object.entries(filteredGroups).map(([group, nodes]) => {
           const isExpanded = !!visibleExpanded[group];
+          const groupSelected = !!selected[`group:${group}`];
           return (
             <div key={group}>
               {/* 分组标题 */}
@@ -319,6 +554,7 @@ export function NodePalette() {
                   userSelect: 'none',
                   letterSpacing: 0,
                   transition: 'background 0.1s',
+                  gap: 6,
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLDivElement).style.background = '#f1eeee';
@@ -327,7 +563,16 @@ export function NodePalette() {
                   (e.currentTarget as HTMLDivElement).style.background = 'transparent';
                 }}
               >
-                <span style={{ marginRight: 6, fontSize: 11, fontWeight: 400, color: '#646262' }}>
+                {manageMode && (
+                  <input
+                    type="checkbox"
+                    checked={groupSelected}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => toggleSelect({ type: 'group', key: group, label: group })}
+                    style={checkboxStyle}
+                  />
+                )}
+                <span style={{ fontSize: 11, fontWeight: 400, color: '#646262' }}>
                   {isExpanded ? '[-]' : '[+]'}
                 </span>
                 <span style={{ flex: 1 }}>{group}</span>
@@ -339,14 +584,20 @@ export function NodePalette() {
               {/* 节点项 */}
               {isExpanded &&
                 nodes.map((node) => {
-                  const color = resolveColor(node.box_color);
+                  const color = resolveNodeColor(node.box_color);
                   const isHovered = hoveredNode === node.name;
+                  const itemType = node.is_custom ? 'custom_node' : 'node';
+                  const isChecked = !!selected[`${itemType}:${node.name}`];
                   return (
                     <div
                       key={node.name}
-                      draggable
+                      draggable={!manageMode}
                       onDragStart={(e) => handleDragStart(e, node)}
-                      onClick={() => handleAddNode(node)}
+                      onClick={() =>
+                        manageMode
+                          ? toggleSelect({ type: itemType, key: node.name, label: node.display_name })
+                          : handleAddNode(node)
+                      }
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -355,12 +606,12 @@ export function NodePalette() {
                         gap: 6,
                         transition: 'background 0.1s',
                         position: 'relative',
-                        background: isHovered ? '#f1eeee' : 'transparent',
+                        background: isHovered || isChecked ? '#f1eeee' : 'transparent',
                       }}
                       onMouseEnter={(e) => {
                         setHoveredNode(node.name);
                         const rect = e.currentTarget.getBoundingClientRect();
-                        setTooltipPos({ x: rect.right + 4, y: rect.top + rect.height / 2 });
+                        setTooltipPos({ x: rect.right + 6, y: rect.top - 8 });
                       }}
                       onMouseLeave={() => {
                         setHoveredNode(null);
@@ -387,7 +638,16 @@ export function NodePalette() {
                           background: 'rgba(15,0,0,0.12)',
                         }}
                       />
-                      {/* 色条 */}
+                      {manageMode && (
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => toggleSelect({ type: itemType, key: node.name, label: node.display_name })}
+                          style={checkboxStyle}
+                        />
+                      )}
+                      {/* 色条（与画布节点/详情面板同源取色） */}
                       <div
                         style={{
                           width: 3,
@@ -412,28 +672,6 @@ export function NodePalette() {
                           {node.display_name}
                         </div>
                       </div>
-                      {/* 自定义节点可删除 */}
-                      {node.is_custom && isHovered && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDeleteTarget(node);
-                          }}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: '#ff3b30',
-                            cursor: 'pointer',
-                            fontSize: 12,
-                            padding: '0 2px',
-                            lineHeight: 1,
-                            flexShrink: 0,
-                          }}
-                          title="删除自定义节点"
-                        >
-                          ×
-                        </button>
-                      )}
                     </div>
                   );
                 })}
@@ -442,35 +680,13 @@ export function NodePalette() {
         })}
       </div>
 
-      {/* Tooltip */}
-      {hoveredNode && (() => {
+      {/* 富悬停说明 */}
+      {!manageMode && hoveredNode && (() => {
         const node = Object.values(filteredGroups)
           .flat()
           .find((n) => n.name === hoveredNode);
-        if (!node?.description) return null;
-        return (
-          <div
-            style={{
-              position: 'fixed',
-              left: tooltipPos.x,
-              top: tooltipPos.y,
-              transform: 'translateY(-50%)',
-              background: '#201d1d',
-              color: '#fdfcfc',
-              fontSize: 11,
-              fontFamily: 'inherit',
-              padding: '4px 8px',
-              borderRadius: 4,
-              maxWidth: 200,
-              whiteSpace: 'normal',
-              lineHeight: 1.4,
-              pointerEvents: 'none',
-              zIndex: 9999,
-            }}
-          >
-            {node.description}
-          </div>
-        );
+        if (!node) return null;
+        return <NodeTooltip node={node} pos={tooltipPos} />;
       })()}
 
       {/* 新建自定义节点弹窗 */}
@@ -508,43 +724,122 @@ export function NodePalette() {
             {creatorError}
           </div>
         )}
-        <div style={{ border: '1px solid rgba(15,0,0,0.12)', borderRadius: 4, overflow: 'hidden' }}>
-          <Editor
-            height="420px"
-            language="python"
-            theme="light"
-            value={creatorSource}
-            onChange={(v) => setCreatorSource(v ?? '')}
-            options={{
-              minimap: { enabled: false },
-              fontSize: 12,
-              lineNumbers: 'on',
-              scrollBeyondLastLine: false,
-              automaticLayout: true,
-              tabSize: 4,
-              wordWrap: 'on',
-            }}
-          />
-        </div>
+        <CodeEditor
+          value={creatorSource}
+          onChange={setCreatorSource}
+          language="python"
+          height={420}
+          title="新建自定义节点"
+        />
       </Dialog>
 
-      {/* 删除自定义节点确认 */}
+      {/* 批量删除二次确认 */}
       <Dialog
-        open={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        title="删除自定义节点"
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        title="删除到回收站"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+            <Button variant="secondary" onClick={() => setConfirmDelete(false)} disabled={deleting}>
               取消
             </Button>
-            <Button variant="danger" onClick={handleDeleteCustom} loading={deleting}>
-              确定删除
+            <Button variant="danger" onClick={handleBatchDelete} loading={deleting}>
+              确定删除（{selectedCount}）
             </Button>
           </>
         }
       >
-        确定删除自定义节点“{deleteTarget?.display_name}”？引用该节点的工作流将无法运行。
+        <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+          将删除以下 {selectedCount} 项到回收站（可随时还原）：
+          <ul style={{ margin: '8px 0 0', paddingLeft: 18, color: '#646262', fontSize: 11 }}>
+            {Object.values(selected).map((item) => (
+              <li key={`${item.type}:${item.key}`}>
+                {item.type === 'group' ? '【类目】' : item.type === 'custom_node' ? '【自定义节点】' : '【节点】'}
+                {item.label}
+              </li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 8, color: '#ff9f0a', fontSize: 11 }}>
+            注意：引用被删节点的已保存工作流在还原之前无法运行。
+          </div>
+        </div>
+      </Dialog>
+
+      {/* 回收站弹窗 */}
+      <Dialog
+        open={showTrash}
+        onClose={() => setShowTrash(false)}
+        title="回收站"
+        className="w-[480px]"
+        footer={
+          <Button variant="secondary" onClick={() => setShowTrash(false)}>
+            关闭
+          </Button>
+        }
+      >
+        {trashLoading ? (
+          <div style={{ color: '#646262', fontSize: 12, padding: 12 }}>加载中...</div>
+        ) : trashItems.length === 0 ? (
+          <div style={{ color: '#9a9898', fontSize: 12, padding: 12, textAlign: 'center' }}>
+            回收站为空
+          </div>
+        ) : (
+          <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+            {trashItems.map((entry) => (
+              <div
+                key={`${entry.type}:${entry.key}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '7px 4px',
+                  borderBottom: '1px solid rgba(15,0,0,0.08)',
+                  fontSize: 12,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: '#646262',
+                    border: '1px solid rgba(15,0,0,0.16)',
+                    borderRadius: 3,
+                    padding: '0 4px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {entry.type === 'group' ? '类目' : entry.type === 'custom_node' ? '自定义' : '节点'}
+                </span>
+                <span style={{ flex: 1, color: '#201d1d', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {entry.label}
+                </span>
+                <span style={{ color: '#9a9898', fontSize: 10, flexShrink: 0 }}>
+                  {entry.deleted_at ? new Date(entry.deleted_at * 1000).toLocaleString('zh-CN', { hour12: false }) : ''}
+                </span>
+                <button
+                  onClick={() => handleRestore(entry)}
+                  disabled={restoringKey === `${entry.type}:${entry.key}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    padding: '3px 8px',
+                    background: 'transparent',
+                    border: '1px solid rgba(0,122,255,0.4)',
+                    borderRadius: 4,
+                    color: '#007aff',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    flexShrink: 0,
+                  }}
+                >
+                  <Undo2 size={11} />
+                  {restoringKey === `${entry.type}:${entry.key}` ? '还原中' : '还原'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </Dialog>
     </div>
   );

@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { ArrowRight } from 'lucide-react';
 import { useBackendHealth } from '@/hooks/useBackendHealth';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -104,29 +106,52 @@ function StatusCard({
 function StatRow({
   label,
   detail,
+  extra,
   onClick,
 }: {
   label: string;
   detail: string;
+  /** 展开后显示的明细内容 */
+  extra?: React.ReactNode;
   onClick?: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const mono = 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace';
   return (
-    <div
-      className="flex items-center justify-between py-2 cursor-pointer hover:bg-[#f1eeee] px-2 rounded-[4px] transition-colors"
-      onClick={onClick}
-    >
-      <span
-        className="text-sm text-[#201d1d]"
-        style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace' }}
-      >
-        [+] {label}
-      </span>
-      <span
-        className="text-sm text-[#646262]"
-        style={{ fontFamily: 'Berkeley Mono, IBM Plex Mono, ui-monospace, monospace' }}
-      >
-        {detail}
-      </span>
+    <div>
+      <div className="flex items-center justify-between py-2 px-2 rounded-[4px] transition-colors hover:bg-[#f1eeee]">
+        {/* [+] / [-] 切换展开 */}
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex items-center gap-2 bg-transparent border-none cursor-pointer p-0"
+          style={{ fontFamily: mono }}
+          title={expanded ? '收起' : '展开详情'}
+        >
+          <span className="text-sm text-[#646262]">{expanded ? '[-]' : '[+]'}</span>
+          <span className="text-sm text-[#201d1d]">{label}</span>
+        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-[#646262]" style={{ fontFamily: mono }}>
+            {detail}
+          </span>
+          {/* 小箭头：跳转到对应页面 */}
+          <button
+            type="button"
+            onClick={onClick}
+            className="flex h-5 w-5 items-center justify-center rounded-[4px] text-[#646262] transition-colors hover:bg-[#e8e5e5] hover:text-[#201d1d] bg-transparent border-none cursor-pointer"
+            style={{ fontFamily: mono }}
+            title="进入"
+          >
+            <ArrowRight size={13} />
+          </button>
+        </div>
+      </div>
+      {expanded && extra && (
+        <div className="px-2 pb-2 pl-8 text-xs text-[#646262]" style={{ fontFamily: mono }}>
+          {extra}
+        </div>
+      )}
     </div>
   );
 }
@@ -278,18 +303,31 @@ export default function Dashboard() {
           <StatRow
             label="工作流"
             detail={`预置 ${totalWorkflows - myWorkflowCount} 个，我的 ${myWorkflowCount} 个`}
+            extra={
+              <div className="leading-relaxed">
+                预置模板 {totalWorkflows - myWorkflowCount} 个·可直接复制为自己的工作流<br />
+                我的工作流 {myWorkflowCount} 个·点右侧箭头进入工作流列表
+              </div>
+            }
             onClick={() => navigate('/workflow')}
           />
           <div style={{ borderBottom: '1px solid rgba(15,0,0,0.12)' }} />
           <StatRow
             label="因子库"
             detail={`预置 ${presetFactorCount} 个，自建 ${customFactorCount} 个`}
+            extra={
+              <div className="leading-relaxed">
+                预置因子 {presetFactorCount} 个·支持公式/LaTeX 查看、IC 排序与 AI 分析<br />
+                自建因子 {customFactorCount} 个·点右侧箭头进入因子研究
+              </div>
+            }
             onClick={() => navigate('/factor')}
           />
           <div style={{ borderBottom: '1px solid rgba(15,0,0,0.12)' }} />
           <StatRow
             label="实验"
             detail={`${experimentCount} 个`}
+            extra={<div>共 {experimentCount} 个实验记录·点右侧箭头查看实验列表</div>}
             onClick={() => navigate('/experiments')}
           />
         </div>

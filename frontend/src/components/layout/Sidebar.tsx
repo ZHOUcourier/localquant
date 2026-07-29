@@ -24,15 +24,11 @@ export default function Sidebar() {
     <div
       className="flex flex-col h-full shrink-0"
       style={{
-        width: 200,
-        background: '#f1eeee',
-        borderRight: '1px solid rgba(15, 0, 0, 0.12)',
+        width: 220,
+        background: '#f8f7f7',
       }}
     >
-      <div
-        className="flex items-center h-10 px-4 shrink-0"
-        style={{ borderBottom: '1px solid rgba(15, 0, 0, 0.12)' }}
-      >
+      <div className="flex items-center h-14 px-5 shrink-0">
         <span
           className="text-base font-bold tracking-wide"
           style={{ color: '#007aff', fontFamily: 'var(--font-mono)' }}
@@ -41,43 +37,30 @@ export default function Sidebar() {
         </span>
       </div>
 
-      <nav className="flex-1 py-2 overflow-y-auto">
+      <nav className="flex-1 px-2 py-2 overflow-y-auto">
         {navItems.map(({ to, icon: Icon, label, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
             className={({ isActive }) =>
-              `relative flex items-center gap-2 px-4 no-underline transition-colors duration-100 ${
+              `relative flex items-center gap-2.5 px-3 rounded-[4px] no-underline transition-colors duration-100 ${
                 isActive
-                  ? 'text-[#201d1d] bg-[#f8f7f7]'
-                  : 'text-[#646262] hover:text-[#201d1d] hover:bg-[#f8f7f7]'
+                  ? 'text-[#201d1d] bg-[#e8e5e5] font-medium'
+                  : 'text-[#646262] hover:text-[#201d1d] hover:bg-[#f1eeee]'
               }`
             }
-            style={{ height: 36 }}
+            style={{ height: 40, marginBottom: 2 }}
           >
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <span
-                    className="absolute left-0 top-0 bottom-0"
-                    style={{
-                      width: 2,
-                      background: '#007aff',
-                    }}
-                  />
-                )}
-                <Icon size={16} />
-                <span className="text-[13px]">{label}</span>
-              </>
-            )}
+            <Icon size={16} />
+            <span className="text-[13px]">{label}</span>
           </NavLink>
         ))}
       </nav>
 
       <div
-        className="shrink-0 px-4 py-2 text-[11px]"
-        style={{ color: '#646262', borderTop: '1px solid rgba(15, 0, 0, 0.12)' }}
+        className="shrink-0 px-5 py-3 text-[11px]"
+        style={{ color: '#9a9898' }}
       >
         v0.1.0
       </div>

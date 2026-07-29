@@ -52,7 +52,12 @@ class FeatureEngineeringOutput(BaseModel):
     name="特征工程构建",
     group="03-特征工程",
     box_color="#9C27B0",
-    description="基于原始数据自动构建多类特征因子，包括技术指标、统计量、时序特征等",
+    description="对指定特征列做标准化/归一化变换，并可批量生成滞后项与滚动统计量特征",
+    example="QMT行情数据 → 特征工程构建 → 机器学习模型",
+    notes=[
+        "data 需连线提供；feature_cols 留空时对全部数值列处理",
+        "滞后阶数与滚动窗口均用逗号分隔，如 1,5,10",
+    ],
 )
 class FeatureEngineeringNode(BaseWorkNode):
     """输入DataFrame，配置特征列和参数，输出特征矩阵"""

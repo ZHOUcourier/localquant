@@ -7,9 +7,62 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.services import custom_node_service, plugin_service
+from backend.services import custom_node_service, palette_service, plugin_service
 
 router = APIRouter()
+
+
+class TrashItem(BaseModel):
+    type: str  # group | node | custom_node
+    key: str
+    label: Optional[str] = None
+
+
+class TrashBatchRequest(BaseModel):
+    items: list[TrashItem]
+
+
+@router.get("/palette/trash")
+async def list_palette_trash():
+    """回收站清单：隐藏的内置节点/类目 + 删除的自定义节点"""
+    items = palette_service.list_trash()
+    items.extend(custom_node_service.list_trashed_custom_nodes())
+    items.sort(key=lambda x: -x.get("deleted_at", 0))
+    return {"items": items}
+
+
+@router.post("/palette/hide")
+async def hide_palette_items(body: TrashBatchRequest):
+    """批量隐藏节点/类目（移入回收站）；自定义节点走删除逻辑（文件入回收站）"""
+    nodes = [
+        {"key": i.key, "label": i.label or i.key}
+        for i in body.items
+        if i.type == "node"
+    ]
+    groups = [
+        {"key": i.key, "label": i.label or i.key}
+        for i in body.items
+        if i.type == "group"
+    ]
+    for i in body.items:
+        if i.type == "custom_node":
+            custom_node_service.delete_custom_node(i.key)
+    palette_service.hide_items(nodes, groups)
+    return {"ok": True}
+
+
+@router.post("/palette/restore")
+async def restore_palette_items(body: TrashBatchRequest):
+    """从回收站批量还原节点/类目/自定义节点"""
+    node_keys = [i.key for i in body.items if i.type == "node"]
+    group_keys = [i.key for i in body.items if i.type == "group"]
+    palette_service.restore_items(node_keys, group_keys)
+    failed = []
+    for i in body.items:
+        if i.type == "custom_node":
+            if not custom_node_service.restore_custom_node(i.key):
+                failed.append(i.key)
+    return {"ok": True, "failed": failed}
 
 
 class CustomNodeCreate(BaseModel):

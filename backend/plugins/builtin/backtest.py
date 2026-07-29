@@ -1,8 +1,7 @@
 """回测相关内置工作流节点"""
 
-import numpy as np
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
@@ -17,19 +16,24 @@ from backend.services.backtest_analysis import backtest_analysis
 class BacktestInput(BaseModel):
     """回测输入"""
 
-    signals: dict  # DataFrame dict: {col: {index: value}}
-    prices: dict  # DataFrame dict: {col: {index: value}}
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    signals: dict = {}  # 信号面板 dict: {col: {index: value}}
+    prices: dict = {}  # 价格面板 dict: {col: {index: value}}
+    benchmark: dict = {}  # 可选基准收益/收盘序列 {index: value}
     initial_capital: float = 1_000_000.0
-    commission_rate: float = 0.001
-    slippage: float = 0.001
+    commission_rate: float = 0.0008  # 默认佣金率（与官网一致）
+    slippage: float = 0.0
+    frequency: str = "1d"  # 回测频率
 
 
 @ui(
     signals={"input_type": "None"},
     prices={"input_type": "None"},
+    benchmark={"input_type": "None"},
     initial_capital={"input_type": "number_field"},
     commission_rate={"input_type": "number_field"},
     slippage={"input_type": "number_field"},
+    frequency={"input_type": "combobox", "options": ["1d", "1w", "1mon"]},
 )
 class BacktestInputUI(BacktestInput):
     pass
@@ -38,11 +42,14 @@ class BacktestInputUI(BacktestInput):
 class BacktestOutput(BaseModel):
     """回测输出"""
 
-    equity_curve: dict  # {index: value}
-    strategy_returns: dict  # {index: value}
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    equity_curve: dict = {}  # {index: value}
+    strategy_returns: dict = {}  # {index: value}
     drawdown_curve: dict = {}  # {index: value} 回撤曲线
-    positions: dict  # {index: value}
-    metrics: dict = {}  # 绩效指标: 总收益/年化/波动/夏普/最大回撤等
+    positions: dict = {}  # {index: value}
+    metrics: dict = {}  # 完整绩效指标
+    monthly_returns: dict = {}  # 月度收益
+    benchmark_curve: dict = {}  # 基准净值曲线（如提供基准）
     initial_capital: float = 0.0
 
 
@@ -50,7 +57,13 @@ class BacktestOutput(BaseModel):
     name="回测",
     group="08-回测",
     box_color="red",
-    description="执行策略回测，模拟交易并生成绩效报告",
+    description="基于信号与价格面板执行向量化回测，输出净值/回撤曲线与完整绩效指标（年化收益/波动/夏普/索提诺/卡玛/最大回撤/VaR/胜率/盈亏比/月度收益）",
+    example="因子构建（信号） + QMT行情数据（价格） → 回测 → 输出",
+    notes=[
+        "signals / prices 均需连线提供（面板：index=日期, columns=股票）；benchmark 为可选基准收盘序列",
+        "佣金率默认 0.0008，滑点默认 0；T 日信号 T+1 执行；指标按 252 交易日年化",
+        "提供 benchmark 时额外输出跟踪误差/信息比率等相对基准指标",
+    ],
 )
 class BacktestNode(BaseWorkNode):
     @classmethod
@@ -64,8 +77,9 @@ class BacktestNode(BaseWorkNode):
     def run(self, input: BacktestInputUI) -> BacktestOutput:
         signals = pd.DataFrame(input.signals)
         prices = pd.DataFrame(input.prices)
+        if signals.empty or prices.empty:
+            raise ValueError("回测：需要连线提供 signals（信号）与 prices（价格）面板")
 
-        # 尝试将 index 转为 datetime
         for df in (signals, prices):
             try:
                 df.index = pd.to_datetime(df.index)
@@ -79,38 +93,34 @@ class BacktestNode(BaseWorkNode):
             commission_rate=input.commission_rate,
             slippage=input.slippage,
         )
-
         equity_curve = result["equity_curve"]
-        strategy_returns = result["strategy_returns"]
+        strategy_returns = pd.Series(result["strategy_returns"])
         positions = result["positions"]
 
-        # 绩效指标 + 回撤曲线
-        ret_series = pd.Series(strategy_returns)
-        metrics: dict = {}
-        drawdown_curve: dict = {}
-        if len(ret_series) > 1:
-            metrics["total_return"] = float((1 + ret_series).prod() - 1)
-            metrics["annual_return"] = float(ret_series.mean() * 252)
-            metrics["annual_volatility"] = float(ret_series.std() * np.sqrt(252))
-            metrics["sharpe_ratio"] = (
-                float(metrics["annual_return"] / metrics["annual_volatility"])
-                if metrics["annual_volatility"] != 0
-                else 0.0
+        # 基准收益（可选）：benchmark 为收盘序列则转收益率，否则当作收益率
+        benchmark_returns = None
+        benchmark_curve: dict = {}
+        if input.benchmark:
+            bm = pd.Series(input.benchmark)
+            try:
+                bm.index = pd.to_datetime(bm.index)
+            except Exception:
+                pass
+            bm = bm.sort_index().astype(float)
+            # 启发式：值普遍 > 1 视为价格，转收益率；否则视为收益率
+            benchmark_returns = (
+                bm.pct_change().fillna(0.0) if bm.abs().mean() > 1 else bm
             )
-            cum_nav = (1 + ret_series).cumprod()
-            drawdown = cum_nav / cum_nav.cummax() - 1
-            metrics["max_drawdown"] = float(drawdown.min())
-            metrics["calmar_ratio"] = (
-                float(metrics["annual_return"] / abs(metrics["max_drawdown"]))
-                if metrics["max_drawdown"] != 0
-                else 0.0
-            )
-            active_days = ret_series[ret_series != 0]
-            metrics["win_rate"] = (
-                float((active_days > 0).mean()) if len(active_days) > 0 else 0.0
-            )
-            metrics["trading_days"] = int(len(ret_series))
-            drawdown_curve = {str(k): float(v) for k, v in drawdown.items()}
+            bm_nav = (1 + benchmark_returns).cumprod()
+            benchmark_curve = {str(k): float(v) for k, v in bm_nav.items()}
+
+        # 完整绩效指标 + 回撤曲线（复用 backtest_analysis 服务）
+        metrics = backtest_analysis.performance_tear_sheet(
+            strategy_returns, benchmark_returns=benchmark_returns
+        )
+        monthly_returns = metrics.pop("monthly_returns", {})
+        dd = backtest_analysis.drawdown_analysis(strategy_returns.dropna())
+        drawdown_curve = {str(k): float(v) for k, v in dd["drawdown_series"].items()}
 
         return BacktestOutput(
             equity_curve={str(k): float(v) for k, v in equity_curve.items()},
@@ -123,5 +133,7 @@ class BacktestNode(BaseWorkNode):
                 for k, row in positions.items()
             },
             metrics=metrics,
+            monthly_returns=monthly_returns,
+            benchmark_curve=benchmark_curve,
             initial_capital=result["initial_capital"],
         )

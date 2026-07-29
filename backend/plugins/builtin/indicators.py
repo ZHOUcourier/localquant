@@ -18,6 +18,17 @@ class DataFrameIO(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
+def _node_params(input) -> dict:
+    """从传入的 Pydantic 输入模型提取参数字典（runner 传入 input_model 实例）"""
+    if input is None:
+        return {}
+    if hasattr(input, "model_fields"):
+        return {k: getattr(input, k, None) for k in type(input).model_fields}
+    if hasattr(input, "__dict__"):
+        return dict(input.__dict__)
+    return {}
+
+
 # ────────────────────────── 1. MA / EMA ──────────────────────────
 
 
@@ -41,7 +52,9 @@ class MAOutput(BaseModel):
     name="MA/EMA 均线",
     group="04-技术指标",
     box_color="#2196F3",
-    description="计算移动平均线(MA)和指数移动平均线(EMA)",
+    description="计算移动平均线(SMA)或指数移动平均线(EMA)，在数据上新增均线列",
+    example="QMT行情数据 → MA/EMA 均线 → 数据筛选",
+    notes=["data 需连线提供含 close 列的行情数据"],
 )
 class MANode(BaseWorkNode):
     """简单/指数移动平均线"""
@@ -54,8 +67,8 @@ class MANode(BaseWorkNode):
     def output_model(cls) -> Optional[Type[BaseModel]]:
         return MAOutput
 
-    def run(self, ctx) -> dict:
-        params = self._get_params(ctx)
+    def run(self, input) -> dict:
+        params = _node_params(input)
         df: pd.DataFrame = params.get("data")
         if df is None or df.empty:
             return {"data": pd.DataFrame()}
@@ -68,16 +81,6 @@ class MANode(BaseWorkNode):
         else:
             result.ta.sma(length=period, append=True)
         return {"data": result}
-
-    def _get_params(self, ctx) -> dict:
-        """合并连入输入与节点自身参数"""
-        if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
-            inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {
-                **self.__dict__,
-                **{k: v for k, v in inputs.items() if v is not None},
-            }
-        return self.__dict__
 
 
 # ────────────────────────── 2. MACD ──────────────────────────
@@ -105,7 +108,9 @@ class MACDOutput(BaseModel):
     name="MACD",
     group="04-技术指标",
     box_color="#2196F3",
-    description="计算MACD指标，包括DIF、DEA和柱状图",
+    description="计算MACD指标，新增DIF、DEA与柱状图列",
+    example="QMT行情数据 → MACD → 数据筛选（金叉信号）",
+    notes=["data 需连线提供含 close 列的行情数据"],
 )
 class MACDNode(BaseWorkNode):
     """MACD 指标（DIF / DEA / MACD 柱）"""
@@ -118,8 +123,8 @@ class MACDNode(BaseWorkNode):
     def output_model(cls) -> Optional[Type[BaseModel]]:
         return MACDOutput
 
-    def run(self, ctx) -> dict:
-        params = self._get_params(ctx)
+    def run(self, input) -> dict:
+        params = _node_params(input)
         df: pd.DataFrame = params.get("data")
         if df is None or df.empty:
             return {"data": pd.DataFrame()}
@@ -132,15 +137,6 @@ class MACDNode(BaseWorkNode):
             append=True,
         )
         return {"data": result}
-
-    def _get_params(self, ctx) -> dict:
-        if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
-            inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {
-                **self.__dict__,
-                **{k: v for k, v in inputs.items() if v is not None},
-            }
-        return self.__dict__
 
 
 # ────────────────────────── 3. RSI ──────────────────────────
@@ -163,6 +159,8 @@ class RSIOutput(BaseModel):
     group="04-技术指标",
     box_color="#2196F3",
     description="计算相对强弱指标(RSI)，衡量价格涨跌力度",
+    example="QMT行情数据 → RSI → 数据筛选（超买超卖）",
+    notes=["data 需连线提供含 close 列的行情数据"],
 )
 class RSINode(BaseWorkNode):
     """相对强弱指标"""
@@ -175,8 +173,8 @@ class RSINode(BaseWorkNode):
     def output_model(cls) -> Optional[Type[BaseModel]]:
         return RSIOutput
 
-    def run(self, ctx) -> dict:
-        params = self._get_params(ctx)
+    def run(self, input) -> dict:
+        params = _node_params(input)
         df: pd.DataFrame = params.get("data")
         if df is None or df.empty:
             return {"data": pd.DataFrame()}
@@ -184,15 +182,6 @@ class RSINode(BaseWorkNode):
         result = df.copy()
         result.ta.rsi(length=int(params.get("period", 14)), append=True)
         return {"data": result}
-
-    def _get_params(self, ctx) -> dict:
-        if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
-            inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {
-                **self.__dict__,
-                **{k: v for k, v in inputs.items() if v is not None},
-            }
-        return self.__dict__
 
 
 # ────────────────────────── 4. KDJ（Stochastic） ──────────────────────────
@@ -215,6 +204,8 @@ class KDJOutput(BaseModel):
     group="04-技术指标",
     box_color="#2196F3",
     description="计算KDJ随机指标，判断超买超卖信号",
+    example="QMT行情数据 → KDJ → 数据筛选",
+    notes=["data 需连线提供含 high/low/close 列的行情数据"],
 )
 class KDJNode(BaseWorkNode):
     """KDJ 随机指标（基于 Stochastic）"""
@@ -227,8 +218,8 @@ class KDJNode(BaseWorkNode):
     def output_model(cls) -> Optional[Type[BaseModel]]:
         return KDJOutput
 
-    def run(self, ctx) -> dict:
-        params = self._get_params(ctx)
+    def run(self, input) -> dict:
+        params = _node_params(input)
         df: pd.DataFrame = params.get("data")
         if df is None or df.empty:
             return {"data": pd.DataFrame()}
@@ -255,15 +246,6 @@ class KDJNode(BaseWorkNode):
 
         return {"data": result}
 
-    def _get_params(self, ctx) -> dict:
-        if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
-            inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {
-                **self.__dict__,
-                **{k: v for k, v in inputs.items() if v is not None},
-            }
-        return self.__dict__
-
 
 # ────────────────────────── 5. BOLL（布林带） ──────────────────────────
 
@@ -288,7 +270,9 @@ class BOLLOutput(BaseModel):
     name="BOLL 布林带",
     group="04-技术指标",
     box_color="#2196F3",
-    description="计算布林带指标，包括上轨、中轨、下轨",
+    description="计算布林带指标，新增上轨、中轨、下轨列",
+    example="QMT行情数据 → BOLL 布林带 → 数据筛选",
+    notes=["data 需连线提供含 close 列的行情数据"],
 )
 class BOLLNode(BaseWorkNode):
     """布林带指标"""
@@ -301,8 +285,8 @@ class BOLLNode(BaseWorkNode):
     def output_model(cls) -> Optional[Type[BaseModel]]:
         return BOLLOutput
 
-    def run(self, ctx) -> dict:
-        params = self._get_params(ctx)
+    def run(self, input) -> dict:
+        params = _node_params(input)
         df: pd.DataFrame = params.get("data")
         if df is None or df.empty:
             return {"data": pd.DataFrame()}
@@ -314,15 +298,6 @@ class BOLLNode(BaseWorkNode):
             append=True,
         )
         return {"data": result}
-
-    def _get_params(self, ctx) -> dict:
-        if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
-            inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {
-                **self.__dict__,
-                **{k: v for k, v in inputs.items() if v is not None},
-            }
-        return self.__dict__
 
 
 # ────────────────────────── 6. ATR ──────────────────────────
@@ -345,6 +320,8 @@ class ATROutput(BaseModel):
     group="04-技术指标",
     box_color="#2196F3",
     description="计算平均真实波幅(ATR)，衡量市场波动性",
+    example="QMT行情数据 → ATR → 数据筛选",
+    notes=["data 需连线提供含 high/low/close 列的行情数据"],
 )
 class ATRNode(BaseWorkNode):
     """平均真实波幅"""
@@ -357,8 +334,8 @@ class ATRNode(BaseWorkNode):
     def output_model(cls) -> Optional[Type[BaseModel]]:
         return ATROutput
 
-    def run(self, ctx) -> dict:
-        params = self._get_params(ctx)
+    def run(self, input) -> dict:
+        params = _node_params(input)
         df: pd.DataFrame = params.get("data")
         if df is None or df.empty:
             return {"data": pd.DataFrame()}
@@ -366,15 +343,6 @@ class ATRNode(BaseWorkNode):
         result = df.copy()
         result.ta.atr(length=int(params.get("period", 14)), append=True)
         return {"data": result}
-
-    def _get_params(self, ctx) -> dict:
-        if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
-            inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {
-                **self.__dict__,
-                **{k: v for k, v in inputs.items() if v is not None},
-            }
-        return self.__dict__
 
 
 # ────────────────────────── 7. 自定义公式 ──────────────────────────
@@ -397,7 +365,12 @@ class CustomFormulaOutput(BaseModel):
     name="自定义公式指标",
     group="04-技术指标",
     box_color="#2196F3",
-    description="用自定义公式表达式计算技术指标",
+    description="用自定义公式表达式在行情数据上计算技术指标列",
+    example="QMT行情数据 → 自定义公式指标 → 因子构建",
+    notes=[
+        "公式可用 df 变量与小写列名，如 (close - open) / open",
+        "计算失败时输出列为 NaN，不会中断工作流",
+    ],
 )
 class CustomFormulaNode(BaseWorkNode):
     """基于自定义公式计算指标"""
@@ -410,8 +383,8 @@ class CustomFormulaNode(BaseWorkNode):
     def output_model(cls) -> Optional[Type[BaseModel]]:
         return CustomFormulaOutput
 
-    def run(self, ctx) -> dict:
-        params = self._get_params(ctx)
+    def run(self, input) -> dict:
+        params = _node_params(input)
         df: pd.DataFrame = params.get("data")
         if df is None or df.empty:
             return {"data": pd.DataFrame()}
@@ -438,12 +411,3 @@ class CustomFormulaNode(BaseWorkNode):
             result[output_col] = float("nan")
 
         return {"data": result}
-
-    def _get_params(self, ctx) -> dict:
-        if hasattr(ctx, "_pending_inputs") and hasattr(ctx, "_node_id"):
-            inputs = ctx._pending_inputs.get(ctx._node_id, {})
-            return {
-                **self.__dict__,
-                **{k: v for k, v in inputs.items() if v is not None},
-            }
-        return self.__dict__

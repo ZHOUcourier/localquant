@@ -1,17 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
+import { Sparkles } from 'lucide-react';
 import { useFlowStore } from '@/store/flowStore';
 import { ScrollArea } from '@/components/ui/ScrollArea';
 
 /** 后端 /runs/{run_id}/nodes/{uuid}/output 返回的单字段预览 */
 interface FieldPreview {
   name: string;
-  kind: 'table' | 'series' | 'metrics' | 'image' | 'images' | 'scalar' | 'json';
+  kind: 'table' | 'series' | 'multiseries' | 'metrics' | 'image' | 'images' | 'scalar' | 'json';
   columns?: string[];
   rows?: Record<string, unknown>[];
   shape?: [number, number];
   x?: string[];
   y?: number[];
+  series?: { name: string; y: (number | null)[] }[];
   data?: unknown;
 }
 
@@ -37,6 +39,19 @@ const FIELD_LABELS: Record<string, string> = {
   drawdown_curve: '回撤曲线',
   positions: '持仓',
   metrics: '绩效指标',
+  monthly_returns: '月度收益',
+  benchmark_curve: '基准净值',
+  summary: '关键指标',
+  group_perf: '分组绩效',
+  ic_summary: '各周期 IC 汇总',
+  group_cumulative: '分组累计收益',
+  group_excess_cumulative: '分组超额累计收益',
+  ic_series: 'IC / Rank_IC 时序',
+  ic_cumulative: 'IC / Rank_IC 累计',
+  ic_decay: 'IC / Rank_IC 衰减',
+  ic_distribution: 'IC 分布',
+  ic_autocorr: 'IC / Rank_IC 自相关',
+  latest_ranking: '最新一期因子值排名',
 };
 
 function fmtMetric(key: string, v: unknown): string {
@@ -121,6 +136,43 @@ function SeriesChart({ field }: { field: FieldPreview }) {
   return <ReactECharts option={option} style={{ height: 220, width: '100%' }} notMerge />;
 }
 
+const MULTI_COLORS = ['#ff3b30', '#ff9f0a', '#ffd60a', '#30d158', '#007aff', '#64d2ff', '#bf5af2', '#a2845e'];
+
+/** 多线时间序列图（分组累计收益 / IC 时序等） */
+function MultiSeriesChart({ field }: { field: FieldPreview }) {
+  const series = field.series || [];
+  const option = {
+    grid: { left: 56, right: 16, top: 28, bottom: 22 },
+    legend: { top: 0, textStyle: { fontSize: 10, color: '#646262' }, type: 'scroll' as const },
+    tooltip: {
+      trigger: 'axis' as const,
+      textStyle: { fontSize: 11 },
+      valueFormatter: (v: number) => (typeof v === 'number' ? v.toFixed(4) : String(v)),
+    },
+    xAxis: {
+      type: 'category' as const,
+      data: field.x || [],
+      axisLabel: { fontSize: 10, color: '#646262' },
+      axisLine: { lineStyle: { color: 'rgba(15,0,0,0.2)' } },
+    },
+    yAxis: {
+      type: 'value' as const,
+      scale: true,
+      axisLabel: { fontSize: 10, color: '#646262' },
+      splitLine: { lineStyle: { color: 'rgba(15,0,0,0.06)' } },
+    },
+    series: series.map((s, i) => ({
+      name: s.name,
+      type: 'line' as const,
+      data: s.y,
+      showSymbol: false,
+      lineStyle: { width: 1.4, color: MULTI_COLORS[i % MULTI_COLORS.length] },
+      itemStyle: { color: MULTI_COLORS[i % MULTI_COLORS.length] },
+    })),
+  };
+  return <ReactECharts option={option} style={{ height: 260, width: '100%' }} notMerge />;
+}
+
 /** 表格 */
 function TableView({ field }: { field: FieldPreview }) {
   const columns = field.columns || [];
@@ -199,6 +251,9 @@ function FieldBlock({ field }: { field: FieldPreview }) {
   switch (field.kind) {
     case 'series':
       body = <SeriesChart field={field} />;
+      break;
+    case 'multiseries':
+      body = <MultiSeriesChart field={field} />;
       break;
     case 'metrics':
       body = <MetricsCards data={(field.data as Record<string, unknown>) || {}} />;
@@ -284,6 +339,66 @@ const hintStyle: React.CSSProperties = {
   height: '100%',
 };
 
+/** 因子分析节点结果的 AI 综合分析（复用 /api/ai/factor-report） */
+function AIAnalysisPanel({ fields }: { fields: FieldPreview[] }) {
+  const [text, setText] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const summaryField = fields.find((f) => f.name === 'summary' && f.kind === 'metrics');
+  if (!summaryField) return null;
+  const summary = (summaryField.data as Record<string, unknown>) || {};
+  const perfField = fields.find((f) => f.name === 'group_perf' && f.kind === 'table');
+  const groupPerf = (perfField?.rows as Record<string, unknown>[]) || [];
+
+  const handleAI = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/ai/factor-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary, group_perf: groupPerf }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => null);
+        throw new Error(e?.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setText(data.analysis || '');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <button
+        onClick={handleAI}
+        disabled={loading}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+          border: '1px solid #007aff', background: 'rgba(0,122,255,0.1)', color: '#007aff',
+          borderRadius: 4, padding: '4px 12px', fontSize: 12, fontWeight: 500, opacity: loading ? 0.5 : 1,
+        }}
+      >
+        <Sparkles size={13} />
+        {loading ? 'AI 分析中...' : 'AI 综合分析'}
+      </button>
+      {error && (
+        <div style={{ marginTop: 8, border: '1px solid #ff3b30', background: 'rgba(255,59,48,0.1)', color: '#ff3b30', borderRadius: 4, padding: '6px 10px', fontSize: 11 }}>{error}</div>
+      )}
+      {text && (
+        <div style={{ marginTop: 8, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', border: '1px solid rgba(0,122,255,0.3)', background: 'rgba(0,122,255,0.05)', borderRadius: 4, padding: '10px 12px', fontSize: 11, lineHeight: 1.6, color: '#424245' }}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const ResultViewer: React.FC = () => {
   const selectedNodeId = useFlowStore((s) => s.selectedNodeId);
   const nodeStatuses = useFlowStore((s) => s.nodeStatuses);
@@ -336,12 +451,13 @@ export const ResultViewer: React.FC = () => {
   }
 
   // 排序：指标卡优先，其次曲线/图片，再表格，最后其他
-  const kindOrder: Record<string, number> = { metrics: 0, series: 1, image: 2, images: 2, table: 3, scalar: 4, json: 5 };
+  const kindOrder: Record<string, number> = { metrics: 0, series: 1, multiseries: 1, image: 2, images: 2, table: 3, scalar: 4, json: 5 };
   const sorted = [...fields].sort((a, b) => (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9));
 
   return (
     <ScrollArea maxHeight={360}>
       <div style={{ padding: '12px 16px' }}>
+        <AIAnalysisPanel fields={fields} />
         {sorted.map((f) => (
           <FieldBlock key={f.name} field={f} />
         ))}

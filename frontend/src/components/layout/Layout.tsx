@@ -1,10 +1,13 @@
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import { useBackendHealth } from '@/hooks/useBackendHealth';
 
 export default function Layout() {
   const { online, checking } = useBackendHealth();
+  const location = useLocation();
+  // 工作流编辑器需要满幅画布，不加内边距
+  const isCanvasPage = /^\/workflow\/[^/]+$/.test(location.pathname);
 
   return (
     <div className="flex h-screen" style={{ background: '#fdfcfc' }}>
@@ -28,7 +31,8 @@ export default function Layout() {
           </div>
         )}
 
-        <main className="flex-1 min-h-0 overflow-auto p-4">
+        {/* 内容区留白对齐 opencode 官网（content-panel padding: 2rem 3rem）；画布页不加内边距 */}
+        <main className={`flex-1 min-h-0 overflow-auto ${isCanvasPage ? '' : 'px-12 py-8'}`}>
           <Outlet />
         </main>
       </div>

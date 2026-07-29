@@ -1,15 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ScrollArea } from '@/components/ui/ScrollArea';
 import { Badge } from '@/components/ui/Badge';
 import type { BadgeVariant } from '@/components/ui/Badge';
-import { ScrollArea } from '@/components/ui/ScrollArea';
 
 export type LogStatus = 'running' | 'success' | 'failed' | 'info';
 
 export interface LogEntry {
   status: LogStatus;
+  level?: string; // info | error（后端 SSE 附带）
   message: string;
   timestamp: string;
-  node_id?: string;
+  node_uuid?: string;
   node_name?: string;
 }
 
@@ -31,9 +32,34 @@ const statusLabel: Record<LogStatus, string> = {
   info: '信息',
 };
 
+/** 级别筛选选项 */
+const LEVEL_OPTIONS = [
+  { value: 'all', label: '全部级别' },
+  { value: 'info', label: '信息' },
+  { value: 'running', label: '运行中' },
+  { value: 'success', label: '成功' },
+  { value: 'failed', label: '失败' },
+];
+
+const filterSelectStyle: React.CSSProperties = {
+  background: '#f8f7f7',
+  border: '1px solid rgba(15,0,0,0.12)',
+  borderRadius: 4,
+  color: '#646262',
+  fontSize: 11,
+  padding: '2px 6px',
+  outline: 'none',
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+};
+
 export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 筛选与排序
+  const [levelFilter, setLevelFilter] = useState('all');
+  const [nodeFilter, setNodeFilter] = useState('all'); // all | global | 节点uuid
+  const [sortDesc, setSortDesc] = useState(false); // false=时间正序（默认），true=倒序
 
   useEffect(() => {
     if (!workflowId) return;
@@ -43,7 +69,7 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
     const url = `/api/workflow/run/${workflowId}/stream`;
     const eventSource = new EventSource(url);
 
-    eventSource.onmessage = (event) => {
+    const push = (event: MessageEvent) => {
       try {
         const entry: LogEntry = JSON.parse(event.data);
         setLogs((prev) => [...prev, entry]);
@@ -51,6 +77,19 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
         // ignore malformed messages
       }
     };
+
+    eventSource.onmessage = push;
+    // 命名事件也要接收（后端使用 event: node_start 等命名事件）
+    for (const evt of [
+      'execution_order',
+      'node_start',
+      'node_complete',
+      'node_failed',
+      'workflow_complete',
+      'workflow_failed',
+    ]) {
+      eventSource.addEventListener(evt, push as EventListener);
+    }
 
     eventSource.onerror = () => {
       eventSource.close();
@@ -61,15 +100,42 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
     };
   }, [workflowId]);
 
-  // Auto-scroll to bottom
+  // 出现过的节点清单（用于按节点筛选）
+  const nodeOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const l of logs) {
+      if (l.node_uuid && l.node_name) map.set(l.node_uuid, l.node_name);
+    }
+    return Array.from(map.entries()).map(([uuid, name]) => ({ uuid, name }));
+  }, [logs]);
+
+  // 应用筛选 + 排序
+  const visibleLogs = useMemo(() => {
+    let result = logs;
+    if (levelFilter !== 'all') {
+      result = result.filter((l) => (l.status || 'info') === levelFilter);
+    }
+    if (nodeFilter === 'global') {
+      result = result.filter((l) => !l.node_uuid);
+    } else if (nodeFilter !== 'all') {
+      result = result.filter((l) => l.node_uuid === nodeFilter);
+    }
+    if (sortDesc) {
+      result = [...result].reverse();
+    }
+    return result;
+  }, [logs, levelFilter, nodeFilter, sortDesc]);
+
+  // Auto-scroll to bottom（仅正序时跟随）
   useEffect(() => {
+    if (sortDesc) return;
     if (scrollRef.current) {
       const el =
         scrollRef.current.querySelector('[data-radix-scroll-area-viewport]') ??
         scrollRef.current;
       el.scrollTop = el.scrollHeight;
     }
-  }, [logs]);
+  }, [visibleLogs, sortDesc]);
 
   if (!workflowId) {
     return (
@@ -79,43 +145,94 @@ export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
     );
   }
 
-  if (logs.length === 0) {
-    return (
-      <div style={{ color: '#646262', fontSize: 12, padding: 16, fontFamily: 'monospace' }}>
-        等待执行日志...
-      </div>
-    );
-  }
-
   return (
-    <ScrollArea maxHeight={200} ref={scrollRef}>
-      <div style={{ fontFamily: 'monospace', fontSize: 12, lineHeight: '20px' }}>
-        {logs.map((entry, idx) => (
-          <div
-            key={idx}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '2px 12px',
-              borderBottom: '1px solid rgba(15,0,0,0.12)',
-            }}
-          >
-            <span style={{ color: '#646262', flexShrink: 0, fontSize: 11 }}>
-              {entry.timestamp
-                ? new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour12: false })
-                : '--:--:--'}
-            </span>
-            {entry.node_name && (
-              <span style={{ color: '#424245', minWidth: 80 }}>{entry.node_name}</span>
-            )}
-            <Badge variant={statusVariant[entry.status]}>
-              {statusLabel[entry.status]}
-            </Badge>
-            <span style={{ color: '#646262', fontSize: 11 }}>{entry.message}</span>
-          </div>
-        ))}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* 筛选栏 */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '4px 12px',
+          borderBottom: '1px solid rgba(15,0,0,0.12)',
+          fontFamily: 'var(--font-mono, monospace)',
+          flexShrink: 0,
+        }}
+      >
+        <select
+          value={levelFilter}
+          onChange={(e) => setLevelFilter(e.target.value)}
+          style={filterSelectStyle}
+          title="按日志级别筛选"
+        >
+          {LEVEL_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <select
+          value={nodeFilter}
+          onChange={(e) => setNodeFilter(e.target.value)}
+          style={filterSelectStyle}
+          title="按节点/全局筛选"
+        >
+          <option value="all">全部来源</option>
+          <option value="global">全局（工作流级）</option>
+          {nodeOptions.map((n) => (
+            <option key={n.uuid} value={n.uuid}>{n.name}</option>
+          ))}
+        </select>
+        <button
+          onClick={() => setSortDesc((v) => !v)}
+          style={{ ...filterSelectStyle, cursor: 'pointer' }}
+          title="切换时间排序"
+        >
+          时间 {sortDesc ? '↓ 最新在前' : '↑ 最早在前'}
+        </button>
+        <span style={{ marginLeft: 'auto', color: '#9a9898', fontSize: 10 }}>
+          {visibleLogs.length}/{logs.length} 条
+        </span>
       </div>
-    </ScrollArea>
+
+      {logs.length === 0 ? (
+        <div style={{ color: '#646262', fontSize: 12, padding: 16, fontFamily: 'monospace' }}>
+          等待执行日志...
+        </div>
+      ) : (
+        <ScrollArea maxHeight={200} ref={scrollRef}>
+          <div style={{ fontFamily: 'monospace', fontSize: 12, lineHeight: '20px' }}>
+            {visibleLogs.map((entry, idx) => (
+              <div
+                key={idx}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '2px 12px',
+                  borderBottom: '1px solid rgba(15,0,0,0.12)',
+                }}
+              >
+                <span style={{ color: '#646262', flexShrink: 0, fontSize: 11 }}>
+                  {entry.timestamp
+                    ? new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour12: false })
+                    : '--:--:--'}
+                </span>
+                <span style={{ color: '#424245', minWidth: 80 }}>
+                  {entry.node_name || '全局'}
+                </span>
+                <Badge variant={statusVariant[entry.status] || 'info'}>
+                  {statusLabel[entry.status] || '信息'}
+                </Badge>
+                <span style={{ color: '#646262', fontSize: 11 }}>{entry.message}</span>
+              </div>
+            ))}
+            {visibleLogs.length === 0 && (
+              <div style={{ color: '#9a9898', fontSize: 11, padding: 12 }}>
+                无匹配日志（调整上方筛选条件）
+              </div>
+            )}
+          </div>
+        </ScrollArea>
+      )}
+    </div>
   );
 };

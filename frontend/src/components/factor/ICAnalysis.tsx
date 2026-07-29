@@ -22,11 +22,27 @@ export interface ICStats {
   ir: number;
   rank_ic: number;
   positive_ratio: number;
+  std?: number;
+  tstat?: number;
+  skew?: number;
+  kurtosis?: number;
+}
+
+/** 跨周期 IC 汇总（AlphaLens 风格 IC 表） */
+export interface ICSummaryRow {
+  period: number;
+  mean: number;
+  std: number;
+  ir: number;
+  tstat: number;
+  rank_ic: number;
+  positive_ratio: number;
 }
 
 interface ICAnalysisProps {
   icSeries: ICDataPoint[];
   stats: ICStats;
+  summary?: ICSummaryRow[];
   loading?: boolean;
 }
 
@@ -39,7 +55,7 @@ function StatCard({ label, value, color }: { label: string; value: string; color
   );
 }
 
-export default function ICAnalysis({ icSeries, stats, loading }: ICAnalysisProps) {
+export default function ICAnalysis({ icSeries, stats, summary, loading }: ICAnalysisProps) {
   const chartData = useMemo(
     () =>
       icSeries.map((d) => ({
@@ -75,6 +91,50 @@ export default function ICAnalysis({ icSeries, stats, loading }: ICAnalysisProps
           color={stats.positive_ratio > 0.5 ? 'text-[#30d158]' : 'text-[#ff9f0a]'}
         />
       </div>
+
+      {/* 扩展统计（t 值 / 偏度 / 峰度，AlphaLens 同口径） */}
+      {(stats.tstat != null || stats.std != null) && (
+        <div className="grid grid-cols-4 gap-2">
+          <StatCard label="IC 标准差" value={(stats.std ?? 0).toFixed(4)} color="text-[#201d1d]" />
+          <StatCard
+            label="t 值"
+            value={(stats.tstat ?? 0).toFixed(2)}
+            color={Math.abs(stats.tstat ?? 0) > 2 ? 'text-[#30d158]' : 'text-[#ff9f0a]'}
+          />
+          <StatCard label="偏度" value={(stats.skew ?? 0).toFixed(3)} color="text-[#201d1d]" />
+          <StatCard label="峰度" value={(stats.kurtosis ?? 0).toFixed(3)} color="text-[#201d1d]" />
+        </div>
+      )}
+
+      {/* 跨周期 IC 汇总表 */}
+      {summary && summary.length > 0 && (
+        <Card title="IC 汇总（各预测周期）">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className="bg-[#f8f7f7]">
+                {['周期', 'IC 均值', 'IC 标准差', 'IR', 't 值', 'Rank IC', 'IC>0 比例'].map((h) => (
+                  <th key={h} className="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-left font-medium text-[#646262]">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map((r) => (
+                <tr key={r.period} className="border-b border-[rgba(15,0,0,0.08)]">
+                  <td className="px-2 py-1.5 text-[#201d1d]">{r.period} 日</td>
+                  <td className={`px-2 py-1.5 ${r.mean > 0 ? 'text-[#30d158]' : 'text-[#ff3b30]'}`}>{r.mean.toFixed(4)}</td>
+                  <td className="px-2 py-1.5 text-[#201d1d]">{r.std.toFixed(4)}</td>
+                  <td className="px-2 py-1.5 text-[#201d1d]">{r.ir.toFixed(3)}</td>
+                  <td className={`px-2 py-1.5 ${Math.abs(r.tstat) > 2 ? 'text-[#30d158]' : 'text-[#646262]'}`}>{r.tstat.toFixed(2)}</td>
+                  <td className="px-2 py-1.5 text-[#201d1d]">{r.rank_ic.toFixed(4)}</td>
+                  <td className="px-2 py-1.5 text-[#201d1d]">{(r.positive_ratio * 100).toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
 
       {/* IC 时序折线图 */}
       <Card title="IC 时序" className={loading ? 'opacity-50' : ''}>

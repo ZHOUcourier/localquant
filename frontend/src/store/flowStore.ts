@@ -27,6 +27,10 @@ interface FlowState {
   nodeStatuses: Record<string, NodeStatus>;
   currentRunId: string | null;
 
+  // 画布锁定（锁定后禁止拖拽/连线/增删节点）
+  locked: boolean;
+  setLocked: (locked: boolean) => void;
+
   // 脏状态追踪
   isDirty: boolean;
 
@@ -65,6 +69,9 @@ export const useFlowStore = create<FlowState>((set) => ({
   isRunning: false,
   nodeStatuses: {},
   currentRunId: null,
+
+  locked: false,
+  setLocked: (locked) => set({ locked }),
 
   isDirty: false,
 
@@ -139,5 +146,9 @@ export const useFlowStore = create<FlowState>((set) => ({
     }),
 
   onConnect: (connection) =>
-    set((state) => ({ edges: addEdge(connection, state.edges), isDirty: true })),
+    set((state) =>
+      state.locked
+        ? {}
+        : { edges: addEdge(connection, state.edges), isDirty: true }
+    ),
 }));

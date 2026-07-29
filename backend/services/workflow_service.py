@@ -427,8 +427,31 @@ async def list_runs(workflow_id: str) -> list[dict[str, Any]]:
 
 
 def _df_preview(df, max_rows: int = 200) -> dict[str, Any]:
-    """DataFrame → 表格预览（含索引列，NaN → None）"""
-    import pandas as pd  # noqa: F401
+    """DataFrame → 预览：时间索引的多数值列 → 多线图；否则表格（NaN → None）"""
+    import numpy as np
+    import pandas as pd
+
+    # 时间索引 + 多数值列 + 足够行数 → 多线图（对齐官网的曲线展现）
+    numeric = df.select_dtypes(include=[np.number])
+    if (
+        1 <= numeric.shape[1] <= 12
+        and numeric.shape[0] >= 8
+        and _keys_look_like_dates(list(df.index[:5]))
+    ):
+        x = [str(i)[:10] for i in df.index]
+        series = [
+            {
+                "name": str(c),
+                "y": [None if pd.isna(v) else float(v) for v in numeric[c]],
+            }
+            for c in numeric.columns
+        ]
+        return {
+            "kind": "multiseries",
+            "x": x,
+            "series": series,
+            "shape": [int(df.shape[0]), int(df.shape[1])],
+        }
 
     head = df.head(max_rows).reset_index()
     rows = json.loads(

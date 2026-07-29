@@ -1,43 +1,38 @@
 {
   "name": "因子研究模板",
-  "description": "从数据获取到因子分析的完整流程",
+  "description": "公式因子构建 → IC 分析 / 分层收益（基于本地 QMT 行情，因子构建节点按股票池+区间自取数据）",
   "nodes": [
     {
       "uuid": "n1",
-      "name": "QMTKlineNode",
-      "title": "获取K线",
-      "positionX": 50,
-      "positionY": 100,
-      "width": 240,
-      "height": 180,
-      "static_input_data": { "period": "1d", "start_date": "20200101" }
+      "name": "FactorFormulaNode",
+      "title": "因子构建（公式）",
+      "positionX": 80,
+      "positionY": 160,
+      "width": 260,
+      "height": 200,
+      "static_input_data": {
+        "formula": "RANK(close / DELAY(close, 20) - 1)",
+        "start_date": "20200101",
+        "end_date": "20231231",
+        "direction": "正向"
+      }
     },
     {
       "uuid": "n2",
-      "name": "FactorFormulaNode",
-      "title": "因子构建",
-      "positionX": 350,
-      "positionY": 100,
+      "name": "ICNode",
+      "title": "IC 计算",
+      "positionX": 440,
+      "positionY": 60,
       "width": 240,
       "height": 180,
-      "static_input_data": { "formula": "" }
+      "static_input_data": { "periods": "1,5,10,20", "method": "rank_ic" }
     },
     {
       "uuid": "n3",
-      "name": "ICNode",
-      "title": "IC分析",
-      "positionX": 650,
-      "positionY": 50,
-      "width": 240,
-      "height": 180,
-      "static_input_data": {}
-    },
-    {
-      "uuid": "n4",
       "name": "GroupReturnNode",
-      "title": "分层收益",
-      "positionX": 650,
-      "positionY": 260,
+      "title": "分组收益",
+      "positionX": 440,
+      "positionY": 300,
       "width": 240,
       "height": 180,
       "static_input_data": { "n_groups": 5 }
@@ -47,23 +42,30 @@
     {
       "uuid": "l1",
       "previous_node_uuid": "n1",
-      "output_field_name": "kline_data",
+      "output_field_name": "factor_data",
       "next_node_uuid": "n2",
-      "input_field_name": "data"
+      "input_field_name": "factor_data"
     },
     {
       "uuid": "l2",
-      "previous_node_uuid": "n2",
+      "previous_node_uuid": "n1",
+      "output_field_name": "return_data",
+      "next_node_uuid": "n2",
+      "input_field_name": "return_data"
+    },
+    {
+      "uuid": "l3",
+      "previous_node_uuid": "n1",
       "output_field_name": "factor_data",
       "next_node_uuid": "n3",
       "input_field_name": "factor_data"
     },
     {
-      "uuid": "l3",
-      "previous_node_uuid": "n2",
-      "output_field_name": "factor_data",
-      "next_node_uuid": "n4",
-      "input_field_name": "factor_data"
+      "uuid": "l4",
+      "previous_node_uuid": "n1",
+      "output_field_name": "return_data",
+      "next_node_uuid": "n3",
+      "input_field_name": "return_data"
     }
   ]
 }

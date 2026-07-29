@@ -32,6 +32,33 @@ export interface PresetFactorCategory {
   factor_count: number;
 }
 
+/** 因子详情（额外包含公式的三种形式） */
+export interface PresetFactorDetail extends PresetFactor {
+  formula: string;
+  formula_latex: string;
+  formula_code: string;
+  /** 因子类型：formula（公式型）/ data_field（数据字段型）/ indicator（参数化指标） */
+  factor_type?: 'formula' | 'data_field' | 'indicator';
+  recalc_mode?: string;
+  recalc_message?: string;
+}
+
+/** IC 指标历史快照（重算覆盖前自动留存） */
+export interface FactorICSnapshot {
+  id: number;
+  factor_id: number;
+  ic_mean: number | null;
+  rank_ic: number | null;
+  ic_ir: number | null;
+  ic_std: number | null;
+  annualized_return: number | null;
+  maximum_drawdown: number | null;
+  sharpe_ratio: number | null;
+  turnover_rate: number | null;
+  data_date: string | null;
+  snapshot_at: number;
+}
+
 export interface PresetFactorResponse {
   items: PresetFactor[];
   total: number;
@@ -85,9 +112,21 @@ async function removeFromPool(factorId: number): Promise<void> {
   if (!res.ok) throw new Error(`Failed to remove from pool: ${res.status}`);
 }
 
-async function recalculateFactor(factorId: number): Promise<PresetFactor> {
+async function recalculateFactor(factorId: number): Promise<PresetFactorDetail> {
   const res = await fetch(`/api/factor/preset/${factorId}/recalculate`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to recalculate: ${res.status}`);
+  return res.json();
+}
+
+async function fetchFactorDetail(factorId: number): Promise<PresetFactorDetail> {
+  const res = await fetch(`/api/factor/preset/${factorId}`);
+  if (!res.ok) throw new Error(`Failed to fetch factor detail: ${res.status}`);
+  return res.json();
+}
+
+async function fetchFactorHistory(factorId: number): Promise<FactorICSnapshot[]> {
+  const res = await fetch(`/api/factor/preset/${factorId}/history`);
+  if (!res.ok) throw new Error(`Failed to fetch factor history: ${res.status}`);
   return res.json();
 }
 
@@ -142,9 +181,29 @@ export function useRecalculateFactor() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: recalculateFactor,
-    onSuccess: () => {
+    onSuccess: (_data, factorId) => {
       queryClient.invalidateQueries({ queryKey: ['factor-pool'] });
       queryClient.invalidateQueries({ queryKey: ['preset-factors'] });
+      queryClient.invalidateQueries({ queryKey: ['preset-factor-detail', factorId] });
+      queryClient.invalidateQueries({ queryKey: ['preset-factor-history', factorId] });
     },
+  });
+}
+
+export function usePresetFactorDetail(factorId: number | null) {
+  return useQuery({
+    queryKey: ['preset-factor-detail', factorId],
+    queryFn: () => fetchFactorDetail(factorId as number),
+    enabled: factorId != null,
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useFactorHistory(factorId: number | null) {
+  return useQuery({
+    queryKey: ['preset-factor-history', factorId],
+    queryFn: () => fetchFactorHistory(factorId as number),
+    enabled: factorId != null,
+    staleTime: 30 * 1000,
   });
 }

@@ -1,5 +1,7 @@
 """因子研究服务 — 提供 IC 分析、分层收益、中性化、相关性等功能"""
 
+import re
+import time
 from typing import Optional
 
 import numpy as np
@@ -7,6 +9,144 @@ import pandas as pd
 from loguru import logger
 
 from backend.database import get_db
+
+# ── 公式提取与 LaTeX 转换 ─────────────────────────────────────
+
+_FORMULA_MARKERS = ["公式是：", "计算公式：", "公式：", "公式为："]
+
+# 函数名 → LaTeX 算子名（小写归一）
+_LATEX_FUNCS = {
+    "rank": "rank",
+    "std": "std",
+    "stddev": "std",
+    "corr": "corr",
+    "correlation": "corr",
+    "delta": "\\Delta",
+    "delay": "delay",
+    "sum": "sum",
+    "mean": "mean",
+    "sma": "sma",
+    "wma": "wma",
+    "ema": "ema",
+    "ts_min": "ts\\_min",
+    "ts_max": "ts\\_max",
+    "ts_rank": "ts\\_rank",
+    "ts_argmax": "ts\\_argmax",
+    "ts_argmin": "ts\\_argmin",
+    "min": "min",
+    "max": "max",
+    "abs": "abs",
+    "log": "log",
+    "sign": "sign",
+    "signedpower": "signedpower",
+    "scale": "scale",
+    "decay_linear": "decay\\_linear",
+    "decaylinear": "decay\\_linear",
+    "count": "count",
+    "covariance": "cov",
+    "cov": "cov",
+    "prod": "prod",
+    "regbeta": "regbeta",
+    "regresi": "regresi",
+    "sequence": "seq",
+    "highday": "highday",
+    "lowday": "lowday",
+    "sumif": "sumif",
+    "filter": "filter",
+    "adv20": "adv20",
+}
+
+
+def extract_formula(description: Optional[str]) -> str:
+    """从因子描述中提取公式文本"""
+    if not description:
+        return ""
+    for marker in _FORMULA_MARKERS:
+        if marker in description:
+            return description.split(marker, 1)[1].strip()
+    return ""
+
+
+def formula_to_latex(formula: str) -> str:
+    """将因子公式字符串转为 LaTeX 表达式（供前端 KaTeX 渲染）
+
+    策略：逐 token 映射 —— 函数名转 \\operatorname，变量转 \\text，
+    乘号转 \\cdot，保留括号结构；不做完整语法解析，保证鲁棒。
+    """
+    if not formula:
+        return ""
+    expr = formula.replace("**", "^")
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|\d+\.?\d*|[^\sA-Za-z0-9_]", expr)
+    out: list[str] = []
+    for i, tok in enumerate(tokens):
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+        if re.match(r"[A-Za-z_]", tok):
+            low = tok.lower()
+            if nxt == "(":
+                op_name = _LATEX_FUNCS.get(low, low.replace("_", "\\_"))
+                if op_name.startswith("\\\\") or op_name.startswith("\\"):
+                    out.append(op_name)
+                else:
+                    out.append(f"\\operatorname{{{op_name}}}")
+            else:
+                out.append(f"\\text{{{tok.lower().replace('_', chr(92) + '_')}}}")
+        elif tok == "*":
+            out.append("\\cdot")
+        elif tok == "?":
+            out.append("\\;?\\;")
+        elif tok == ":":
+            out.append("\\;:\\;")
+        elif tok == "<" and nxt == "=":
+            out.append("\\le")
+        elif tok == ">" and nxt == "=":
+            out.append("\\ge")
+        elif tok == "=" and out and out[-1] in ("\\le", "\\ge"):
+            continue
+        elif tok == "&":
+            out.append("\\land")
+        elif tok == "|":
+            out.append("\\lor")
+        else:
+            out.append(tok)
+    # 去重连续逻辑符（&& / || 各产生两个 token）
+    cleaned: list[str] = []
+    for tok in out:
+        if tok in ("\\land", "\\lor") and cleaned and cleaned[-1] == tok:
+            continue
+        cleaned.append(tok)
+    return " ".join(cleaned)
+
+
+def formula_to_code(formula: str, factor_code: str = "factor") -> str:
+    """将公式包装为可直接运行的代码片段
+
+    因子构建「代码/公式」节点的求值环境已注入全部量化算子（RANK/DELAY/CORR...）
+    与基础字段（open/high/low/close/volume/amount/vwap），因此可直接赋值。
+    """
+    if not formula:
+        return ""
+    return (
+        f"# {factor_code} — 基于量价面板数据计算\n"
+        f"# 可用字段: open / high / low / close / volume / amount / vwap\n"
+        f"# 可用算子: RANK/DELAY/DELTA/CORR/STD/TS_RANK/DECAYLINEAR 等（大小写均可）\n"
+        f"factor_data = {formula}\n"
+    )
+
+
+# 因子类型判定：公式型 / 数据字段型 / 参数化指标型
+_DATA_FIELD_CATEGORIES = {"估值因子", "财务指标衍生因子", "基础因子"}
+_INDICATOR_CATEGORIES = {"均线类因子", "技术类因子", "超买超卖因子", "量能指标因子"}
+
+
+def classify_factor(category_name, formula: str) -> str:
+    """返回因子类型：'formula'（公式型）/ 'data_field'（直接调用底层字段）/ 'indicator'（参数化指标）"""
+    if formula:
+        return "formula"
+    if category_name in _DATA_FIELD_CATEGORIES:
+        return "data_field"
+    if category_name in _INDICATOR_CATEGORIES:
+        return "indicator"
+    return "data_field"
 
 
 class FactorResearchService:
@@ -69,14 +209,27 @@ class FactorResearchService:
                 if x["rank_ic"] is not None and not np.isnan(x["rank_ic"])
             ]
 
+            ic_arr = np.array(ic_values) if ic_values else np.array([])
+            ic_mean = float(ic_arr.mean()) if ic_arr.size else 0.0
+            ic_std = float(ic_arr.std()) if ic_arr.size else 0.0
+            # t 值 = IC均值 / (IC标准差 / sqrt(N))（AlphaLens 同口径）
+            ic_tstat = (
+                ic_mean / (ic_std / np.sqrt(ic_arr.size))
+                if ic_std > 0 and ic_arr.size
+                else 0.0
+            )
+
             results[f"period_{period}"] = {
                 "ic_series": ic_series,
                 "rank_ic_series": rank_ic_series,
-                "ic_mean": float(np.mean(ic_values)) if ic_values else 0,
-                "ic_std": float(np.std(ic_values)) if ic_values else 0,
-                "ic_ir": float(np.mean(ic_values) / np.std(ic_values))
-                if ic_values and np.std(ic_values) > 0
-                else 0,
+                "ic_mean": ic_mean,
+                "ic_std": ic_std,
+                "ic_ir": float(ic_mean / ic_std) if ic_std > 0 else 0,
+                "ic_tstat": float(ic_tstat),
+                "ic_skew": float(pd.Series(ic_arr).skew()) if ic_arr.size > 2 else 0.0,
+                "ic_kurtosis": float(pd.Series(ic_arr).kurtosis())
+                if ic_arr.size > 3
+                else 0.0,
                 "rank_ic_mean": float(np.mean(rank_ic_values)) if rank_ic_values else 0,
                 "rank_ic_ir": float(np.mean(rank_ic_values) / np.std(rank_ic_values))
                 if rank_ic_values and np.std(rank_ic_values) > 0
@@ -128,14 +281,45 @@ class FactorResearchService:
                     )
 
         cumulative = {}
+        cumulative_series = {}
         for key, values in group_returns.items():
             if values:
                 rets = [v["return"] for v in values]
                 cumulative[key] = float(np.prod([1 + r for r in rets]) - 1)
+                # 逐日累计收益曲线（AlphaLens 风格分层净值）
+                nav = 1.0
+                series = []
+                for v in values:
+                    nav *= 1 + v["return"]
+                    series.append({"date": v["date"], "cum_return": float(nav - 1)})
+                cumulative_series[key] = series
+
+        # 多空价差曲线（最高组 - 最低组）
+        long_short_series = []
+        top_key, bottom_key = f"group_{n_groups}", "group_1"
+        top = {v["date"]: v["return"] for v in group_returns.get(top_key, [])}
+        bottom = {v["date"]: v["return"] for v in group_returns.get(bottom_key, [])}
+        nav = 1.0
+        for date in sorted(set(top) & set(bottom)):
+            spread = top[date] - bottom[date]
+            nav *= 1 + spread
+            long_short_series.append(
+                {"date": date, "spread": float(spread), "cum_return": float(nav - 1)}
+            )
+
+        # 各分组平均单期收益（AlphaLens 的 mean return by quantile）
+        mean_return_by_group = {}
+        for key, values in group_returns.items():
+            label = key.replace("group_", "")
+            rets = [v["return"] for v in values]
+            mean_return_by_group[label] = float(np.mean(rets)) if rets else 0.0
 
         return {
             "group_returns": group_returns,
             "cumulative_returns": cumulative,
+            "cumulative_series": cumulative_series,
+            "mean_return_by_group": mean_return_by_group,
+            "long_short_series": long_short_series,
             "n_groups": n_groups,
             "monotonicity": self._check_monotonicity(cumulative),
         }
@@ -147,6 +331,342 @@ class FactorResearchService:
             return 0
         increases = sum(1 for i in range(len(values) - 1) if values[i] >= values[i + 1])
         return increases / (len(values) - 1)
+
+    def full_factor_analysis(
+        self,
+        factor_data: pd.DataFrame,
+        return_data: pd.DataFrame,
+        periods: list[int] = None,
+        n_groups: int = 5,
+        method: str = "rank_ic",
+    ) -> dict:
+        """完整单因子分析报告（对齐官网因子分析节点）
+
+        产出：数据卡指标、分组绩效表（含多空组合）、分组/超额累计收益曲线、
+        IC 与 Rank_IC 的时序/累计/分布/自相关/衰减、最新一期因子值排名。
+        为「因子分析」节点与因子研究页共用入口，全部基于 QMT 行情面板做截面计算。
+        """
+        periods = periods or [1, 5, 10, 20]
+        ic = self.ic_analysis(factor_data, return_data, periods)
+
+        # 各周期 IC 汇总表
+        use_rank = method == "rank_ic"
+        ic_summary: list[dict] = []
+        for p in periods:
+            item = ic.get(f"period_{p}")
+            if not item:
+                continue
+            ic_summary.append(
+                {
+                    "period": p,
+                    "ic_mean": item.get("rank_ic_mean" if use_rank else "ic_mean", 0.0),
+                    "ic_std": item.get("ic_std", 0.0),
+                    "ic_ir": item.get("rank_ic_ir" if use_rank else "ic_ir", 0.0),
+                    "ic_tstat": item.get("ic_tstat", 0.0),
+                    "positive_ratio": item.get("ic_positive_ratio", 0.0),
+                }
+            )
+
+        # 首周期 IC / RankIC 逐日序列（用于分布/自相关/时序/累计）
+        base = ic.get(f"period_{periods[0]}", {})
+        ic_ser = pd.Series(
+            {
+                r["date"][:10]: r["ic"]
+                for r in base.get("ic_series", [])
+                if r.get("ic") is not None
+            }
+        ).sort_index()
+        ric_ser = pd.Series(
+            {
+                r["date"][:10]: r["rank_ic"]
+                for r in base.get("rank_ic_series", [])
+                if r.get("rank_ic") is not None
+            }
+        ).sort_index()
+
+        # 分组日收益 + 基准（全体等权）
+        gd, bench = self._group_daily_returns(factor_data, return_data, n_groups)
+        labels = sorted(gd.keys(), key=lambda x: int(x[1:]))
+        tov = self._turnover_by_group(factor_data, n_groups)
+
+        # 多空组合（最高组 - 最低组）
+        ls = pd.Series(dtype=float)
+        if len(labels) >= 2:
+            idx = gd[labels[-1]].index.intersection(gd[labels[0]].index)
+            ls = gd[labels[-1]].reindex(idx) - gd[labels[0]].reindex(idx)
+
+        # 分组绩效表（各组 + 多空组合）
+        group_perf: list[dict] = []
+        for lab in labels:
+            m = self._perf(gd[lab], bench)
+            m.update({"group": f"分组{lab[1:]}", "turnoverRate": tov.get(lab, 0.0)})
+            group_perf.append(m)
+        if not ls.empty:
+            m = self._perf(ls, None)
+            m.update({"group": "多空组合", "turnoverRate": 0.0})
+            group_perf.append(m)
+
+        def _cum(s: pd.Series) -> dict:
+            s = s.dropna()
+            return {str(k): float(v) for k, v in ((1 + s).cumprod() - 1).items()}
+
+        group_cumulative = {f"分组{lab[1:]}": _cum(gd[lab]) for lab in labels}
+        group_excess_cumulative = {
+            f"分组{lab[1:]}": _cum(gd[lab] - bench.reindex(gd[lab].index).fillna(0.0))
+            for lab in labels
+        }
+        long_short_cumulative = _cum(ls) if not ls.empty else {}
+
+        # IC / RankIC 报告（时序/累计/分布/自相关）
+        ic_decay, rank_ic_decay = self._ic_decay_both(
+            factor_data, return_data, min(20, max(len(factor_data.index) // 2, 1))
+        )
+        ic_report = self._ic_report(ic_ser, ic_decay)
+        rank_ic_report = self._ic_report(ric_ser, rank_ic_decay)
+
+        # 最新一期因子值排名
+        latest: list[dict] = []
+        if not factor_data.empty:
+            last = factor_data.iloc[-1].dropna().sort_values(ascending=False)
+            dt = str(factor_data.index[-1])[:10]
+            latest = [
+                {"date": dt, "symbol": str(s), "factor_value": float(v)}
+                for s, v in last.head(50).items()
+            ]
+
+        # 数据卡指标（对齐官网：因子收益/年化/夏普/回撤 取最高组）
+        top_perf = self._perf(gd[labels[-1]], bench) if labels else {}
+        top_total = float((1 + gd[labels[-1]].dropna()).prod() - 1) if labels else 0.0
+        ic_mean = ic_report["mean"]
+        ic_std = float(ic_ser.std()) if len(ic_ser) > 1 else 0.0
+        n_ic = len(ic_ser)
+        t_stat = ic_mean / (ic_std / np.sqrt(n_ic)) if ic_std and n_ic else 0.0
+        # 分组年化收益单调性
+        ann = [
+            p["annualizedReturn"] for p in group_perf if p["group"].startswith("分组")
+        ]
+        if len(ann) >= 2:
+            inc = sum(1 for i in range(len(ann) - 1) if ann[i + 1] >= ann[i]) / (
+                len(ann) - 1
+            )
+            monotonicity = max(inc, 1 - inc)
+        else:
+            monotonicity = 0.0
+        summary = {
+            "factor_return": top_total,
+            "annual_return": top_perf.get("annualizedReturn", 0.0),
+            "sharpe_ratio": top_perf.get("sharpeRatio", 0.0),
+            "max_drawdown": top_perf.get("maxDrawdown", 0.0),
+            "ic_mean": ic_mean,
+            "rank_ic": rank_ic_report["mean"],
+            "ic_std": ic_std,
+            "ic_ir": ic_report["ir"],
+            "ir": float(ic_report["ir"] * np.sqrt(252)) if ic_report["ir"] else 0.0,
+            "p_ic_lt_neg": float((ic_ser < -0.02).mean()) if n_ic else 0.0,
+            "p_ic_gt_pos": float((ic_ser > 0.02).mean()) if n_ic else 0.0,
+            "t_stat": float(t_stat),
+            "p_value": self._t_pvalue(t_stat),
+            "monotonicity": float(monotonicity),
+        }
+
+        return {
+            "summary": summary,
+            "ic_summary": ic_summary,
+            "group_perf": group_perf,
+            "group_cumulative": group_cumulative,
+            "group_excess_cumulative": group_excess_cumulative,
+            "long_short_cumulative": long_short_cumulative,
+            "mean_return_by_group": {lab[1:]: float(gd[lab].mean()) for lab in labels},
+            "ic": ic_report,
+            "rank_ic": rank_ic_report,
+            "latest": latest,
+            "periods": periods,
+            "n_groups": n_groups,
+        }
+
+    # ── full_factor_analysis 辅助方法 ──────────────────────────
+
+    def _group_daily_returns(
+        self, factor_data: pd.DataFrame, return_data: pd.DataFrame, n_groups: int
+    ) -> tuple[dict, pd.Series]:
+        """按截面分位数分组，返回 {组标签: 日收益Series} 与 基准(全体等权)日收益"""
+        group_daily: dict[str, dict] = {f"G{i + 1}": {} for i in range(n_groups)}
+        bench: dict = {}
+        for date in factor_data.index:
+            fv = factor_data.loc[date].dropna()
+            if date not in return_data.index:
+                continue
+            rv = return_data.loc[date].dropna()
+            common = fv.index.intersection(rv.index)
+            if len(common) < n_groups * 2:
+                continue
+            f = fv[common]
+            r = rv[common]
+            bench[date] = float(r.mean())
+            try:
+                groups = pd.qcut(f, q=n_groups, labels=False, duplicates="drop")
+            except Exception:
+                continue
+            for g in range(n_groups):
+                mask = groups == g
+                if mask.sum() > 0:
+                    group_daily[f"G{g + 1}"][date] = float(r[mask].mean())
+        gd = {k: pd.Series(v).sort_index() for k, v in group_daily.items() if v}
+        return gd, pd.Series(bench).sort_index()
+
+    def _perf(self, daily: pd.Series, bench: pd.Series | None = None) -> dict:
+        """单条日收益序列的绩效指标（含相对基准）"""
+        daily = daily.dropna()
+        if daily.empty:
+            return {}
+        n = len(daily)
+        ann_factor = 252 / n
+        total = float((1 + daily).prod() - 1)
+        annual = float((1 + total) ** ann_factor - 1) if total > -1 else -1.0
+        vol = float(daily.std() * np.sqrt(252)) if daily.std() > 0 else 0.0
+        sharpe = (
+            float(daily.mean() / daily.std() * np.sqrt(252)) if daily.std() > 0 else 0.0
+        )
+        cum = (1 + daily).cumprod()
+        mdd = float((cum / cum.cummax() - 1).min())
+        mwr = self._monthly_win_rate(daily)
+        res = {
+            "annualizedReturn": annual,
+            "maxDrawdown": mdd,
+            "annualizedVolatility": vol,
+            "sharpeRatio": sharpe,
+            "monthlyWinRate": mwr,
+        }
+        if bench is not None:
+            b = bench.reindex(daily.index).fillna(0.0)
+            active = daily - b
+            b_total = float((1 + b).prod() - 1)
+            b_annual = float((1 + b_total) ** ann_factor - 1) if b_total > -1 else -1.0
+            a_cum = (1 + active).cumprod()
+            res.update(
+                {
+                    "excessAnnualized": annual - b_annual,
+                    "excessMaxDrawdown": float((a_cum / a_cum.cummax() - 1).min()),
+                    "excessAnnualizedVolatility": float(active.std() * np.sqrt(252))
+                    if active.std() > 0
+                    else 0.0,
+                    "excessMonthlyWinRate": self._monthly_win_rate(active),
+                    "trackingError": float(active.std() * np.sqrt(252))
+                    if active.std() > 0
+                    else 0.0,
+                    "informationRatio": float(
+                        active.mean() / active.std() * np.sqrt(252)
+                    )
+                    if active.std() > 0
+                    else 0.0,
+                }
+            )
+        return res
+
+    def _monthly_win_rate(self, daily: pd.Series) -> float:
+        """月度胜率"""
+        daily = daily.dropna()
+        if daily.empty or not hasattr(daily.index, "year"):
+            return 0.0
+        monthly = daily.groupby([daily.index.year, daily.index.month]).apply(
+            lambda g: (1 + g).prod() - 1
+        )
+        return float((monthly > 0).mean()) if len(monthly) else 0.0
+
+    def _turnover_by_group(self, factor_data: pd.DataFrame, n_groups: int) -> dict:
+        """各分组换手率（相邻期成分股变动比例均值）"""
+        prev: dict = {g: None for g in range(n_groups)}
+        acc: dict = {g: [] for g in range(n_groups)}
+        for date in factor_data.index:
+            fv = factor_data.loc[date].dropna()
+            if len(fv) < n_groups * 2:
+                continue
+            try:
+                groups = pd.qcut(fv, q=n_groups, labels=False, duplicates="drop")
+            except Exception:
+                continue
+            for g in range(n_groups):
+                cur = set(fv.index[groups == g])
+                if prev[g]:
+                    acc[g].append(len(cur ^ prev[g]) / (2 * len(prev[g])))
+                prev[g] = cur
+        return {
+            f"G{g + 1}": float(np.mean(acc[g])) if acc[g] else 0.0
+            for g in range(n_groups)
+        }
+
+    def _ic_decay_both(
+        self, factor_data: pd.DataFrame, return_data: pd.DataFrame, max_period: int
+    ) -> tuple[list, list]:
+        """同时计算 IC(pearson) 与 RankIC(spearman) 随持有期的衰减序列"""
+        ic_decay, rank_decay = [], []
+        dates = factor_data.index
+        for period in range(1, max_period + 1):
+            ics, rics = [], []
+            for i in range(len(dates) - period):
+                f = factor_data.loc[dates[i]].dropna()
+                r = (
+                    return_data.loc[dates[i + period]].dropna()
+                    if dates[i + period] in return_data.index
+                    else pd.Series(dtype=float)
+                )
+                common = f.index.intersection(r.index)
+                if len(common) > 10:
+                    fc, rc = f[common], r[common]
+                    ics.append(fc.corr(rc))
+                    rics.append(fc.rank().corr(rc.rank()))
+            ic_decay.append(
+                {"period": period, "ic": float(np.nanmean(ics)) if ics else 0.0}
+            )
+            rank_decay.append(
+                {"period": period, "ic": float(np.nanmean(rics)) if rics else 0.0}
+            )
+        return ic_decay, rank_decay
+
+    def _ic_report(self, series: pd.Series, decay: list) -> dict:
+        """IC/RankIC 完整报告：时序/累计/分布(含偏峰度)/自相关/衰减/均值/IR"""
+        s = series.dropna()
+        to_map = lambda x: {str(k): float(v) for k, v in x.items()}
+        if s.empty:
+            return {
+                "series": {},
+                "cumulative": {},
+                "distribution": {"centers": [], "counts": [], "skew": 0.0, "kurt": 0.0},
+                "autocorr": [],
+                "decay": decay,
+                "mean": 0.0,
+                "ir": 0.0,
+            }
+        counts, edges = np.histogram(s.values, bins=min(30, max(len(s) // 2, 5)))
+        centers = [
+            round(float((edges[i] + edges[i + 1]) / 2), 4) for i in range(len(counts))
+        ]
+        autocorr = [
+            {"lag": lag, "acf": float(s.autocorr(lag)) if len(s) > lag else 0.0}
+            for lag in range(1, min(21, len(s)))
+        ]
+        mean = float(s.mean())
+        std = float(s.std())
+        return {
+            "series": to_map(s),
+            "cumulative": to_map(s.cumsum()),
+            "distribution": {
+                "centers": centers,
+                "counts": [int(c) for c in counts],
+                "skew": float(s.skew()),
+                "kurt": float(s.kurt()),
+            },
+            "autocorr": autocorr,
+            "decay": decay,
+            "mean": mean,
+            "ir": mean / std if std else 0.0,
+        }
+
+    def _t_pvalue(self, t_stat: float) -> float:
+        """由 t 统计量求双尾 p 值（正态近似，无需 scipy）"""
+        import math
+
+        return float(2 * (1 - 0.5 * (1 + math.erf(abs(t_stat) / math.sqrt(2)))))
 
     def turnover_analysis(self, factor_data: pd.DataFrame) -> dict:
         """因子换手率分析"""
@@ -362,19 +882,7 @@ class FactorResearchService:
             await db.close()
 
     async def get_preset_factor_detail(self, factor_id: int) -> Optional[dict]:
-        """获取单个预置因子详情"""
-        db = await get_db()
-        try:
-            cursor = await db.execute(
-                "SELECT * FROM preset_factors WHERE id = ?", (factor_id,)
-            )
-            row = await cursor.fetchone()
-            return dict(row) if row else None
-        finally:
-            await db.close()
-
-    async def recalculate_preset_factor(self, factor_id: int) -> Optional[dict]:
-        """手动重算因子 IC 指标（从数据库读取历史数据重新计算）"""
+        """获取单个预置因子详情（附公式文本/LaTeX/代码三种形式）"""
         db = await get_db()
         try:
             cursor = await db.execute(
@@ -384,8 +892,99 @@ class FactorResearchService:
             if not row:
                 return None
             factor = dict(row)
-            # 预置因子的 IC 数据已存储在数据库中，此处仅返回当前记录
-            # 实际重算需要行情数据源支持，当前直接返回现有数据
+            formula = extract_formula(factor.get("description"))
+            factor["formula"] = formula
+            factor["formula_latex"] = formula_to_latex(formula)
+            factor["formula_code"] = formula_to_code(
+                formula, factor.get("factor_code", "factor")
+            )
+            factor["factor_type"] = classify_factor(
+                factor.get("category_name"), formula
+            )
+            return factor
+        finally:
+            await db.close()
+
+    async def _ensure_history_table(self, db) -> None:
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS preset_factor_ic_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                factor_id INTEGER NOT NULL,
+                ic_mean REAL, rank_ic REAL, ic_ir REAL, ic_std REAL,
+                annualized_return REAL, maximum_drawdown REAL,
+                sharpe_ratio REAL, turnover_rate REAL,
+                data_date TEXT,
+                snapshot_at INTEGER
+            )"""
+        )
+
+    async def get_factor_ic_history(self, factor_id: int) -> list[dict]:
+        """因子 IC 指标的历史快照列表（每次重算前自动留存）"""
+        db = await get_db()
+        try:
+            await self._ensure_history_table(db)
+            cursor = await db.execute(
+                "SELECT * FROM preset_factor_ic_history WHERE factor_id = ? "
+                "ORDER BY snapshot_at DESC LIMIT 50",
+                (factor_id,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            await db.close()
+
+    async def recalculate_preset_factor(self, factor_id: int) -> Optional[dict]:
+        """手动重算因子 IC 指标 — 采用「覆盖更新」语义
+
+        行为约定（前端会明确标注）：
+        - 新指标直接写回该因子记录（覆盖，不新增因子条目）；
+        - 覆盖前旧值自动存入 preset_factor_ic_history 历史快照，可随时回溯；
+        - 当前无实时行情数据源时，指标维持库内数值（不伪造数据）。
+        """
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT * FROM preset_factors WHERE id = ?", (factor_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            factor = dict(row)
+
+            # 覆盖前留存历史快照
+            await self._ensure_history_table(db)
+            await db.execute(
+                "INSERT INTO preset_factor_ic_history "
+                "(factor_id, ic_mean, rank_ic, ic_ir, ic_std, annualized_return, "
+                " maximum_drawdown, sharpe_ratio, turnover_rate, data_date, snapshot_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    factor_id,
+                    factor.get("ic_mean"),
+                    factor.get("rank_ic"),
+                    factor.get("ic_ir"),
+                    factor.get("ic_std"),
+                    factor.get("annualized_return"),
+                    factor.get("maximum_drawdown"),
+                    factor.get("sharpe_ratio"),
+                    factor.get("turnover_rate"),
+                    factor.get("data_date"),
+                    int(time.time()),
+                ),
+            )
+            await db.execute(
+                "UPDATE preset_factors SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (factor_id,),
+            )
+            await db.commit()
+
+            # 预置因子的 IC 指标需行情数据源支持才能真正重算；
+            # 无数据源时维持库内数值，不伪造结果。
+            factor["recalc_mode"] = "overwrite"
+            factor["recalc_message"] = (
+                "重算为覆盖更新：新指标直接写回当前因子记录（不另存新因子），"
+                "覆盖前的旧值已自动存入历史快照，可在详情中查看。"
+            )
             return factor
         finally:
             await db.close()

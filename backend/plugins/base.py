@@ -14,6 +14,8 @@ class BaseWorkNode(ABC):
     __work_node_type__: str = "general"  # 节点类型
     __work_node_box_color__: str = "black"  # 节点颜色标识
     __work_node_description__: str = ""  # 节点描述
+    __work_node_example__: str = ""  # 典型工作流示例
+    __work_node_notes__: list = []  # 使用注意事项
     __work_node_is_custom__: bool = False  # 是否为自定义/fork 节点
     __work_node_source_file__: str = ""  # 自定义节点的源码文件路径
     __work_node_base_name__: str = ""  # fork 来源节点类名
@@ -45,6 +47,8 @@ class BaseWorkNode(ABC):
             "group": self.__work_node_group__,
             "type_name": self.__work_node_type__,
             "description": self.__work_node_description__,
+            "example": self.__work_node_example__,
+            "notes": self.__work_node_notes__,
             "box_color": self.__work_node_box_color__,
             "is_custom": self.__work_node_is_custom__,
             "base_name": self.__work_node_base_name__,

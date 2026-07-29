@@ -30,3 +30,5 @@ export type { TooltipProps, TooltipPlacement } from './Tooltip';
 
 export { ScrollArea } from './ScrollArea';
 export type { ScrollAreaProps } from './ScrollArea';
+
+export { CodeEditor } from './CodeEditor';

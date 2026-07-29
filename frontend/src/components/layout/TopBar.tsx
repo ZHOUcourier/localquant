@@ -46,11 +46,11 @@ export default function TopBar() {
 
   return (
     <div
-      className="flex items-center justify-between px-4 shrink-0"
+      className="flex items-center justify-between px-8 shrink-0"
       style={{
-        height: 40,
-        background: '#f1eeee',
-        borderBottom: '1px solid rgba(15, 0, 0, 0.12)',
+        height: 56,
+        background: '#fdfcfc',
+        borderBottom: '1px solid rgba(15, 0, 0, 0.08)',
       }}
     >
       <div className="flex items-center gap-1">
@@ -58,7 +58,7 @@ export default function TopBar() {
           const isLast = i === crumbs.length - 1;
           if (isLast || !crumb.link) {
             return (
-              <span key={i} className="text-[13px] text-[#201d1d]">
+              <span key={i} className="text-[15px] font-medium text-[#201d1d]">
                 {crumb.text}
               </span>
             );

@@ -1,18 +1,10 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Handle, Position, type NodeProps, type Node } from '@xyflow/react';
+import { FileChartColumn } from 'lucide-react';
 import { useFlowStore, type NodeStatus } from '../../store/flowStore';
 import { NodeWidget } from './NodeWidget';
-
-// 节点类别色映射
-const BOX_COLORS: Record<string, string> = {
-  orange: '#007aff',
-  green: '#30d158',
-  yellow: '#ff9f0a',
-  '#ffd60a': '#ffd60a',
-  cyan: '#64d2ff',
-  red: '#ff3b30',
-  black: '#9a9898',
-};
+import { FactorReportDialog } from './FactorReportDialog';
+import { resolveNodeColor } from '../../lib/nodeColors';
 
 // 节点状态图标
 const STATUS_ICONS: Record<NodeStatus, string> = {
@@ -44,9 +36,14 @@ type WorkNodeType = Node<WorkNodeData>;
 
 function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
   const nodeStatuses = useFlowStore((s) => s.nodeStatuses);
+  const currentRunId = useFlowStore((s) => s.currentRunId);
   const status = nodeStatuses[id] || 'pending';
+  // 因子分析节点：运行成功后可直接打开综合分析报告
+  const [reportOpen, setReportOpen] = useState(false);
+  const showReportButton =
+    data.nodeType === 'FactorAnalysisNode' && status === 'success' && !!currentRunId;
 
-  const boxColor = BOX_COLORS[data.box_color || 'orange'] || '#007aff';
+  const boxColor = resolveNodeColor(data.box_color);
   const inputs = data.inputs || [];
   const outputs = data.outputs || [];
   const widgets = data.widgets || [];
@@ -226,6 +223,46 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
           ))}
         </div>
       </div>
+
+      {/* 因子分析节点：查看分析报告 */}
+      {showReportButton && (
+        <div style={{ padding: '0 10px 8px 12px' }}>
+          <button
+            className="nodrag"
+            onClick={(e) => {
+              e.stopPropagation();
+              setReportOpen(true);
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 5,
+              width: '100%',
+              cursor: 'pointer',
+              border: '1px solid #007aff',
+              background: 'rgba(0,122,255,0.08)',
+              color: '#007aff',
+              borderRadius: 4,
+              padding: '4px 8px',
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            <FileChartColumn size={12} />
+            查看分析报告
+          </button>
+        </div>
+      )}
+      {showReportButton && currentRunId && (
+        <FactorReportDialog
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          runId={currentRunId}
+          nodeUuid={id}
+          nodeLabel={data.label}
+        />
+      )}
     </div>
   );
 }

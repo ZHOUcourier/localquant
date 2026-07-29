@@ -175,20 +175,91 @@ def update_custom_node(
     return cls().get_schema()
 
 
+def _trash_dir() -> Path:
+    d = _custom_dir() / "trash"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def delete_custom_node(register_name: str) -> bool:
-    """删除自定义节点（注册表 + 磁盘文件）"""
+    """删除自定义节点：从注册表移除，文件移入回收站（data/custom_nodes/trash/）可还原"""
     d = _custom_dir()
     meta_path = d / f"{register_name}.json"
     py_path = d / f"{register_name}.py"
     existed = register_name in reg.ALL_WORK_NODES or meta_path.exists()
     reg.ALL_WORK_NODES.pop(register_name, None)
+    trash = _trash_dir()
     if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {"register_name": register_name}
+        meta["deleted_at"] = int(time.time())
+        (trash / f"{register_name}.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         meta_path.unlink()
     if py_path.exists():
-        py_path.unlink()
+        py_path.replace(trash / f"{register_name}.py")
     if existed:
-        logger.info(f"Custom node deleted: {register_name}")
+        logger.info(f"Custom node moved to trash: {register_name}")
     return existed
+
+
+def list_trashed_custom_nodes() -> list[dict]:
+    """回收站中的自定义节点列表"""
+    trash = _trash_dir()
+    items = []
+    for meta_path in sorted(trash.glob("*.json")):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            items.append(
+                {
+                    "type": "custom_node",
+                    "key": meta.get("register_name", meta_path.stem),
+                    "label": meta.get("display_name", meta_path.stem),
+                    "group": meta.get("group", ""),
+                    "deleted_at": meta.get("deleted_at", 0),
+                }
+            )
+        except Exception as e:
+            logger.error(f"Failed to read trashed node {meta_path.name}: {e}")
+    items.sort(key=lambda x: -x["deleted_at"])
+    return items
+
+
+def restore_custom_node(register_name: str) -> bool:
+    """从回收站还原自定义节点（文件移回 + 重新注册）"""
+    trash = _trash_dir()
+    meta_path = trash / f"{register_name}.json"
+    py_path = trash / f"{register_name}.py"
+    if not meta_path.exists() or not py_path.exists():
+        return False
+    d = _custom_dir()
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta.pop("deleted_at", None)
+    source = py_path.read_text(encoding="utf-8")
+
+    captured = _exec_in_isolated_registry(source)
+    cls = _pick_node_class(captured, meta.get("class_name") or None)
+    new_py = d / f"{register_name}.py"
+    _apply_meta(
+        cls,
+        register_name,
+        meta.get("display_name"),
+        meta.get("group"),
+        new_py,
+        meta.get("base_name") or None,
+    )
+    reg.ALL_WORK_NODES[register_name] = cls
+
+    py_path.replace(new_py)
+    (d / f"{register_name}.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    meta_path.unlink()
+    logger.info(f"Custom node restored from trash: {register_name}")
+    return True
 
 
 def load_persisted_custom_nodes() -> int:

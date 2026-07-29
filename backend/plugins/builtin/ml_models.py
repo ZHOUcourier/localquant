@@ -102,6 +102,12 @@ class MLPInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="多层感知机神经网络，适用于非线性回归与分类任务",
+    example="特征工程构建 → MLP模型 → 输出",
+    notes=[
+        "data 需连线提供含特征列与目标列的 DataFrame",
+        "需已安装 scikit-learn（make install-ml）",
+        "feature_cols 留空时使用除目标列外的全部数值列",
+    ],
 )
 class MLPNode(BaseWorkNode):
     """多层感知机模型"""
@@ -184,6 +190,11 @@ class RFInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="基于集成学习的随机森林，抗过拟合能力强",
+    example="特征工程构建 → 随机森林模型 → 输出",
+    notes=[
+        "data 需连线提供含特征列与目标列的 DataFrame",
+        "需已安装 scikit-learn（make install-ml）",
+    ],
 )
 class RFNode(BaseWorkNode):
     """随机森林模型"""
@@ -268,6 +279,11 @@ class LGBMInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="基于梯度提升树的高效模型，训练速度快",
+    example="特征工程构建 → LightGBM模型 → 输出",
+    notes=[
+        "data 需连线提供含特征列与目标列的 DataFrame",
+        "需已安装 lightgbm（macOS 需先 brew install libomp）",
+    ],
 )
 class LGBMNode(BaseWorkNode):
     """LightGBM 梯度提升树模型"""
@@ -352,6 +368,11 @@ class XGBInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="极端梯度提升树，量化投资常用模型",
+    example="特征工程构建 → XGBoost模型 → 输出",
+    notes=[
+        "data 需连线提供含特征列与目标列的 DataFrame",
+        "需已安装 xgboost（make install-ml）",
+    ],
 )
 class XGBNode(BaseWorkNode):
     """XGBoost 模型"""
@@ -442,6 +463,11 @@ class GRUInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="门控循环单元，适合时序数据建模",
+    example="特征工程构建 → GRU模型 → 输出",
+    notes=[
+        "data 需连线提供时序特征数据",
+        "需已安装 PyTorch（make install-ml）",
+    ],
 )
 class GRUNode(BaseWorkNode):
     """GRU 循环神经网络模型"""
@@ -566,6 +592,11 @@ class SVMInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="支持向量机，适合小样本分类与回归",
+    example="特征工程构建 → SVM模型 → 输出",
+    notes=[
+        "data 需连线提供含特征列与目标列的 DataFrame",
+        "样本量较大时训练速度慢，建议先降采样",
+    ],
 )
 class SVMNode(BaseWorkNode):
     """支持向量机模型"""
@@ -644,6 +675,11 @@ class LSTMInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="长短期记忆网络，捕捉时序长期依赖",
+    example="特征工程构建 → LSTM模型 → 输出",
+    notes=[
+        "data 需连线提供时序特征数据",
+        "需已安装 PyTorch（make install-ml）",
+    ],
 )
 class LSTMNode(BaseWorkNode):
     """LSTM 长短期记忆网络模型"""
@@ -766,6 +802,11 @@ class CNNInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="卷积神经网络，可提取局部时序模式特征",
+    example="特征工程构建 → CNN模型 → 输出",
+    notes=[
+        "data 需连线提供时序特征数据",
+        "需已安装 PyTorch（make install-ml）",
+    ],
 )
 class CNNNode(BaseWorkNode):
     """CNN 卷积神经网络模型（用于时序特征）"""
@@ -895,6 +936,11 @@ class TransformerInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="基于自注意力机制的深度学习模型",
+    example="特征工程构建 → Transformer模型 → 输出",
+    notes=[
+        "data 需连线提供时序特征数据",
+        "需已安装 PyTorch（make install-ml）",
+    ],
 )
 class TransformerNode(BaseWorkNode):
     """Transformer 注意力机制模型"""
@@ -1025,6 +1071,11 @@ class GNNInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="图神经网络，用于股票关联关系建模",
+    example="特征工程构建 → GNN模型 → 输出",
+    notes=[
+        "data 需连线提供特征数据",
+        "需已安装 PyTorch（make install-ml）",
+    ],
 )
 class GNNNode(BaseWorkNode):
     """图神经网络模型（基于 PyG）"""
@@ -1167,6 +1218,11 @@ class OptunaSearchOutput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="使用Optuna进行模型超参数自动搜索优化",
+    example="特征工程构建 → 超参数搜索(Optuna) → 输出",
+    notes=[
+        "data 需连线提供含特征列与目标列的 DataFrame",
+        "需已安装 optuna（make install-ml）；搜索轮数越多耗时越长",
+    ],
 )
 class OptunaSearchNode(BaseWorkNode):
     """基于 Optuna 的超参数搜索"""

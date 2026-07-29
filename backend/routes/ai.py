@@ -256,3 +256,156 @@ async def ai_status():
         "provider": settings.ai_provider,
         "model": settings.ai_model or preset["model"],
     }
+
+
+# ---------------------------------------------------------------------------
+# 场景 3：因子 AI 分析建议
+# ---------------------------------------------------------------------------
+
+FACTOR_ADVICE_SYSTEM = """你是量化因子研究专家。用户会提供一个选股因子的名称、公式与回测指标，请给出专业、简洁的分析与建议。
+
+输出要求（Markdown，中文，控制在 400 字以内）：
+## 因子逻辑解读
+用通俗语言解释公式在捕捉什么市场现象（动量/反转/量价背离等）
+## 指标评价
+逐项点评 IC 均值、ICIR、年化收益、回撤、换手率的强弱（给出行业经验参考区间）
+## 使用建议
+适合的使用场景（单因子/多因子合成/中性化后使用）、适合的调仓周期、风险提示
+
+只基于给定数据分析，缺失的指标说明数据不足即可，不要编造数值。"""
+
+
+class FactorAdviceRequest(BaseModel):
+    factor_name: str
+    factor_code: Optional[str] = None
+    formula: Optional[str] = None
+    description: Optional[str] = None
+    metrics: dict[str, Any] = {}
+
+
+@router.post("/factor-advice")
+async def ai_factor_advice(body: FactorAdviceRequest):
+    """AI 分析单个因子：解读公式逻辑 + 点评指标 + 使用建议"""
+    metrics_text = "\n".join(
+        f"- {k}: {v}" for k, v in body.metrics.items() if v is not None
+    )
+    user = (
+        f"因子名称：{body.factor_name}（{body.factor_code or ''}）\n"
+        f"因子公式：{body.formula or '未提供'}\n"
+        f"因子描述：{body.description or '无'}\n"
+        f"回测指标：\n{metrics_text or '无'}"
+    )
+    content = await _chat(FACTOR_ADVICE_SYSTEM, user, temperature=0.4)
+    return {"advice": content}
+
+
+# ---------------------------------------------------------------------------
+# 场景 5：因子综合分析报告（对应工作流「因子分析」节点与因子研究页）
+# ---------------------------------------------------------------------------
+
+FACTOR_REPORT_SYSTEM = """你是量化因子研究专家。用户会提供一个因子的完整单因子分析报告指标（IC / Rank_IC 统计、分层绩效、多空组合、换手率、单调性等），请给出专业、精炼的综合分析。
+
+输出要求（Markdown，中文，500 字以内）：
+## 因子有效性
+根据 IC 均值 / ICIR / t 统计量 / p 值 判断预测能力的显著性与稳定性（给出行业经验参考区间）
+## 分层与多空
+点评分层单调性、多空组合年化与夏普、超额收益与信息比率
+## 交易成本与实用性
+结合换手率、最大回撤，给出调仓周期与使用建议（单因子 / 多因子合成 / 中性化后使用）
+## 风险提示
+只基于给定数据分析，缺失的指标说明数据不足即可，不要编造数值。"""
+
+
+class FactorReportRequest(BaseModel):
+    factor_name: Optional[str] = None
+    summary: dict[str, Any] = {}
+    group_perf: list[dict[str, Any]] = []
+
+
+@router.post("/factor-report")
+async def ai_factor_report(body: FactorReportRequest):
+    """AI 解读因子综合分析报告（供因子分析节点与因子研究页共用）"""
+    if not body.summary:
+        raise HTTPException(status_code=400, detail="暂无报告指标可分析，请先计算因子")
+    summary_text = "\n".join(f"- {k}: {v}" for k, v in body.summary.items())
+    perf_lines = []
+    for row in body.group_perf[:8]:
+        g = row.get("group", "")
+        ar = row.get("annualizedReturn")
+        sr = row.get("sharpeRatio")
+        ir = row.get("informationRatio")
+        tr = row.get("turnoverRate")
+        perf_lines.append(f"- {g}: 年化={ar}, 夏普={sr}, 信息比率={ir}, 换手率={tr}")
+    user = (
+        f"因子名称：{body.factor_name or '当前因子'}\n\n"
+        f"## 关键指标\n{summary_text}\n\n"
+        f"## 分组绩效\n{chr(10).join(perf_lines) or '无'}"
+    )
+    content = await _chat(FACTOR_REPORT_SYSTEM, user, temperature=0.4)
+    return {"analysis": content}
+
+
+# ---------------------------------------------------------------------------
+# 场景 4：数据探索 AI（自然语言 → SQL / 结果解读）
+# ---------------------------------------------------------------------------
+
+EXPLORE_SQL_SYSTEM = """你是 DuckDB SQL 专家。用户会用自然语言描述对本地行情数据的查询需求，你输出一条可直接执行的 DuckDB SELECT 语句。
+
+## 数据结构
+- 行情数据以 Parquet 存储，每只股票一个文件：data/cache/1d/000001_SZ.parquet（文件名即股票代码，'.' 换成 '_'）
+- 典型列：open, high, low, close, volume, amount；日期在索引列（可用 read_parquet 后的隐式列名，建议 SELECT *）
+- 多文件查询：read_parquet('data/cache/1d/*.parquet', filename=true)，filename 列可提取股票代码
+{tables_info}
+
+## 要求
+- 只输出一条 SELECT 语句，不要任何解释或 markdown 围栏
+- 结果行数用 LIMIT 控制在 500 以内"""
+
+EXPLORE_INSIGHT_SYSTEM = """你是量化数据分析师。用户会提供一段查询结果数据（列名+前若干行），请用中文给出简洁的数据解读：关键统计特征、异常点、可能的投研含义。控制在 250 字以内，不要编造数据中不存在的信息。"""
+
+
+class ExploreSQLRequest(BaseModel):
+    question: str
+
+
+class ExploreInsightRequest(BaseModel):
+    columns: list[str]
+    rows: list[list[Any]]
+    context: Optional[str] = None
+
+
+@router.post("/explore-sql")
+async def ai_explore_sql(body: ExploreSQLRequest):
+    """自然语言生成 DuckDB SQL（由前端填入 SQL 面板执行）"""
+    if not body.question.strip():
+        raise HTTPException(status_code=400, detail="请描述查询需求")
+    # 把本地可用数据表信息注入提示词
+    from backend.routes.explorer import list_tables
+
+    tables = (await list_tables()).get("tables", [])
+    if tables:
+        lines = [
+            f"- 周期 {t['period']}：{t['stock_count']} 只股票，列 {t['columns']}，区间 {t['sample_range']}"
+            for t in tables
+        ]
+        tables_info = "## 当前本地数据\n" + "\n".join(lines)
+    else:
+        tables_info = "## 当前本地数据\n（暂无缓存数据）"
+    system = EXPLORE_SQL_SYSTEM.format(tables_info=tables_info)
+    content = _strip_code_fence(await _chat(system, body.question))
+    return {"sql": content}
+
+
+@router.post("/explore-insight")
+async def ai_explore_insight(body: ExploreInsightRequest):
+    """AI 解读查询结果数据"""
+    if not body.columns:
+        raise HTTPException(status_code=400, detail="无结果数据可分析")
+    sample = body.rows[:50]
+    user = (
+        (f"查询背景：{body.context}\n" if body.context else "")
+        + f"列：{body.columns}\n数据（前 {len(sample)} 行）：\n"
+        + "\n".join(str(r) for r in sample)
+    )
+    content = await _chat(EXPLORE_INSIGHT_SYSTEM, user, temperature=0.3)
+    return {"insight": content}

@@ -2,11 +2,15 @@ import { useMemo } from 'react';
 import {
   LineChart,
   Line,
+  BarChart,
+  Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceLine,
   Legend,
 } from 'recharts';
 import { Card } from '@/components/ui';
@@ -19,6 +23,9 @@ export interface QuantileDataPoint {
 export interface QuantileStats {
   groupReturns: Record<string, number>; // cumulative return per group
   longShortReturn: number;
+  /** 各分组平均单期收益（AlphaLens mean return by quantile） */
+  meanReturnByGroup?: Record<string, number>;
+  monotonicity?: number;
 }
 
 interface QuantileChartProps {
@@ -65,6 +72,15 @@ export default function QuantileChart({ data, stats, loading }: QuantileChartPro
     [data]
   );
 
+  // 各分组平均单期收益（AlphaLens 招牌图：mean return by quantile）
+  const meanReturnData = useMemo(() => {
+    const mrbg = stats.meanReturnByGroup;
+    if (!mrbg) return [];
+    return Object.keys(mrbg)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((g) => ({ group: `Q${g}`, ret: mrbg[g] }));
+  }, [stats.meanReturnByGroup]);
+
   return (
     <div className="flex flex-col gap-3">
       {/* 累计收益卡片 */}
@@ -81,6 +97,55 @@ export default function QuantileChart({ data, stats, loading }: QuantileChartPro
           value={`${(stats.longShortReturn * 100).toFixed(2)}%`}
         />
       </div>
+
+      {/* 分层平均收益柱状图（AlphaLens mean return by quantile） */}
+      {meanReturnData.length > 0 && (
+        <Card title="分层平均单期收益">
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={meanReturnData} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#403b3b" />
+              <XAxis
+                dataKey="group"
+                tick={{ fontSize: 11, fill: '#646262' }}
+                tickLine={{ stroke: '#403b3b' }}
+                axisLine={{ stroke: '#403b3b' }}
+              />
+              <YAxis
+                tick={{ fontSize: 11, fill: '#646262' }}
+                tickLine={{ stroke: '#403b3b' }}
+                axisLine={{ stroke: '#403b3b' }}
+                tickFormatter={(v: number) => `${(v * 100).toFixed(2)}%`}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: '#fdfcfc',
+                  border: '1px solid rgba(15,0,0,0.12)',
+                  borderRadius: 4,
+                  fontSize: 12,
+                }}
+                labelStyle={{ color: '#646262' }}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                formatter={(value: any) => [`${(Number(value) * 100).toFixed(3)}%`, '平均收益']}
+              />
+              <ReferenceLine y={0} stroke="#6e6e73" />
+              <Bar dataKey="ret" radius={[2, 2, 0, 0]}>
+                {meanReturnData.map((d, i) => (
+                  <Cell key={i} fill={d.ret >= 0 ? '#30d158' : '#ff3b30'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          {stats.monotonicity != null && (
+            <div className="mt-2 text-center text-xs text-[#646262]">
+              单调性得分：
+              <span className={stats.monotonicity >= 0.7 ? 'text-[#30d158]' : 'text-[#ff9f0a]'}>
+                {(stats.monotonicity * 100).toFixed(0)}%
+              </span>
+              （越高说明因子值与收益越单调）
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* 各组收益折线图 */}
       <Card title="分层累计收益" className={loading ? 'opacity-50' : ''}>
