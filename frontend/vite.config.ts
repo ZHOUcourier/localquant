@@ -1,10 +1,10 @@
 import path from 'path'
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [vue(), tailwindcss()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -16,6 +16,12 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+      },
+      // ComfyUI 前端（后端托管的独立 bundle）+ 其协议接口/WS
+      '/comfy': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        ws: true,
       },
     },
   },

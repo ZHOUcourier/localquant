@@ -1,0 +1,16 @@
+{
+ "Comfy.InstalledVersion": "1.47.10",
+ "Comfy.TutorialCompleted": true,
+ "Comfy.RightSidePanel.IsOpen": true,
+ "Comfy.Window.UnloadConfirmation": true,
+ "Comfy.TestKey": "hello",
+ "Comfy.Node.AlwaysShowAdvancedWidgets": true,
+ "Comfy.VueNodes.Enabled": true,
+ "Comfy.DevMode": true,
+ "Comfy.Node.ShowDeprecated": true,
+ "Comfy.NodeSearchBoxImpl.ShowNodeFrequency": true,
+ "Comfy.NodeSearchBoxImpl.ShowIdName": true,
+ "Comfy.ColorPalette": "light",
+ "LiteGraph.ContextMenu.Scaling": true,
+ "Comfy.LinkRenderMode": 2
+}

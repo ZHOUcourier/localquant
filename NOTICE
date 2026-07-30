@@ -1,0 +1,47 @@
+# NOTICE — 第三方组件与版权声明
+
+LocalQuant（本地投研工作站）以 **GPL-3.0-or-later** 分发。
+本文件依据 GPL-3.0 与各上游许可证要求，列出所含/所改写的第三方组件的版权、来源与所用版本。
+
+---
+
+## 1. ComfyUI（执行引擎与协议契约参考）
+
+- 项目：Comfy-Org/ComfyUI（原 comfyanonymous/ComfyUI）
+- 许可证：GPL-3.0
+- 版权：Copyright (c) 2023 comfyanonymous 及 ComfyUI 贡献者
+- 来源：https://github.com/comfyanonymous/ComfyUI
+- 使用方式：本项目后端 `backend/comfy/` 下的**协议适配层**（object_info / prompt /
+  ws / queue / history / system_stats 等）参考并实现了 ComfyUI 服务器的路由契约与
+  WebSocket 消息协议。相关源文件带有 `SPDX-License-Identifier: GPL-3.0-or-later`。
+
+## 2. ComfyUI_frontend（工作流编辑器前端）
+
+- 项目：Comfy-Org/ComfyUI_frontend
+- 许可证：GPL-3.0
+- 版权：Copyright (c) Comfy-Org 及 ComfyUI_frontend 贡献者
+- 来源：https://github.com/Comfy-Org/ComfyUI_frontend
+- 分发形态：经 PyPI 包 `comfyui-frontend-package==1.47.10` 引入的**编译后静态资源**，
+  由本项目后端托管在 `/comfy/` 路径，工作流页以 iframe 内嵌，未修改其产物。
+- 版本锁定：`comfyui-frontend-package==1.47.10`（锚定最新稳定核心版 requirements.txt
+  所 pin 的前端版本，前后端组合经上游 QA）。
+
+## 3. litegraph.js（ComfyUI_frontend 内含画布库）
+
+- 许可证：MIT
+- 版权：Copyright (c) 2013 Javi Agenjo
+- 来源：https://github.com/jagenjo/litegraph.js
+- 说明：自 2025-08 起并入 ComfyUI_frontend，随其静态资源一并分发（MIT 与 GPL-3.0 兼容）。
+
+## 4. panda_quantflow / panda_factor（契约与算子参考）
+
+- 项目：PandaAI-Tech/panda_factor 等
+- 许可证：GPL-3.0（与本项目兼容）
+- 来源：https://github.com/PandaAI-Tech/panda_factor
+- 说明：本项目节点契约（`BaseWorkNode`/`@work_node`）与因子算子库在设计上参考其
+  官网手册与公开实现；如逐点移植其具体实现，将在对应源文件保留出处与 SPDX 标识。
+
+---
+
+> 分发义务提醒：对外分发本作品（含二进制、SaaS 形态）时，须依据 GPL-3.0 一并提供
+> 完整对应源码（含本 NOTICE 与 LICENSE）。转 GPL-3.0 后闭源商用受限，此为已确认取舍。

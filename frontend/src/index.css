@@ -20,7 +20,7 @@
   --font-sans: 'Berkeley Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 
-html, body, #root {
+html, body, #app {
   height: 100%;
   margin: 0;
   padding: 0;
@@ -55,45 +55,6 @@ a {
 
 ::selection {
   background-color: rgba(0, 122, 255, 0.3);
-}
-
-.react-flow__edge-path {
-  stroke: #9a9898;
-  stroke-width: 2.5;
-}
-.react-flow__edge.selected .react-flow__edge-path {
-  stroke: #007aff;
-  stroke-width: 3;
-}
-.react-flow__connection-line .react-flow__edge-path {
-  stroke: #007aff;
-  stroke-width: 2.5;
-}
-.react-flow__controls {
-  background: #f1eeee !important;
-  border: 1px solid rgba(15, 0, 0, 0.12) !important;
-  border-radius: 4px !important;
-  box-shadow: none !important;
-}
-.react-flow__controls-button {
-  background: #f8f7f7 !important;
-  border-bottom: 1px solid rgba(15, 0, 0, 0.12) !important;
-  fill: #9a9898 !important;
-}
-.react-flow__controls-button:hover {
-  background: #f1eeee !important;
-  fill: #201d1d !important;
-}
-.react-flow__minimap {
-  background: #f1eeee !important;
-  border: 1px solid rgba(15, 0, 0, 0.12) !important;
-  border-radius: 4px !important;
-}
-.react-flow__handle {
-  cursor: crosshair;
-}
-.react-flow__node.selected {
-  outline: none;
 }
 
 @keyframes node-pulse {

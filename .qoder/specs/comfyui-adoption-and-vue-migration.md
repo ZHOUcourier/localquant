@@ -2,12 +2,13 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 文档状态 | 已批准（待 P0 PoC 验证后正式立项） |
+| 文档状态 | 已实施（P0–P5 已落地并验证；前端 build+typecheck 通过，后端协议闭环与 iframe 内嵌已验证） |
 | 决策日期 | 2026-07-30 |
 | 决策方案 | 方案 A：全量采用 ComfyUI，后端实现其协议 |
 | 前端策略 | 整体 React → Vue 重写（保留 opencode 浅色外壳外观），工作流页 iframe 内嵌 ComfyUI 前端 |
-| 许可证 | MIT → GPL-3.0-or-later |
-| 约束 | 零模拟数据原则不变；本文件仅为方案存档，实施前需 P0 PoC 卡点通过 |
+| 前端锁定 | comfyui-frontend-package==1.47.10（最新稳定核心版 requirements 所 pin，已启用 Nodes 2.0） |
+| 许可证 | MIT → GPL-3.0-or-later（已完成：LICENSE/pyproject/README/NOTICE/SPDX） |
+| 约束 | 零模拟数据原则不变；system_stats 等用真实 psutil 数据 |
 
 ---
 

@@ -77,6 +77,86 @@ class CustomNodeUpdate(BaseModel):
     display_name: Optional[str] = None
 
 
+class LintRequest(BaseModel):
+    source: str
+
+
+@router.post("/lint")
+async def lint_node_code(body: LintRequest):
+    """用 ruff 对节点代码做语法/风格检查，返回结构化诊断（供编辑器内联标记）
+
+    运行本地 ruff（stdin 输入），输出 JSON 诊断：
+    [{line, column, end_line, end_column, code, message, severity}]
+    ruff 不可用时降级为语法编译检查（compile）。
+    """
+    import ast
+    import json as _json
+    import os
+    import subprocess
+    import sys
+
+    source = body.source or ""
+    # 先做一次语法编译，捕获硬语法错误（ruff 也会报，但这里给更直接的定位）
+    try:
+        ast.parse(source)
+    except SyntaxError as e:
+        return {
+            "ok": False,
+            "diagnostics": [
+                {
+                    "line": e.lineno or 1,
+                    "column": e.offset or 1,
+                    "end_line": e.lineno or 1,
+                    "end_column": (e.offset or 1) + 1,
+                    "code": "E999",
+                    "message": f"语法错误: {e.msg}",
+                    "severity": "error",
+                }
+            ],
+        }
+
+    try:
+        # 优先用与当前解释器同目录的 ruff（.venv/bin/ruff），避免 PATH 不含 venv
+        ruff_bin = os.path.join(os.path.dirname(sys.executable), "ruff")
+        if not os.path.exists(ruff_bin):
+            ruff_bin = "ruff"
+        proc = subprocess.run(
+            [
+                ruff_bin,
+                "check",
+                "--output-format",
+                "json",
+                "--stdin-filename",
+                "node.py",
+                "-",
+            ],
+            input=source,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        raw = _json.loads(proc.stdout or "[]")
+        diagnostics = [
+            {
+                "line": (d.get("location") or {}).get("row", 1),
+                "column": (d.get("location") or {}).get("column", 1),
+                "end_line": (d.get("end_location") or {}).get("row", 1),
+                "end_column": (d.get("end_location") or {}).get("column", 1),
+                "code": d.get("code") or "",
+                "message": d.get("message") or "",
+                "severity": "error"
+                if str(d.get("code") or "").startswith("E")
+                else "warning",
+            }
+            for d in raw
+        ]
+        return {"ok": len(diagnostics) == 0, "diagnostics": diagnostics}
+    except FileNotFoundError:
+        return {"ok": True, "diagnostics": [], "note": "ruff 未安装，仅做了语法检查"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"代码检查失败: {e}")
+
+
 @router.get("/")
 async def list_plugins():
     return plugin_service.list_plugins()

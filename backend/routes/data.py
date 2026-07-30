@@ -253,57 +253,163 @@ async def ticker():
 #   2. 新浪财经 7×24 zhibo.sina.com.cn（备选）
 # 全部失败时返回明确错误，绝不伪造内容。结果内存缓存 60s，避免频繁外部请求。
 
-_NEWS_CACHE: dict = {"ts": 0.0, "source": "", "items": []}
+_NEWS_CACHE: dict = {"ts": 0.0, "source": "", "entries": []}
 _NEWS_TTL = 60.0
 _NEWS_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     "Referer": "https://www.eastmoney.com/",
 }
 
+# 重大事项关键词（无官方重要标记时的补充信号，如新浪）
+_IMPORTANT_KEYWORDS = (
+    "涨停",
+    "跌停",
+    "停牌",
+    "复牌",
+    "重组",
+    "并购",
+    "收购",
+    "回购",
+    "减持",
+    "增持",
+    "业绩预",
+    "中标",
+    "分红",
+    "解禁",
+    "退市",
+    "立案",
+    "处罚",
+    "举牌",
+    "重大资产",
+)
 
-async def _news_from_eastmoney(client: httpx.AsyncClient) -> list[str]:
-    """东方财富 7×24 快讯"""
+# 与证券无关的题材（无关联个股且命中时过滤，降低“乱七八糟”噪声）
+_IRRELEVANT_KEYWORDS = (
+    "地震",
+    "台风",
+    "暴雨",
+    "洪水",
+    "山火",
+    "车祸",
+    "交通事故",
+    "坑难",
+    "坠机",
+    "足球",
+    "篮球",
+    "比赛",
+    "奥运",
+    "娱乐",
+    "明星",
+    "演唱会",
+    "电影票房",
+    "天气",
+    "伤亡",
+    "遇难",
+    "疫情",
+    "地震台",
+)
+
+
+def _is_relevant(title: str, has_stock: bool, important: bool) -> bool:
+    """证券相关性：关联个股或官方标重要的一律保留；否则命中无关题材则丢弃"""
+    if has_stock or important:
+        return True
+    return not any(k in title for k in _IRRELEVANT_KEYWORDS)
+
+
+async def _news_from_eastmoney(client: httpx.AsyncClient) -> list[dict]:
+    """东方财富 7×24 快讯
+
+    重要度用官方 titleColor（!=0 为红色重要）——权威信号，避免关键词误红；
+    丢弃与证券无关的快讯；附详情 url（finance.eastmoney.com/a/{code}.html）。
+    """
     url = (
         "https://np-listapi.eastmoney.com/comm/web/getFastNewsList"
-        "?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=20&req_trace=lq"
+        "?client=web&biz=web_724&fastColumn=102&sortEnd=&pageSize=40&req_trace=lq"
     )
     resp = await client.get(url)
     resp.raise_for_status()
     data = resp.json()
-    items = []
+    entries = []
     for it in (data.get("data") or {}).get("fastNewsList") or []:
         title = (it.get("title") or "").strip()
-        show_time = (it.get("showTime") or "")[11:16]  # HH:MM
-        if title:
-            items.append(f"{show_time} {title}" if show_time else title)
-    return items
+        if not title:
+            continue
+        has_stock = bool(it.get("stockList"))
+        # titleColor 为官方红色重要标记（多为 "0"，"3" 等非 0 = 重要）
+        color = str(it.get("titleColor") or "0")
+        important = color not in ("", "0")
+        if not _is_relevant(title, has_stock, important):
+            continue
+        code = str(it.get("code") or "")
+        entries.append(
+            {
+                "time": (it.get("showTime") or "")[11:16],
+                "text": title,
+                "important": important,
+                "url": f"https://finance.eastmoney.com/a/{code}.html" if code else "",
+            }
+        )
+    return entries
 
 
-async def _news_from_sina(client: httpx.AsyncClient) -> list[str]:
-    """新浪财经 7×24 直播快讯"""
+async def _news_from_sina(client: httpx.AsyncClient) -> list[dict]:
+    """新浪财经 7×24 直播快讯（无官方重要标记，用关键词补充）"""
     url = (
         "https://zhibo.sina.com.cn/api/zhibo/feed"
-        "?page=1&page_size=20&zhibo_id=152&tag_id=0"
+        "?page=1&page_size=40&zhibo_id=152&tag_id=0"
     )
     resp = await client.get(url)
     resp.raise_for_status()
     data = resp.json()
     feed = ((data.get("result") or {}).get("data") or {}).get("feed") or {}
-    items = []
+    entries = []
     for it in feed.get("list") or []:
         text = (it.get("rich_text") or "").strip().replace("\n", " ")
-        create_time = (it.get("create_time") or "")[11:16]  # HH:MM
-        if text:
-            items.append(f"{create_time} {text}" if create_time else text)
-    return items
+        if not text:
+            continue
+        important = any(k in text for k in _IMPORTANT_KEYWORDS)
+        if not _is_relevant(text, False, important):
+            continue
+        entries.append(
+            {
+                "time": (it.get("create_time") or "")[11:16],
+                "text": text,
+                "important": important,
+                "url": (it.get("docurl") or ""),
+            }
+        )
+    return entries
+
+
+def _rank_and_dedupe(entries: list[dict]) -> list[dict]:
+    """去重 + 优先级分层：重要（个股/重大）置顶，各层内保持原时间倒序"""
+    seen: set[str] = set()
+    uniq: list[dict] = []
+    for e in entries:
+        if e["text"] in seen:
+            continue
+        seen.add(e["text"])
+        uniq.append(e)
+    return [e for e in uniq if e["important"]] + [e for e in uniq if not e["important"]]
+
+
+def _news_payload(source: str, entries: list[dict]) -> dict:
+    """统一输出：entries（结构化，带重要度）+ items（向后兼容的纯文本）"""
+    items = [f"{e['time']} {e['text']}".strip() for e in entries]
+    return {"source": source, "entries": entries, "items": items}
 
 
 @router.get("/news")
 async def news():
-    """状态栏资讯流：真实快讯源，不可用时返回错误（无任何伪造内容）"""
+    """状态栏资讯流：真实快讯源（不可用时返回错误，无任何伪造内容）
+
+    entries: [{time, text, important}] — 重要项置顶，供前端高亮与优先排序；
+    items:   ["HH:MM text", ...]       — 向后兼容的纯文本。
+    """
     now = time.time()
-    if _NEWS_CACHE["items"] and now - _NEWS_CACHE["ts"] < _NEWS_TTL:
-        return {"source": _NEWS_CACHE["source"], "items": _NEWS_CACHE["items"]}
+    if _NEWS_CACHE["entries"] and now - _NEWS_CACHE["ts"] < _NEWS_TTL:
+        return _news_payload(_NEWS_CACHE["source"], _NEWS_CACHE["entries"])
 
     sources = [
         ("eastmoney", _news_from_eastmoney),
@@ -312,23 +418,22 @@ async def news():
     async with httpx.AsyncClient(timeout=8.0, headers=_NEWS_HEADERS) as client:
         for source, fetcher in sources:
             try:
-                items = await fetcher(client)
+                entries = _rank_and_dedupe(await fetcher(client))
             except Exception as e:
                 logger.warning(f"资讯源 {source} 获取失败: {e}")
                 continue
-            if items:
-                _NEWS_CACHE.update({"ts": now, "source": source, "items": items})
-                return {"source": source, "items": items}
+            if entries:
+                _NEWS_CACHE.update({"ts": now, "source": source, "entries": entries})
+                return _news_payload(source, entries)
 
     # 全部失败：若有旧缓存则降级返回（仍是真实数据），否则明确报错
-    if _NEWS_CACHE["items"]:
-        return {
-            "source": _NEWS_CACHE["source"],
-            "items": _NEWS_CACHE["items"],
-            "stale": True,
-        }
+    if _NEWS_CACHE["entries"]:
+        payload = _news_payload(_NEWS_CACHE["source"], _NEWS_CACHE["entries"])
+        payload["stale"] = True
+        return payload
     return {
         "source": "",
+        "entries": [],
         "items": [],
         "error": "资讯源不可用（网络受限或接口变更）",
     }

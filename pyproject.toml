@@ -3,6 +3,12 @@ name = "localquant"
 version = "0.1.0"
 description = "本地投研工作站"
 requires-python = ">=3.12"
+license = "GPL-3.0-or-later"
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
 
 dependencies = [
     "fastapi>=0.115.0",
@@ -28,4 +34,7 @@ dependencies = [
     "xgboost>=2.0.0",
     "torch>=2.2.0",
     "psutil>=7.2.2",
+    "comfyui-frontend-package==1.47.10",
+    "python-multipart>=0.0.32",
+    "ruff>=0.16.0",
 ]

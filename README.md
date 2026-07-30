@@ -116,14 +116,14 @@ localquant/
 │   ├── data/         # QMT 数据层
 │   ├── models/       # Pydantic 数据模型
 │   └── routes/       # API 路由
-├── frontend/         # React 前端
+├── frontend/         # Vue 3 前端外壳（opencode 浅色主题）
 │   └── src/
-│       ├── components/flow/    # 工作流编辑器（画布/面板/日志/节点说明/预设另存）
 │       ├── components/explore/ # 数据探索（概览/SQL·AI/扫描/截面/异常）
-│       ├── components/factor/  # 因子研究（因子库/详情弹窗/IC/分层）
-│       ├── components/ui/      # 通用组件（含 CodeEditor 全屏编辑器）
-│       ├── lib/nodeColors.ts   # 节点分类颜色全局唯一来源
-│       └── pages/              # 页面
+│       ├── components/factor/  # 因子研究（因子库/详情弹窗/综合报告）
+│       ├── components/ui/      # 通用组件（含 CodeEditor 全屏编辑器、VChart）
+│       ├── composables/        # useWorkflow/usePlugins/usePresetFactors 等
+│       └── pages/              # 页面（工作流页 iframe 内嵌 ComfyUI 前端）
+├── backend/comfy/    # ComfyUI 协议适配层 + 官方前端托管（/comfy/）
 ├── data/             # 本地数据（gitignore；custom_nodes/trash 为节点回收站）
 ├── templates/        # 工作流模板
 └── Makefile
@@ -136,3 +136,15 @@ localquant/
 - xtquant 仅支持 Windows，macOS 开发时 QMT 数据功能不可用
 - 数据全部来自 QMT，不使用模拟数据
 - 前端采用 OpenCode 浅色主题风格，frontend/DESIGN-opencode.ai.md
+
+## License
+
+本项目以 **GPL-3.0-or-later** 分发。
+
+工作流编辑器基于 [ComfyUI](https://github.com/comfyanonymous/ComfyUI) 与
+[ComfyUI_frontend](https://github.com/Comfy-Org/ComfyUI_frontend)（均为 GPL-3.0）构建：
+后端实现其服务器协议（`backend/comfy/`），前端经 `comfyui-frontend-package==1.47.10`
+托管于 `/comfy/` 并以 iframe 内嵌。因合并 GPL-3.0 代码，整个作品转为 GPL-3.0。
+
+上游版权、来源与所用版本见 [NOTICE](./NOTICE)，完整许可证见 [LICENSE](./LICENSE)。
+对外分发（含二进制/SaaS）须一并提供完整对应源码。

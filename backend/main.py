@@ -24,6 +24,12 @@ async def lifespan(app: FastAPI):
     load_all_nodes()
     logger.info("Plugins loaded")
 
+    # 启动 ComfyUI 执行队列 worker（真队列语义）
+    from backend.comfy.queue_manager import comfy_queue
+
+    comfy_queue.start()
+    logger.info("ComfyUI queue worker started")
+
     yield
 
     # Shutdown
@@ -71,6 +77,11 @@ app.include_router(experiment.router, prefix="/api/experiment", tags=["experimen
 app.include_router(settings_routes.router, prefix="/api/config", tags=["config"])
 app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
+
+# ComfyUI 协议适配层 + 官方前端托管（/comfy/api/* + /comfy/ws + /comfy/）
+from backend.comfy.routes import mount_comfy
+
+mount_comfy(app)
 
 
 @app.get("/", include_in_schema=False)
