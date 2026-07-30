@@ -11,6 +11,7 @@ install-frontend:
 
 # 开发模式（并行启动前后端，Ctrl+C 同时退出）
 dev:
+	@lsof -ti :8000 | xargs kill -9 2>/dev/null || true
 	@echo "启动后端 http://localhost:8000 + 前端 http://localhost:5173 （Ctrl+C 退出）"
 	@trap 'kill 0' INT TERM; \
 	uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload & \

@@ -161,3 +161,12 @@ async def run_workflow_stream(workflow_id: str):
 @router.get("/{workflow_id}/runs")
 async def list_workflow_runs(workflow_id: str):
     return await workflow_service.list_runs(workflow_id)
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_workflow_run(run_id: str):
+    """请求取消正在运行的工作流（在下一个节点边界生效，当前节点会执行完）"""
+    from backend.engine.runner import request_cancel
+
+    request_cancel(run_id)
+    return {"ok": True, "run_id": run_id}

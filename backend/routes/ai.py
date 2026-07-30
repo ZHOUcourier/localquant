@@ -346,6 +346,53 @@ async def ai_factor_report(body: FactorReportRequest):
 
 
 # ---------------------------------------------------------------------------
+# 场景 5.5：因子研究页 — AI 生成/修改因子公式与代码
+# ---------------------------------------------------------------------------
+
+FACTOR_FORMULA_SYSTEM = """你是 LocalQuant 量化投研平台的因子开发专家。用户会描述想要的因子，你需要输出一个因子公式表达式。
+
+## 公式环境（务必遵守）
+- 可用变量：open / high / low / close / volume / amount / vwap / returns（均为 DataFrame: index=日期, columns=股票），另有 np、pd
+- 可用算子（大小写均可）：RANK / DELAY / DELTA / STDDEV / CORRELATION / CORR / TS_RANK / TS_MAX / TS_MIN / SUM / MEAN / DECAYLINEAR / SIGN / ABS / LOG / MAX / MIN 等 Alpha101/191 常用算子，也可直接用 pandas 方法（如 close.pct_change(5)）
+- 支持多行：前面行可定义中间变量，最后一个非空表达式作为因子值
+- 结果必须是 DataFrame（index=日期, columns=股票）
+
+## 输出格式
+只输出公式表达式本身（可多行），不要任何解释、不要 markdown 围栏。"""
+
+FACTOR_PYCODE_SYSTEM = """你是 LocalQuant 量化投研平台的因子开发专家。用户会提供当前的因子 Python 代码和修改/生成要求，你需要输出完整的新代码。
+
+## 代码约定（务必遵守）
+- 必须定义函数 compute_factor(close: pd.DataFrame, volume: pd.DataFrame) -> pd.DataFrame
+  （参数为面板数据：index=日期, columns=股票；返回同形状的因子值 DataFrame）
+- 执行环境中另有变量 open/high/low/close/volume/amount/vwap/returns 与全部量化算子（RANK/DELAY/STDDEV 等）可直接使用
+- 保持 import pandas as pd / import numpy as np 完整，代码必须可直接运行
+- 只修改与用户要求相关的部分，其余原样保留
+
+## 输出格式
+只输出完整 Python 源码，不要任何解释、不要 markdown 围栏。"""
+
+
+class FactorCodeRequest(BaseModel):
+    mode: str = "code"  # formula | code
+    current: str = ""  # 当前公式/代码（可空=从零生成）
+    instruction: str
+
+
+@router.post("/factor-code")
+async def ai_factor_code(body: FactorCodeRequest):
+    """AI 生成/修改因子公式或代码（因子研究页使用，结果填入编辑器由用户确认）"""
+    if not body.instruction.strip():
+        raise HTTPException(status_code=400, detail="请描述想要的因子或修改要求")
+    system = FACTOR_FORMULA_SYSTEM if body.mode == "formula" else FACTOR_PYCODE_SYSTEM
+    user = (
+        f"## 当前内容\n{body.current}\n\n" if body.current.strip() else ""
+    ) + f"## 要求\n{body.instruction}"
+    content = _strip_code_fence(await _chat(system, user))
+    return {"content": content}
+
+
+# ---------------------------------------------------------------------------
 # 场景 4：数据探索 AI（自然语言 → SQL / 结果解读）
 # ---------------------------------------------------------------------------
 

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollArea } from '@/components/ui/ScrollArea';
 import { Badge } from '@/components/ui/Badge';
 import type { BadgeVariant } from '@/components/ui/Badge';
+import { useFlowStore } from '@/store/flowStore';
 
 export type LogStatus = 'running' | 'success' | 'failed' | 'info';
 
@@ -54,51 +55,14 @@ const filterSelectStyle: React.CSSProperties = {
 };
 
 export const ExecutionLog: React.FC<ExecutionLogProps> = ({ workflowId }) => {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  // 日志直接从 flowStore 读取（由 useExecution 解析运行 SSE 事件写入），
+  // 不再自行建 EventSource —— 后端运行接口是 POST 流，EventSource(GET) 永远连不上
+  const logs = useFlowStore((s) => s.executionLogs);
   const scrollRef = useRef<HTMLDivElement>(null);
   // 筛选与排序
   const [levelFilter, setLevelFilter] = useState('all');
   const [nodeFilter, setNodeFilter] = useState('all'); // all | global | 节点uuid
   const [sortDesc, setSortDesc] = useState(false); // false=时间正序（默认），true=倒序
-
-  useEffect(() => {
-    if (!workflowId) return;
-
-    setLogs([]);
-
-    const url = `/api/workflow/run/${workflowId}/stream`;
-    const eventSource = new EventSource(url);
-
-    const push = (event: MessageEvent) => {
-      try {
-        const entry: LogEntry = JSON.parse(event.data);
-        setLogs((prev) => [...prev, entry]);
-      } catch {
-        // ignore malformed messages
-      }
-    };
-
-    eventSource.onmessage = push;
-    // 命名事件也要接收（后端使用 event: node_start 等命名事件）
-    for (const evt of [
-      'execution_order',
-      'node_start',
-      'node_complete',
-      'node_failed',
-      'workflow_complete',
-      'workflow_failed',
-    ]) {
-      eventSource.addEventListener(evt, push as EventListener);
-    }
-
-    eventSource.onerror = () => {
-      eventSource.close();
-    };
-
-    return () => {
-      eventSource.close();
-    };
-  }, [workflowId]);
 
   // 出现过的节点清单（用于按节点筛选）
   const nodeOptions = useMemo(() => {

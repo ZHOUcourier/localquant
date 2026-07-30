@@ -40,6 +40,44 @@ function Clock() {
   );
 }
 
+/** QMT 真实连接状态（轮询 /api/data/status，不再硬编码） */
+function QmtStatus() {
+  const [connected, setConnected] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const r = await fetch('/api/data/status');
+        if (!r.ok) throw new Error();
+        const data = await r.json();
+        if (alive) setConnected(!!data.qmt_connected);
+      } catch {
+        if (alive) setConnected(null);
+      }
+    };
+    check();
+    const id = setInterval(check, 30000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span
+        className="inline-block rounded-full"
+        style={{
+          width: 8,
+          height: 8,
+          background: connected ? '#30d158' : '#6e6e73',
+        }}
+      />
+      <span className="text-[12px] text-[#646262]">
+        {connected == null ? 'QMT 状态未知' : connected ? 'QMT 已连接' : 'QMT 未连接'}
+      </span>
+    </div>
+  );
+}
+
 export default function TopBar() {
   const location = useLocation();
   const crumbs = getBreadcrumbs(location.pathname);
@@ -78,17 +116,7 @@ export default function TopBar() {
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="flex items-center gap-1.5">
-          <span
-            className="inline-block rounded-full"
-            style={{
-              width: 8,
-              height: 8,
-              background: '#6e6e73',
-            }}
-          />
-          <span className="text-[12px] text-[#646262]">QMT 未连接</span>
-        </div>
+        <QmtStatus />
         <Clock />
       </div>
     </div>

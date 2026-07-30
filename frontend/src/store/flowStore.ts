@@ -12,6 +12,17 @@ import {
 
 export type NodeStatus = 'pending' | 'running' | 'success' | 'failed';
 
+/** 执行日志条目（由 useExecution 解析 SSE 事件后写入） */
+export interface ExecutionLogEntry {
+  status: 'running' | 'success' | 'failed' | 'info';
+  level?: string;
+  message: string;
+  timestamp: string;
+  node_uuid?: string;
+  node_name?: string;
+  duration_ms?: number;
+}
+
 interface FlowState {
   // 工作流数据
   workflowId: string | null;
@@ -25,7 +36,15 @@ interface FlowState {
   // 运行状态
   isRunning: boolean;
   nodeStatuses: Record<string, NodeStatus>;
+  /** 每节点执行耗时（ms），运行完成/失败后写入，节点头部展示徽标 */
+  nodeDurations: Record<string, number>;
+  /** 失败节点的错误信息，节点底部展示 */
+  nodeErrors: Record<string, string>;
   currentRunId: string | null;
+  /** 本次运行起止时间戳（ms），供工具栏计时器与总耗时展示 */
+  runStartedAt: number | null;
+  runFinishedAt: number | null;
+  executionLogs: ExecutionLogEntry[];
 
   // 画布锁定（锁定后禁止拖拽/连线/增删节点）
   locked: boolean;
@@ -43,9 +62,15 @@ interface FlowState {
 
   // 运行状态操作
   setNodeStatus: (nodeId: string, status: NodeStatus) => void;
+  setNodeDuration: (nodeId: string, ms: number) => void;
+  setNodeError: (nodeId: string, error: string) => void;
+  setRunStartedAt: (ts: number | null) => void;
+  setRunFinishedAt: (ts: number | null) => void;
   resetStatuses: () => void;
   setRunning: (running: boolean) => void;
   setCurrentRunId: (runId: string | null) => void;
+  appendLog: (entry: ExecutionLogEntry) => void;
+  clearLogs: () => void;
 
   // 脏状态操作
   markDirty: () => void;
@@ -68,7 +93,12 @@ export const useFlowStore = create<FlowState>((set) => ({
 
   isRunning: false,
   nodeStatuses: {},
+  nodeDurations: {},
+  nodeErrors: {},
   currentRunId: null,
+  runStartedAt: null,
+  runFinishedAt: null,
+  executionLogs: [],
 
   locked: false,
   setLocked: (locked) => set({ locked }),
@@ -98,11 +128,38 @@ export const useFlowStore = create<FlowState>((set) => ({
       nodeStatuses: { ...state.nodeStatuses, [nodeId]: status },
     })),
 
-  resetStatuses: () => set({ nodeStatuses: {}, isRunning: false }),
+  setNodeDuration: (nodeId, ms) =>
+    set((state) => ({
+      nodeDurations: { ...state.nodeDurations, [nodeId]: ms },
+    })),
+
+  setNodeError: (nodeId, error) =>
+    set((state) => ({
+      nodeErrors: { ...state.nodeErrors, [nodeId]: error },
+    })),
+
+  setRunStartedAt: (ts) => set({ runStartedAt: ts }),
+
+  setRunFinishedAt: (ts) => set({ runFinishedAt: ts }),
+
+  resetStatuses: () =>
+    set({
+      nodeStatuses: {},
+      nodeDurations: {},
+      nodeErrors: {},
+      isRunning: false,
+      runStartedAt: null,
+      runFinishedAt: null,
+    }),
 
   setRunning: (running) => set({ isRunning: running }),
 
   setCurrentRunId: (runId) => set({ currentRunId: runId }),
+
+  appendLog: (entry) =>
+    set((state) => ({ executionLogs: [...state.executionLogs, entry] })),
+
+  clearLogs: () => set({ executionLogs: [] }),
 
   markDirty: () => set({ isDirty: true }),
 
@@ -117,7 +174,12 @@ export const useFlowStore = create<FlowState>((set) => ({
       selectedNodeId: null,
       isRunning: false,
       nodeStatuses: {},
+      nodeDurations: {},
+      nodeErrors: {},
       currentRunId: null,
+      runStartedAt: null,
+      runFinishedAt: null,
+      executionLogs: [],
       isDirty: false,
     }),
 

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Card, Tabs, Input, Button, ScrollArea, CodeEditor } from '@/components/ui';
+import { Card, Tabs, Input, Button, ScrollArea, CodeEditor, Dialog } from '@/components/ui';
 import type { TabItem } from '@/components/ui';
 
 export interface FactorResult {
@@ -47,6 +47,42 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
   const [computing, setComputing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<FactorResult | null>(null);
+  // AI 生成/修改因子（公式与代码模式共用，与工作流节点 ✦ AI 交互一致）
+  const [showAI, setShowAI] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  const handleAI = useCallback(async () => {
+    if (!aiInstruction.trim()) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch('/api/ai/factor-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          current: mode === 'formula' ? formula : code,
+          instruction: aiInstruction,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      // 结果填入编辑器，由用户确认后自行点「计算因子」
+      if (mode === 'formula') setFormula(data.content || '');
+      else setCode(data.content || '');
+      setShowAI(false);
+      setAiInstruction('');
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiInstruction, mode, formula, code]);
 
   const handleCompute = useCallback(async () => {
     setComputing(true);
@@ -109,7 +145,26 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 公式模式 */}
         {mode === 'formula' && (
           <div className="flex flex-col gap-2">
-            <label className="text-xs text-[#646262]">因子公式表达式（可用变量: open/high/low/close/volume/amount, np, pd）</label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-[#646262]">因子公式表达式（可用变量: open/high/low/close/volume/amount, np, pd）</label>
+              <button
+                className="tb-btn"
+                onClick={() => setShowAI(true)}
+                title="用 AI 生成/修改因子公式（需先在设置中配置 AI）"
+                style={{
+                  border: '1px solid rgba(124,58,237,0.4)',
+                  background: 'transparent',
+                  color: '#7c3aed',
+                  borderRadius: 4,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✦ AI
+              </button>
+            </div>
             <Input
               placeholder="例: close / close.shift(5) - 1"
               value={formula}
@@ -121,7 +176,26 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
         {/* 代码模式 */}
         {mode === 'code' && (
           <div className="flex flex-col gap-2">
-            <label className="text-xs text-[#646262]">Python 代码</label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-[#646262]">Python 代码</label>
+              <button
+                className="tb-btn"
+                onClick={() => setShowAI(true)}
+                title="用 AI 生成/修改因子代码（需先在设置中配置 AI）"
+                style={{
+                  border: '1px solid rgba(124,58,237,0.4)',
+                  background: 'transparent',
+                  color: '#7c3aed',
+                  borderRadius: 4,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✦ AI
+              </button>
+            </div>
             <CodeEditor
               value={code}
               onChange={setCode}
@@ -213,6 +287,42 @@ export default function FactorBuilder({ onFactorComputed }: FactorBuilderProps) 
           </div>
         )}
       </div>
+
+      {/* AI 生成/修改因子弹窗 */}
+      <Dialog
+        open={showAI}
+        onClose={() => !aiLoading && setShowAI(false)}
+        title={mode === 'formula' ? 'AI 生成 / 修改因子公式' : 'AI 生成 / 修改因子代码'}
+        className="w-[520px]"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setShowAI(false)} disabled={aiLoading}>
+              取消
+            </Button>
+            <Button onClick={handleAI} loading={aiLoading} disabled={!aiInstruction.trim()}>
+              {aiLoading ? '生成中...' : '生成并填入编辑器'}
+            </Button>
+          </>
+        }
+      >
+        <div className="mb-2 text-[11px] leading-relaxed text-[#646262]">
+          用自然语言描述想要的因子或修改要求，结果会填入编辑器，确认后再点「计算因子」。
+        </div>
+        {aiError && (
+          <div className="mb-2 whitespace-pre-wrap font-mono text-[11px] text-[#ff3b30]">{aiError}</div>
+        )}
+        <textarea
+          value={aiInstruction}
+          onChange={(e) => setAiInstruction(e.target.value)}
+          placeholder={mode === 'formula'
+            ? '例：20 日动量截面排名因子；把当前公式改成对数收益版本'
+            : '例：写一个 20 日反转因子；给当前代码加上去极值和标准化'}
+          rows={5}
+          autoFocus
+          className="w-full resize-y rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-2.5 py-2 text-xs leading-relaxed text-[#201d1d] outline-none"
+          style={{ fontFamily: 'inherit', boxSizing: 'border-box' }}
+        />
+      </Dialog>
     </Card>
   );
 }

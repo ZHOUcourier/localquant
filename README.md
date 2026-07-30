@@ -14,7 +14,7 @@
 | **数据管理** | QMT 数据下载、缓存管理、数据质量检查 |
 | **AI 辅助** | 节点代码改写、自然语言生成工作流、因子分析建议、数据探索 SQL 生成与结果解读（OpenAI 兼容接口） |
 
-### 交互与设计约定
+### 工作流编辑器中的节点设计细节
 
 - **节点端口**：仅数据型输入（DataFrame/dict 等，或标注「仅连线输入」的字段）生成连线端口；普通参数只在节点上渲染控件，不再为每个变量都开端口。
 - **节点颜色**：画布节点、左侧节点面板、右侧配置面板三处统一取自 `frontend/src/lib/nodeColors.ts`，全局唯一。
@@ -25,6 +25,31 @@
 - **工作流因子链路**：因子构建（公式/代码）→ 因子标准化/中性化 → 因子分析（一站式）/ IC 计算 / 分组收益 / 因子衰减 均基于 QMT 行情面板做**截面**计算，与因子研究页**同源**（同一套 factor_research 服务，full_factor_analysis 统一入口），结果一致。「因子分析」节点一个即输出 IC 统计/时序、IC 衰减、分层平均/累计收益、多空曲线、换手率与关键指标（对齐 AlphaLens）；因子研究页含 IC/分层/衰减/换手率/相关性页。
 - **回测节点**：向量化回测，输出净值/回撤曲线与完整绩效（年化收益/波动/夏普/索提诺/卡玛/最大回撤/VaR/CVaR/胜率/盈亏比/月度收益），支持可选基准对比（跟踪误差/信息比率）。
 - **工作流日志**：支持按级别、按节点 / 全局筛选与时间正序 / 倒序排序。
+
+### 自定义节点
+
+在 `data/custom_nodes/` 目录放置 Python 文件：
+
+```python
+from backend.plugins import BaseWorkNode, work_node, ui
+from pydantic import BaseModel, Field
+
+@ui(param={"input_type": "text_field"})
+class MyInput(BaseModel):
+    param: str = "default"
+
+class MyOutput(BaseModel):
+    result: str = ""
+
+@work_node(name="我的节点", group="08-自定义", box_color="green")
+class MyNode(BaseWorkNode):
+    @classmethod
+    def input_model(cls): return MyInput
+    @classmethod
+    def output_model(cls): return MyOutput
+    def run(self, input):
+        return MyOutput(result=f"Hello {input.param}")
+```
 
 ## 技术栈
 
@@ -104,30 +129,7 @@ localquant/
 └── Makefile
 ```
 
-## 自定义节点
 
-在 `data/custom_nodes/` 目录放置 Python 文件：
-
-```python
-from backend.plugins import BaseWorkNode, work_node, ui
-from pydantic import BaseModel, Field
-
-@ui(param={"input_type": "text_field"})
-class MyInput(BaseModel):
-    param: str = "default"
-
-class MyOutput(BaseModel):
-    result: str = ""
-
-@work_node(name="我的节点", group="08-自定义", box_color="green")
-class MyNode(BaseWorkNode):
-    @classmethod
-    def input_model(cls): return MyInput
-    @classmethod
-    def output_model(cls): return MyOutput
-    def run(self, input):
-        return MyOutput(result=f"Hello {input.param}")
-```
 
 ## 注意事项
 

@@ -5,6 +5,13 @@ import { SQLPanel } from '@/components/explore/SQLPanel';
 import { MarketScanner } from '@/components/explore/MarketScanner';
 import { CrossSection } from '@/components/explore/CrossSection';
 import { AnomalyDetector } from '@/components/explore/AnomalyDetector';
+import { RegressionAnalysis } from '@/components/explore/RegressionAnalysis';
+import { Seasonality } from '@/components/explore/Seasonality';
+import { VolatilityAnalysis } from '@/components/explore/VolatilityAnalysis';
+import { CorrelationMatrix } from '@/components/explore/CorrelationMatrix';
+import { RiskProfile } from '@/components/explore/RiskProfile';
+import { PairSpread } from '@/components/explore/PairSpread';
+import { RollingCorrelation } from '@/components/explore/RollingCorrelation';
 
 const tabItems = [
   { key: 'overview', label: '数据概览' },
@@ -12,6 +19,13 @@ const tabItems = [
   { key: 'scan', label: '全市场扫描' },
   { key: 'cross', label: '横截面分析' },
   { key: 'anomaly', label: '异常检测' },
+  { key: 'risk', label: '风险画像' },
+  { key: 'regression', label: '回归分析' },
+  { key: 'rolling', label: '滚动相关/Beta' },
+  { key: 'pair', label: '配对价差' },
+  { key: 'seasonality', label: '季节图表' },
+  { key: 'volatility', label: '历史波动率' },
+  { key: 'correlation', label: '相关性分析' },
 ];
 
 export default function DataExplore() {
@@ -27,6 +41,13 @@ export default function DataExplore() {
         {activeTab === 'scan' && <MarketScanner />}
         {activeTab === 'cross' && <CrossSection />}
         {activeTab === 'anomaly' && <AnomalyDetector />}
+        {activeTab === 'risk' && <RiskProfile />}
+        {activeTab === 'regression' && <RegressionAnalysis />}
+        {activeTab === 'rolling' && <RollingCorrelation />}
+        {activeTab === 'pair' && <PairSpread />}
+        {activeTab === 'seasonality' && <Seasonality />}
+        {activeTab === 'volatility' && <VolatilityAnalysis />}
+        {activeTab === 'correlation' && <CorrelationMatrix />}
       </div>
     </div>
   );

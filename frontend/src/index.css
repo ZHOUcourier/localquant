@@ -108,3 +108,42 @@ a {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* 底部状态栏资讯跑马灯（内容双拷贝，位移 50% 实现无缝循环） */
+@keyframes statusbar-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.statusbar-marquee {
+  animation: statusbar-marquee 60s linear infinite;
+}
+.statusbar-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* 节点执行中的不定进度条（对标 ComfyUI 节点进度，后端无百分比时的往复动画） */
+@keyframes node-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.node-progress-indeterminate {
+  width: 34%;
+  animation: node-progress-slide 1.2s ease-in-out infinite;
+}
+
+/* 通用 hover 反馈：透明/浅色背景按钮悬停时显示灰色背景（与侧边栏一致） */
+.tb-btn:hover:not(:disabled) {
+  background: #e8e5e5 !important;
+}
+/* 实心主按钮（如运行/停止）：悬停时提亮 */
+.tb-btn-solid:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+/* 卡片/行类 hover：灰背景 + 边框加深（Dashboard 状态卡、列表行等） */
+.card-hover {
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.card-hover:hover {
+  background: #e8e5e5 !important;
+  border-color: rgba(15, 0, 0, 0.22) !important;
+}

@@ -12,12 +12,34 @@
 
 import json
 import pickle
+import time
 from datetime import datetime
 from typing import Any
 
 from backend.config import settings
 from backend.engine.context import WorkflowContext
 from backend.plugins.registry import ALL_WORK_NODES
+
+# ---------------------------------------------------------------------------
+# 运行取消：request_cancel(run_id) 后，流式执行在下一个节点边界终止
+# （节点内部为同步计算，无法中途打断，与 ComfyUI 的 Interrupt 语义一致）
+# ---------------------------------------------------------------------------
+
+CANCELLED_RUNS: set[str] = set()
+
+
+def request_cancel(run_id: str) -> None:
+    """标记某次运行请求取消"""
+    CANCELLED_RUNS.add(run_id)
+
+
+def _consume_cancel(run_id: str) -> bool:
+    """检查并消费取消标记"""
+    if run_id in CANCELLED_RUNS:
+        CANCELLED_RUNS.discard(run_id)
+        return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # 辅助：保存节点输出到文件
@@ -255,16 +277,26 @@ async def run_workflow_stream(
     run_id: str,
     nodes: list[dict],
     links: list[dict],
+    report: dict[str, Any] | None = None,
 ):
     """
     流式执行工作流，yield SSE 事件 dict
 
     供 FastAPI StreamingResponse 使用。
+    report: 可选的可变字典，执行过程中回填 status/logs/nodes（含每节点耗时），
+            供调用方在流结束后持久化运行历史。
     """
     ctx = WorkflowContext(run_id)
+    if report is None:
+        report = {}
+    report.setdefault("status", "running")
+    node_reports: dict[str, dict[str, Any]] = {}
+    report["nodes"] = node_reports
+    report["logs"] = ctx.logs
 
     if not nodes:
         ctx.finish("completed")
+        report["status"] = "completed"
         yield _sse_event(
             "workflow_complete",
             {"status": "completed", "run_id": run_id, "message": "空工作流"},
@@ -278,6 +310,7 @@ async def run_workflow_stream(
     except ValueError as e:
         ctx._log(str(e), "error")
         ctx.finish("failed")
+        report["status"] = "failed"
         yield _sse_event(
             "workflow_failed", {"status": "failed", "run_id": run_id, "message": str(e)}
         )
@@ -294,8 +327,21 @@ async def run_workflow_stream(
     )
 
     for node_uuid in execution_order:
+        # 节点边界检查取消请求（前端「停止」按钮 → POST cancel）
+        if _consume_cancel(run_id):
+            msg = "运行已被用户取消"
+            ctx._log(msg, "warning")
+            ctx.finish("cancelled")
+            report["status"] = "cancelled"
+            yield _sse_event(
+                "workflow_cancelled",
+                {"status": "cancelled", "run_id": run_id, "message": msg},
+            )
+            return
+
         node_def = node_map[node_uuid]
         node_name = node_def["name"]
+        node_title = node_def.get("title", node_name)
         incoming = link_map.get(node_uuid, [])
 
         yield _sse_event(
@@ -304,15 +350,24 @@ async def run_workflow_stream(
                 "node_uuid": node_uuid,
                 "node_name": node_name,
                 "status": "running",
-                "message": f"开始执行: {node_def.get('title', node_name)}",
+                "message": f"开始执行: {node_title}",
             },
         )
         ctx._log(f"开始执行节点: {node_name}", node_uuid=node_uuid)
+        started = time.perf_counter()
 
         try:
             output = _execute_node(node_def, ctx, incoming)
             output_path = _save_node_output(run_id, node_uuid, output)
             ctx.set_node_output(node_uuid, output)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            node_reports[node_uuid] = {
+                "title": node_title,
+                "name": node_name,
+                "status": "success",
+                "duration_ms": duration_ms,
+                "output_path": output_path,
+            }
 
             yield _sse_event(
                 "node_complete",
@@ -320,15 +375,24 @@ async def run_workflow_stream(
                     "node_uuid": node_uuid,
                     "node_name": node_name,
                     "status": "success",
-                    "message": f"执行完成: {node_def.get('title', node_name)}",
+                    "message": f"执行完成: {node_title}（{duration_ms / 1000:.2f}s）",
                     "output_path": output_path,
+                    "duration_ms": duration_ms,
                 },
             )
-            ctx._log(f"节点完成: {node_name}", node_uuid=node_uuid)
+            ctx._log(f"节点完成: {node_name}（{duration_ms}ms）", node_uuid=node_uuid)
 
         except Exception as e:
+            duration_ms = int((time.perf_counter() - started) * 1000)
             err_msg = f"节点 {node_name} 执行失败: {e}"
             ctx._log(err_msg, "error", node_uuid=node_uuid)
+            node_reports[node_uuid] = {
+                "title": node_title,
+                "name": node_name,
+                "status": "failed",
+                "duration_ms": duration_ms,
+                "error": str(e),
+            }
             yield _sse_event(
                 "node_failed",
                 {
@@ -336,9 +400,11 @@ async def run_workflow_stream(
                     "node_name": node_name,
                     "status": "failed",
                     "message": err_msg,
+                    "duration_ms": duration_ms,
                 },
             )
             ctx.finish("failed")
+            report["status"] = "failed"
             yield _sse_event(
                 "workflow_failed",
                 {
@@ -350,6 +416,7 @@ async def run_workflow_stream(
             return
 
     ctx.finish("completed")
+    report["status"] = "completed"
     yield _sse_event(
         "workflow_complete",
         {

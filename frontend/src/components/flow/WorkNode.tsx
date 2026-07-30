@@ -37,11 +37,16 @@ type WorkNodeType = Node<WorkNodeData>;
 function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
   const nodeStatuses = useFlowStore((s) => s.nodeStatuses);
   const currentRunId = useFlowStore((s) => s.currentRunId);
+  const duration = useFlowStore((s) => s.nodeDurations[id]);
+  const nodeError = useFlowStore((s) => s.nodeErrors[id]);
   const status = nodeStatuses[id] || 'pending';
-  // 因子分析节点：运行成功后可直接打开综合分析报告
+  // 因子分析节点：报告按钮常驻显示；有可用 run（本次运行或历史 last_run）时可点开，
+  // 从未运行过则置灰提示「没有运行过」
   const [reportOpen, setReportOpen] = useState(false);
-  const showReportButton =
-    data.nodeType === 'FactorAnalysisNode' && status === 'success' && !!currentRunId;
+  const isFactorAnalysis = data.nodeType === 'FactorAnalysisNode';
+  const reportReady = !!currentRunId && (status === 'success' || status === 'pending');
+  // 运行中/失败时不开报告；未运行（无 runId）时禁用
+  const reportDisabled = !reportReady;
 
   const boxColor = resolveNodeColor(data.box_color);
   const inputs = data.inputs || [];
@@ -50,6 +55,14 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
 
   const statusIcon = STATUS_ICONS[status];
   const statusColor = STATUS_COLORS[status];
+
+  // 耗时徽标文案（对标 ComfyUI 节点执行耗时展示）
+  const durationText =
+    duration != null && (status === 'success' || status === 'failed')
+      ? duration < 1000
+        ? `${duration}ms`
+        : `${(duration / 1000).toFixed(2)}s`
+      : null;
 
   // 根据运行状态决定边框和样式
   const borderColor = status === 'running'
@@ -109,18 +122,39 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
         <span style={{ color: '#201d1d', fontWeight: 600, fontSize: 12 }}>
           {data.label}
         </span>
-        <span
-          style={{
-            color: statusColor,
-            fontSize: 13,
-            marginLeft: 8,
-            lineHeight: 1,
-          }}
-          title={status}
-        >
-          {statusIcon}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
+          {durationText && (
+            <span
+              style={{
+                color: status === 'failed' ? '#ff3b30' : '#9a9898',
+                fontSize: 10,
+                lineHeight: 1,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+              title={`上次执行耗时 ${durationText}`}
+            >
+              {durationText}
+            </span>
+          )}
+          <span
+            style={{
+              color: statusColor,
+              fontSize: 13,
+              lineHeight: 1,
+            }}
+            title={status}
+          >
+            {statusIcon}
+          </span>
         </span>
       </div>
+
+      {/* 执行中：标题栏下方不定进度条（对标 ComfyUI 节点执行进度） */}
+      {status === 'running' && (
+        <div style={{ height: 2, background: 'rgba(0,122,255,0.15)', overflow: 'hidden' }}>
+          <div className="node-progress-indeterminate" style={{ height: '100%', background: '#007aff' }} />
+        </div>
+      )}
 
       {/* 主体区域 */}
       <div
@@ -224,25 +258,59 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
         </div>
       </div>
 
-      {/* 因子分析节点：查看分析报告 */}
-      {showReportButton && (
+      {/* 失败节点：错误信息条（截断展示，悬停看全文） */}
+      {status === 'failed' && nodeError && (
+        <div
+          className="nodrag"
+          title={nodeError}
+          style={{
+            margin: '0 10px 8px 12px',
+            padding: '3px 6px',
+            background: 'rgba(255,59,48,0.08)',
+            border: '1px solid rgba(255,59,48,0.35)',
+            borderRadius: 4,
+            color: '#d70015',
+            fontSize: 10,
+            lineHeight: 1.5,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            maxWidth: 260,
+          }}
+        >
+          {nodeError}
+        </div>
+      )}
+
+      {/* 因子分析节点：查看分析报告（常驻按钮，未运行时提示没有运行过） */}
+      {isFactorAnalysis && (
         <div style={{ padding: '0 10px 8px 12px' }}>
           <button
             className="nodrag"
+            disabled={reportDisabled}
             onClick={(e) => {
               e.stopPropagation();
-              setReportOpen(true);
+              if (!reportDisabled) setReportOpen(true);
             }}
+            title={
+              reportReady
+                ? '查看因子综合分析报告'
+                : status === 'running'
+                ? '节点正在运行中...'
+                : status === 'failed'
+                ? '本次运行失败，无可用报告'
+                : '运行工作流后可查看报告'
+            }
             style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: 5,
               width: '100%',
-              cursor: 'pointer',
-              border: '1px solid #007aff',
-              background: 'rgba(0,122,255,0.08)',
-              color: '#007aff',
+              cursor: reportDisabled ? 'not-allowed' : 'pointer',
+              border: `1px solid ${reportDisabled ? 'rgba(15,0,0,0.12)' : '#007aff'}`,
+              background: reportDisabled ? '#f8f7f7' : 'rgba(0,122,255,0.08)',
+              color: reportDisabled ? '#9a9898' : '#007aff',
               borderRadius: 4,
               padding: '4px 8px',
               fontSize: 11,
@@ -250,11 +318,11 @@ function WorkNodeComponent({ id, data, selected }: NodeProps<WorkNodeType>) {
             }}
           >
             <FileChartColumn size={12} />
-            查看分析报告
+            {reportReady ? '查看分析报告' : status === 'running' ? '运行中...' : '没有运行过'}
           </button>
         </div>
       )}
-      {showReportButton && currentRunId && (
+      {isFactorAnalysis && currentRunId && (
         <FactorReportDialog
           open={reportOpen}
           onClose={() => setReportOpen(false)}

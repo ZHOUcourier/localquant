@@ -1,5 +1,6 @@
 """工作流服务 - 处理工作流 CRUD 和运行逻辑"""
 
+import asyncio
 import json
 import time
 import uuid
@@ -279,23 +280,43 @@ async def run_stream(workflow_id: str) -> AsyncGenerator[str, None]:
     finally:
         await db.close()
 
-    # 流式执行
-    final_status = "completed"
-    async for sse_event in run_workflow_stream(run_id, wf["nodes"], wf["links"]):
-        # 追踪最终状态
-        if "workflow_failed" in sse_event:
-            final_status = "failed"
-        yield sse_event
+    # 流式执行：runner 通过 report 回填状态/日志/每节点耗时；
+    # 用 try/finally 保证客户端断开连接（生成器被取消）时运行记录也能正确收尾，
+    # 避免历史里残留永远处于 running 的脏记录。
+    report: dict[str, Any] = {}
+    try:
+        async for sse_event in run_workflow_stream(
+            run_id, wf["nodes"], wf["links"], report
+        ):
+            yield sse_event
+    finally:
+        final_status = report.get("status", "running")
+        if final_status == "running":
+            # 流未走到自然终点（客户端断开/服务异常），记为已取消
+            final_status = "cancelled"
+        # 当前任务可能已被取消（客户端断开），finally 内直接 await 会再次抛
+        # CancelledError，改用独立任务完成收尾写库
+        asyncio.ensure_future(_finalize_run(run_id, workflow_id, final_status, report))
 
-    # 流结束后更新运行记录（简化：不存完整 node_outputs，只存状态和日志）
+
+async def _finalize_run(
+    run_id: str, workflow_id: str, final_status: str, report: dict[str, Any]
+) -> None:
+    """流式运行结束后更新运行记录（状态/日志/每节点耗时）"""
     finished_at = int(time.time())
     db = await get_db()
     try:
         await db.execute(
             """UPDATE workflow_runs
-               SET status = ?, finished_at = ?
+               SET status = ?, finished_at = ?, node_outputs_json = ?, logs_json = ?
                WHERE id = ?""",
-            (final_status, finished_at, run_id),
+            (
+                final_status,
+                finished_at,
+                json.dumps(report.get("nodes", {}), ensure_ascii=False, default=str),
+                json.dumps(report.get("logs", []), ensure_ascii=False, default=str),
+                run_id,
+            ),
         )
         await db.execute(
             "UPDATE workflows SET last_run_id = ?, updated_at = ? WHERE id = ?",

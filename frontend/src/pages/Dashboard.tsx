@@ -79,7 +79,7 @@ function StatusCard({
 
   return (
     <div
-      className="rounded-[4px] px-4 py-3"
+      className="rounded-[4px] px-4 py-3 card-hover"
       style={{
         backgroundColor: '#f1eeee',
         border: '1px solid rgba(15,0,0,0.12)',

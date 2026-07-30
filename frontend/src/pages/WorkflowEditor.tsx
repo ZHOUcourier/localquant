@@ -25,7 +25,7 @@ function WorkflowEditorInner() {
   const { data: workflow, isLoading, error } = useWorkflow(isNew ? null : id || null);
   const { data: templates } = useWorkflowTemplates();
   const { data: pluginGroups } = usePlugins();
-  const { setWorkflow, isDirty, resetState } = useFlowStore();
+  const { setWorkflow, setCurrentRunId, isDirty, resetState } = useFlowStore();
 
   // 网页全屏：隐藏应用其他 UI，编辑器铺满视口（非浏览器全屏）
   const [fullscreen, setFullscreen] = useState(false);
@@ -84,8 +84,10 @@ function WorkflowEditorInner() {
 
     // 直接写入 store（FlowEditor 从 store 渲染），并重置脏状态
     setWorkflow(workflow.id, workflow.name, rfNodes, rfEdges);
+    // 恢复最近一次运行：节点输出预览与因子分析报告刷新后仍可查看
+    setCurrentRunId(workflow.last_run_id || null);
     initializedRef.current = `wf:${workflow.id}`;
-  }, [isNew, workflow, pluginGroups, setWorkflow]);
+  }, [isNew, workflow, pluginGroups, setWorkflow, setCurrentRunId]);
 
   // 新建模式：从模板预填画布（workflowId 置空，保存时才创建）或空白画布
   useEffect(() => {

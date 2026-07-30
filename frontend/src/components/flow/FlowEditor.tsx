@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -65,6 +65,31 @@ export function FlowEditor({ className }: FlowEditorProps) {
     locked,
     setLocked,
   } = useFlowStore();
+  const nodeStatuses = useFlowStore((s) => s.nodeStatuses);
+
+  // 执行中节点的入边高亮流动（对标 ComfyUI 执行时的连线动态）；
+  // 已成功节点的入边着绿色，直观展示数据已流过的路径
+  const displayEdges = useMemo(() => {
+    const hasRun = Object.keys(nodeStatuses).length > 0;
+    if (!hasRun) return edges;
+    return edges.map((e) => {
+      const targetStatus = nodeStatuses[e.target];
+      if (targetStatus === 'running') {
+        return {
+          ...e,
+          animated: true,
+          style: { stroke: '#007aff', strokeWidth: 2.5 },
+        };
+      }
+      if (targetStatus === 'success') {
+        return { ...e, style: { stroke: '#30d158', strokeWidth: 2.5 } };
+      }
+      if (targetStatus === 'failed') {
+        return { ...e, style: { stroke: '#ff3b30', strokeWidth: 2.5 } };
+      }
+      return e;
+    });
+  }, [edges, nodeStatuses]);
 
   const { screenToFlowPosition } = useReactFlow();
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -185,7 +210,7 @@ export function FlowEditor({ className }: FlowEditorProps) {
     <div ref={wrapperRef} className={className} style={{ width: '100%', height: '100%', position: 'relative' }}>
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={displayEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}

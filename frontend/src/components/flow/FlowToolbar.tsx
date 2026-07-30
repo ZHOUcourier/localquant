@@ -1,6 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Square, Save, Circle, Loader2, Check, ArrowLeft, Download, Upload, Maximize2, Minimize2, Sparkles } from 'lucide-react';
+import { Play, Square, Save, Circle, Loader2, Check, ArrowLeft, Download, Upload, Maximize2, Minimize2, Sparkles, History, Cpu } from 'lucide-react';
 import type { Node, Edge } from '@xyflow/react';
 import { useFlowStore } from '../../store/flowStore';
 import { useExecution } from '../../hooks/useExecution';
@@ -9,11 +9,72 @@ import { usePlugins } from '../../hooks/usePlugins';
 import { extractStaticInputData, buildSchemaMap, buildNodeData } from '../../lib/nodeSchema';
 import { Dialog } from '../ui/Dialog';
 import { Button } from '../ui/Button';
+import { RunHistoryDialog } from './RunHistoryDialog';
 
 interface FlowToolbarProps {
   onSave?: () => void;
   fullscreen?: boolean;
   onToggleFullscreen?: () => void;
+}
+
+/** 用量百分比 → 颜色（与因子研究页资源监控一致） */
+function usageColor(pct: number): string {
+  if (pct >= 85) return '#ff3b30';
+  if (pct >= 60) return '#ff9f0a';
+  return '#30d158';
+}
+
+/**
+ * 工具栏资源占用指示（对标 ComfyUI 顶栏的 CPU/RAM 监控）：
+ * 每 3s 轮询 /api/system/resources，展示 CPU / 内存占用百分比。
+ */
+function ResourceChip() {
+  const [cpu, setCpu] = useState<number | null>(null);
+  const [mem, setMem] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/system/resources');
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!alive) return;
+        setCpu(typeof data?.cpu?.avg === 'number' ? data.cpu.avg : null);
+        setMem(typeof data?.memory?.physical?.percent === 'number' ? data.memory.physical.percent : null);
+      } catch {
+        if (alive) { setCpu(null); setMem(null); }
+      }
+    };
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '3px 8px',
+        border: '1px solid rgba(15,0,0,0.12)',
+        borderRadius: 4,
+        fontSize: 11,
+        color: '#646262',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+      title="本机资源占用（CPU 均值 / 物理内存，3s 刷新）"
+    >
+      <Cpu size={12} style={{ flexShrink: 0 }} />
+      <span>
+        CPU <span style={{ color: cpu == null ? '#9a9898' : usageColor(cpu), fontWeight: 600 }}>{cpu == null ? '--' : `${cpu.toFixed(0)}%`}</span>
+      </span>
+      <span>
+        内存 <span style={{ color: mem == null ? '#9a9898' : usageColor(mem), fontWeight: 600 }}>{mem == null ? '--' : `${mem.toFixed(0)}%`}</span>
+      </span>
+    </div>
+  );
 }
 
 const AI_FLOW_PLACEHOLDER = `描述你想要的工作流，例如：
@@ -23,7 +84,7 @@ const AI_FLOW_PLACEHOLDER = `描述你想要的工作流，例如：
 
 export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowToolbarProps) {
   const navigate = useNavigate();
-  const { workflowId, workflowName, nodes, edges, setWorkflowName, setWorkflow, isRunning, nodeStatuses, isDirty, markClean, markDirty } = useFlowStore();
+  const { workflowId, workflowName, nodes, edges, setWorkflowName, setWorkflow, isRunning, nodeStatuses, isDirty, markClean, markDirty, runStartedAt, runFinishedAt } = useFlowStore();
   const { runWorkflow, stopExecution } = useExecution();
   const { data: pluginGroups } = usePlugins();
   const saveMutation = useSaveWorkflow();
@@ -32,6 +93,8 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [importing, setImporting] = useState(false);
+  // 运行历史弹窗
+  const [showHistory, setShowHistory] = useState(false);
   // AI 生成工作流
   const [showAI, setShowAI] = useState(false);
   const [aiInstruction, setAiInstruction] = useState('');
@@ -201,6 +264,36 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
     }
   }, [workflowId, isRunning, runWorkflow, stopExecution]);
 
+  // 快捷键（对标 ComfyUI）：Cmd/Ctrl+Enter 运行/停止，Cmd/Ctrl+S 保存
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleRunClick();
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleRunClick, handleSave]);
+
+  // 运行计时器：运行中每秒刷新，结束后定格展示总耗时
+  const [, setTimerTick] = useState(0);
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(() => setTimerTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [isRunning]);
+  const elapsedMs = runStartedAt
+    ? (isRunning ? Date.now() : runFinishedAt ?? Date.now()) - runStartedAt
+    : null;
+  const elapsedText = elapsedMs != null
+    ? `${String(Math.floor(elapsedMs / 60000)).padStart(2, '0')}:${String(Math.floor(elapsedMs / 1000) % 60).padStart(2, '0')}`
+    : null;
+
   // 导出工作流
   const handleExport = useCallback(() => {
     const backendNodes = nodes.map(n => {
@@ -273,9 +366,11 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
     (acc, s) => { acc[s] = (acc[s] || 0) + 1; return acc; },
     {} as Record<string, number>
   );
+  const doneCount = (statusCounts['success'] || 0) + (statusCounts['failed'] || 0);
+  const progressPct = totalNodes > 0 ? (doneCount / totalNodes) * 100 : 0;
 
   const statusText = isRunning
-    ? `运行中 (${statusCounts['running'] || 0}/${totalNodes})`
+    ? `运行中 ${doneCount}/${totalNodes}`
     : statusCounts['failed']
     ? '运行失败'
     : statusCounts['success']
@@ -304,10 +399,12 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
         borderBottom: '1px solid rgba(15,0,0,0.12)',
         height: 44,
         flexShrink: 0,
+        position: 'relative',
       }}
     >
       {/* 返回按钮 */}
       <button
+        className="tb-btn"
         onClick={handleBack}
         style={{
           display: 'flex',
@@ -331,6 +428,7 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
 
       {/* 取消按钮 */}
       <button
+        className="tb-btn"
         onClick={handleBack}
         style={{
           padding: '4px 10px',
@@ -372,6 +470,9 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
         <span
           onDoubleClick={() => { setDraft(workflowName); setEditing(true); }}
           style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
             color: '#201d1d',
             fontSize: 13,
             fontWeight: 600,
@@ -381,13 +482,20 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
           title="双击编辑名称"
         >
           {workflowName}
+          {/* 未保存标记（对标 ComfyUI 的 *Unsaved 圆点） */}
+          {isDirty && (
+            <span
+              style={{ width: 7, height: 7, borderRadius: '50%', background: '#ff9f0a', flexShrink: 0 }}
+              title="有未保存的更改 (⌘S 保存)"
+            />
+          )}
         </span>
       )}
 
       {/* 分隔 */}
       <div style={{ flex: 1 }} />
 
-      {/* 运行状态 */}
+      {/* 运行状态 + 计时器 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {isRunning && (
           <Loader2
@@ -404,10 +512,47 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
           />
         )}
         <span style={{ color: statusColor, fontSize: 12 }}>{statusText}</span>
+        {elapsedText && (
+          <span
+            style={{ color: '#9a9898', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}
+            title={isRunning ? '已运行时长' : '上次运行总耗时'}
+          >
+            {elapsedText}
+          </span>
+        )}
       </div>
+
+      {/* 资源占用（CPU/内存） */}
+      <ResourceChip />
+
+      {/* 运行历史 */}
+      <button
+        className="tb-btn"
+        onClick={() => setShowHistory(true)}
+        disabled={!workflowId}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '4px 10px',
+          background: 'transparent',
+          border: '1px solid rgba(15,0,0,0.12)',
+          borderRadius: 4,
+          color: !workflowId ? '#9a9898' : '#646262',
+          fontSize: 12,
+          fontWeight: 500,
+          cursor: !workflowId ? 'not-allowed' : 'pointer',
+          transition: 'background 0.15s ease',
+        }}
+        title={workflowId ? '查看运行历史（可载入历史结果）' : '保存工作流后可查看运行历史'}
+      >
+        <History size={13} />
+        历史
+      </button>
 
       {/* AI 生成工作流 */}
       <button
+        className="tb-btn"
         onClick={() => setShowAI(true)}
         style={{
           display: 'flex',
@@ -432,6 +577,7 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
       {/* 全屏切换 */}
       {onToggleFullscreen && (
         <button
+          className="tb-btn"
           onClick={onToggleFullscreen}
           style={{
             display: 'flex',
@@ -456,6 +602,7 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
 
       {/* 导出按钮 */}
       <button
+        className="tb-btn"
         onClick={handleExport}
         style={{
           display: 'flex',
@@ -479,6 +626,7 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
 
       {/* 导入按钮 */}
       <button
+        className="tb-btn"
         onClick={handleImportClick}
         disabled={importing}
         style={{
@@ -510,6 +658,7 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
 
       {/* 保存按钮 */}
       <button
+        className="tb-btn"
         onClick={handleSave}
         disabled={saveStatus === 'saving'}
         style={{
@@ -525,7 +674,7 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
           cursor: saveStatus === 'saving' ? 'not-allowed' : 'pointer',
           transition: 'color 0.2s ease',
         }}
-        title="保存工作流"
+        title="保存工作流 (⌘S)"
       >
         {saveStatus === 'saved' ? <Check size={13} /> : <Save size={13} />}
         {saveBtnText}
@@ -533,6 +682,7 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
 
       {/* 运行/停止按钮 */}
       <button
+        className="tb-btn-solid"
         onClick={handleRunClick}
         disabled={!workflowId}
         style={{
@@ -550,11 +700,35 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
           opacity: !workflowId ? 0.5 : 1,
           transition: 'background 0.15s ease',
         }}
-        title={isRunning ? '停止运行' : '运行工作流'}
+        title={isRunning ? '停止运行 (⌘↩)' : '运行工作流 (⌘↩)'}
       >
         {isRunning ? <Square size={13} fill="currentColor" /> : <Play size={13} />}
         {isRunning ? '停止' : '运行'}
       </button>
+
+      {/* 整体运行进度条（工具栏底部 2px，对标 ComfyUI 顶栏进度） */}
+      {totalNodes > 0 && (isRunning || doneCount > 0) && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: -1,
+            height: 2,
+            background: 'transparent',
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            style={{
+              width: `${progressPct}%`,
+              height: '100%',
+              background: statusCounts['failed'] ? '#ff3b30' : isRunning ? '#007aff' : '#30d158',
+              transition: 'width 0.3s ease, background 0.3s ease',
+            }}
+          />
+        </div>
+      )}
 
       {/* 离开确认对话框 */}
       <Dialog
@@ -574,6 +748,13 @@ export function FlowToolbar({ onSave, fullscreen, onToggleFullscreen }: FlowTool
       >
         工作流有未保存的更改，确定要离开吗？
       </Dialog>
+
+      {/* 运行历史弹窗 */}
+      <RunHistoryDialog
+        open={showHistory}
+        onClose={() => setShowHistory(false)}
+        workflowId={workflowId}
+      />
 
       {/* AI 生成工作流弹窗 */}
       <Dialog
