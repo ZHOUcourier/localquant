@@ -1,6 +1,6 @@
 """机器学习模型节点 — MLP/RF/LGBM/XGB/GRU/SVM/LSTM/CNN/Transformer/GNN/Optuna"""
 
-from typing import Optional, Type
+from typing import Any, Optional, Type
 
 import numpy as np
 import pandas as pd
@@ -25,6 +25,12 @@ class MLPredictionOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     data: Optional[pd.DataFrame] = None
     predictions: list = Field(default_factory=list, title="预测结果")
+    factor_panel: Optional[pd.DataFrame] = Field(
+        default=None, title="预测因子面板(index=日期, columns=股票)"
+    )
+    return_data: Optional[pd.DataFrame] = Field(
+        default=None, title="次日收益面板(供下游因子分析/回测)"
+    )
     metrics: dict = Field(default_factory=dict, title="评估指标")
 
 
@@ -50,6 +56,106 @@ def _split_data(X, y, test_ratio: float):
     n = len(X)
     split = int(n * (1 - test_ratio))
     return X[:split], X[split:], y[:split], y[split:]
+
+
+def _oos_predict(
+    model_factory,
+    X: np.ndarray,
+    y: np.ndarray,
+    test_ratio: float = 0.2,
+    walk_forward: bool = False,
+    train_window: int = 0,
+    test_window: int = 0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, Any]:
+    """训练并产出样本外预测。
+
+    返回 (oos_positions, y_pred, y_true, last_model)：
+      - 单次切分（walk_forward=False）：后 test_ratio 作为 OOS；
+      - walk-forward：滚动训练窗/预测窗，各折 OOS 预测拼接（无前视）。
+    last_model 供特征重要度等用途。
+    """
+    n = len(X)
+    if walk_forward and train_window > 0 and test_window > 0:
+        positions: list[int] = []
+        preds: list[float] = []
+        model = None
+        start = 0
+        while start + train_window < n:
+            tr_end = start + train_window
+            te_end = min(tr_end + test_window, n)
+            model = model_factory()
+            model.fit(X[start:tr_end], y[start:tr_end])
+            p = model.predict(X[tr_end:te_end])
+            positions.extend(range(tr_end, te_end))
+            preds.extend(np.asarray(p).tolist())
+            start += test_window
+        return (
+            np.array(positions, dtype=int),
+            np.array(preds, dtype=float),
+            y[positions] if positions else np.array([]),
+            model,
+        )
+    # 单次时序切分
+    split = int(n * (1 - test_ratio))
+    model = model_factory()
+    model.fit(X[:split], y[:split])
+    y_pred = np.asarray(model.predict(X[split:]), dtype=float)
+    positions = np.arange(split, n, dtype=int)
+    return positions, y_pred, y[split:], model
+
+
+def _build_factor_panel(
+    df: pd.DataFrame,
+    oos_positions: np.ndarray,
+    y_pred: np.ndarray,
+    date_col: str,
+    code_col: str,
+) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """将 OOS 预测重塑为 (date × code) 因子面板，并从 close 构造次日收益面板
+
+    仅当 df 含 date_col 与 code_col 时产出面板；否则返回 (None, None)（退回 list 输出）。
+    """
+    if date_col not in df.columns or code_col not in df.columns:
+        return None, None
+    sub = df.iloc[oos_positions][[date_col, code_col]].copy()
+    sub["_pred"] = y_pred
+    panel = sub.pivot_table(
+        index=date_col, columns=code_col, values="_pred", aggfunc="mean"
+    )
+    panel.index = pd.to_datetime(panel.index)
+    panel = panel.sort_index()
+    # 次日收益面板（若有 close 列）
+    return_data = None
+    if "close" in df.columns:
+        close = df.pivot_table(
+            index=date_col, columns=code_col, values="close", aggfunc="last"
+        )
+        close.index = pd.to_datetime(close.index)
+        return_data = close.sort_index().pct_change()
+    return panel, return_data
+
+
+def _finalize_prediction(
+    df: pd.DataFrame,
+    oos_positions: np.ndarray,
+    y_pred: np.ndarray,
+    metrics: dict,
+    date_col: str = "",
+    code_col: str = "",
+) -> "MLPredictionOutput":
+    """统一构造预测输出：有 date/code 时产出因子面板（可直接接因子分析/回测）"""
+    factor_panel, return_data = (None, None)
+    if date_col and code_col:
+        factor_panel, return_data = _build_factor_panel(
+            df, oos_positions, y_pred, date_col, code_col
+        )
+    return MLPredictionOutput(
+        data=df,
+        predictions=[float(v) for v in y_pred],
+        factor_panel=factor_panel,
+        return_data=return_data,
+        metrics=metrics,
+    )
 
 
 def _regression_metrics(y_true, y_pred):
@@ -84,6 +190,11 @@ def _classification_metrics(y_true, y_pred):
     hidden_layers={"input_type": "text_field", "placeholder": "隐藏层结构，如 64,32"},
     max_iter={"input_type": "number_field"},
     task_type={"input_type": "combobox", "options": ["regression", "classification"]},
+    date_col={"input_type": "text_field", "placeholder": "日期列名(可选，供因子面板)"},
+    code_col={"input_type": "text_field", "placeholder": "股票代码列名(可选)"},
+    walk_forward={"input_type": "boolean"},
+    train_window={"input_type": "number_field"},
+    test_window={"input_type": "number_field"},
     data={"input_type": "None"},
 )
 class MLPInput(BaseModel):
@@ -95,6 +206,11 @@ class MLPInput(BaseModel):
     hidden_layers: str = "64,32"
     max_iter: int = 500
     task_type: str = "regression"
+    date_col: str = ""
+    code_col: str = ""
+    walk_forward: bool = False
+    train_window: int = 0
+    test_window: int = 0
 
 
 @work_node(
@@ -102,11 +218,12 @@ class MLPInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="多层感知机神经网络，适用于非线性回归与分类任务",
-    example="特征工程构建 → MLP模型 → 输出",
+    example="特征工程构建 → MLP模型 → 因子分析/回测",
     notes=[
         "data 需连线提供含特征列与目标列的 DataFrame",
-        "需已安装 scikit-learn（make install-ml）",
-        "feature_cols 留空时使用除目标列外的全部数值列",
+        "需已安装 scikit-learn（make install-ml）；feature_cols 留空时用除目标列外的全部数值列",
+        "填 date_col/code_col 后输出 factor_panel(date×code)与 return_data，可直接接因子分析/回测节点",
+        "walk_forward=true 时按 train_window/test_window 滚动训练，预测为各折样本外拼接",
     ],
 )
 class MLPNode(BaseWorkNode):
@@ -136,29 +253,35 @@ class MLPNode(BaseWorkNode):
                 data=pd.DataFrame(), predictions=[], metrics={"error": "数据准备失败"}
             )
 
-        X_train, X_test, y_train, y_test = _split_data(X, y, input.test_ratio)
         layers = tuple(
             int(l.strip()) for l in input.hidden_layers.split(",") if l.strip()
         )
 
-        if input.task_type == "classification":
-            model = MLPClassifier(
+        def _factory():
+            if input.task_type == "classification":
+                return MLPClassifier(
+                    hidden_layer_sizes=layers, max_iter=input.max_iter, random_state=42
+                )
+            return MLPRegressor(
                 hidden_layer_sizes=layers, max_iter=input.max_iter, random_state=42
             )
-        else:
-            model = MLPRegressor(
-                hidden_layer_sizes=layers, max_iter=input.max_iter, random_state=42
-            )
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
 
-        metrics = (
-            _classification_metrics(y_test, y_pred)
-            if input.task_type == "classification"
-            else _regression_metrics(y_test, y_pred)
+        oos_pos, y_pred, y_true, _ = _oos_predict(
+            _factory,
+            X,
+            y,
+            input.test_ratio,
+            input.walk_forward,
+            input.train_window,
+            input.test_window,
         )
-        return MLPredictionOutput(
-            data=input.data, predictions=y_pred.tolist(), metrics=metrics
+        metrics = (
+            _classification_metrics(y_true, y_pred)
+            if input.task_type == "classification"
+            else _regression_metrics(y_true, y_pred)
+        )
+        return _finalize_prediction(
+            input.data, oos_pos, y_pred, metrics, input.date_col, input.code_col
         )
 
 
@@ -172,6 +295,11 @@ class MLPNode(BaseWorkNode):
     n_estimators={"input_type": "number_field"},
     max_depth={"input_type": "number_field"},
     task_type={"input_type": "combobox", "options": ["regression", "classification"]},
+    date_col={"input_type": "text_field", "placeholder": "日期列名(可选，供因子面板)"},
+    code_col={"input_type": "text_field", "placeholder": "股票代码列名(可选)"},
+    walk_forward={"input_type": "boolean"},
+    train_window={"input_type": "number_field"},
+    test_window={"input_type": "number_field"},
     data={"input_type": "None"},
 )
 class RFInput(BaseModel):
@@ -183,17 +311,23 @@ class RFInput(BaseModel):
     n_estimators: int = 100
     max_depth: int = 0  # 0 = None
     task_type: str = "regression"
+    date_col: str = ""
+    code_col: str = ""
+    walk_forward: bool = False
+    train_window: int = 0
+    test_window: int = 0
 
 
 @work_node(
     name="随机森林模型",
     group="07-机器学习",
     box_color="#E91E63",
-    description="基于集成学习的随机森林，抗过拟合能力强",
-    example="特征工程构建 → 随机森林模型 → 输出",
+    description="基于集成学习的随机森林，抗过拟合能力强，带特征重要度",
+    example="特征工程构建 → 随机森林模型 → 因子分析/回测",
     notes=[
-        "data 需连线提供含特征列与目标列的 DataFrame",
-        "需已安装 scikit-learn（make install-ml）",
+        "data 需连线提供含特征列与目标列的 DataFrame；需已安装 scikit-learn",
+        "填 date_col/code_col 后输出 factor_panel(date×code)与 return_data，可直接接因子分析/回测节点",
+        "walk_forward=true 时按 train_window/test_window 滚动训练，预测为各折样本外拼接",
     ],
 )
 class RFNode(BaseWorkNode):
@@ -223,30 +357,38 @@ class RFNode(BaseWorkNode):
                 data=pd.DataFrame(), predictions=[], metrics={"error": "数据准备失败"}
             )
 
-        X_train, X_test, y_train, y_test = _split_data(X, y, input.test_ratio)
         depth = input.max_depth if input.max_depth > 0 else None
 
-        if input.task_type == "classification":
-            model = RandomForestClassifier(
+        def _factory():
+            if input.task_type == "classification":
+                return RandomForestClassifier(
+                    n_estimators=input.n_estimators, max_depth=depth, random_state=42
+                )
+            return RandomForestRegressor(
                 n_estimators=input.n_estimators, max_depth=depth, random_state=42
             )
-        else:
-            model = RandomForestRegressor(
-                n_estimators=input.n_estimators, max_depth=depth, random_state=42
-            )
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
 
-        metrics = (
-            _classification_metrics(y_test, y_pred)
-            if input.task_type == "classification"
-            else _regression_metrics(y_test, y_pred)
+        oos_pos, y_pred, y_true, model = _oos_predict(
+            _factory,
+            X,
+            y,
+            input.test_ratio,
+            input.walk_forward,
+            input.train_window,
+            input.test_window,
         )
-        # 特征重要度
-        importances = dict(zip(fcols, [float(x) for x in model.feature_importances_]))
-        metrics["feature_importances"] = importances
-        return MLPredictionOutput(
-            data=input.data, predictions=y_pred.tolist(), metrics=metrics
+        metrics = (
+            _classification_metrics(y_true, y_pred)
+            if input.task_type == "classification"
+            else _regression_metrics(y_true, y_pred)
+        )
+        # 特征重要度（取最后一次拟合的模型）
+        if model is not None and hasattr(model, "feature_importances_"):
+            metrics["feature_importances"] = dict(
+                zip(fcols, [float(x) for x in model.feature_importances_])
+            )
+        return _finalize_prediction(
+            input.data, oos_pos, y_pred, metrics, input.date_col, input.code_col
         )
 
 
@@ -260,6 +402,11 @@ class RFNode(BaseWorkNode):
     n_estimators={"input_type": "number_field"},
     learning_rate={"input_type": "number_field"},
     task_type={"input_type": "combobox", "options": ["regression", "classification"]},
+    date_col={"input_type": "text_field", "placeholder": "日期列名(可选，供因子面板)"},
+    code_col={"input_type": "text_field", "placeholder": "股票代码列名(可选)"},
+    walk_forward={"input_type": "boolean"},
+    train_window={"input_type": "number_field"},
+    test_window={"input_type": "number_field"},
     data={"input_type": "None"},
 )
 class LGBMInput(BaseModel):
@@ -272,6 +419,11 @@ class LGBMInput(BaseModel):
     learning_rate: float = 0.1
     num_leaves: int = 31
     task_type: str = "regression"
+    date_col: str = ""
+    code_col: str = ""
+    walk_forward: bool = False
+    train_window: int = 0
+    test_window: int = 0
 
 
 @work_node(
@@ -279,10 +431,11 @@ class LGBMInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="基于梯度提升树的高效模型，训练速度快",
-    example="特征工程构建 → LightGBM模型 → 输出",
+    example="特征工程构建 → LightGBM模型 → 因子分析/回测",
     notes=[
-        "data 需连线提供含特征列与目标列的 DataFrame",
-        "需已安装 lightgbm（macOS 需先 brew install libomp）",
+        "data 需连线提供含特征列与目标列的 DataFrame；需已安装 lightgbm（macOS 需先 brew install libomp）",
+        "填 date_col/code_col 后输出 factor_panel(date×code)与 return_data，可直接接因子分析/回测节点",
+        "walk_forward=true 时按 train_window/test_window 滚动训练，预测为各折样本外拼接",
     ],
 )
 class LGBMNode(BaseWorkNode):
@@ -312,7 +465,6 @@ class LGBMNode(BaseWorkNode):
                 data=pd.DataFrame(), predictions=[], metrics={"error": "数据准备失败"}
             )
 
-        X_train, X_test, y_train, y_test = _split_data(X, y, input.test_ratio)
         params = {
             "n_estimators": input.n_estimators,
             "learning_rate": input.learning_rate,
@@ -321,20 +473,31 @@ class LGBMNode(BaseWorkNode):
             "verbose": -1,
         }
 
-        if input.task_type == "classification":
-            model = lgb.LGBMClassifier(**params)
-        else:
-            model = lgb.LGBMRegressor(**params)
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
+        def _factory():
+            if input.task_type == "classification":
+                return lgb.LGBMClassifier(**params)
+            return lgb.LGBMRegressor(**params)
 
-        metrics = (
-            _classification_metrics(y_test, y_pred)
-            if input.task_type == "classification"
-            else _regression_metrics(y_test, y_pred)
+        oos_pos, y_pred, y_true, model = _oos_predict(
+            _factory,
+            X,
+            y,
+            input.test_ratio,
+            input.walk_forward,
+            input.train_window,
+            input.test_window,
         )
-        return MLPredictionOutput(
-            data=input.data, predictions=y_pred.tolist(), metrics=metrics
+        metrics = (
+            _classification_metrics(y_true, y_pred)
+            if input.task_type == "classification"
+            else _regression_metrics(y_true, y_pred)
+        )
+        if model is not None and hasattr(model, "feature_importances_"):
+            metrics["feature_importances"] = dict(
+                zip(fcols, [float(x) for x in model.feature_importances_])
+            )
+        return _finalize_prediction(
+            input.data, oos_pos, y_pred, metrics, input.date_col, input.code_col
         )
 
 
@@ -349,6 +512,11 @@ class LGBMNode(BaseWorkNode):
     learning_rate={"input_type": "number_field"},
     max_depth={"input_type": "number_field"},
     task_type={"input_type": "combobox", "options": ["regression", "classification"]},
+    date_col={"input_type": "text_field", "placeholder": "日期列名(可选，供因子面板)"},
+    code_col={"input_type": "text_field", "placeholder": "股票代码列名(可选)"},
+    walk_forward={"input_type": "boolean"},
+    train_window={"input_type": "number_field"},
+    test_window={"input_type": "number_field"},
     data={"input_type": "None"},
 )
 class XGBInput(BaseModel):
@@ -361,6 +529,11 @@ class XGBInput(BaseModel):
     learning_rate: float = 0.1
     max_depth: int = 6
     task_type: str = "regression"
+    date_col: str = ""
+    code_col: str = ""
+    walk_forward: bool = False
+    train_window: int = 0
+    test_window: int = 0
 
 
 @work_node(
@@ -368,10 +541,11 @@ class XGBInput(BaseModel):
     group="07-机器学习",
     box_color="#E91E63",
     description="极端梯度提升树，量化投资常用模型",
-    example="特征工程构建 → XGBoost模型 → 输出",
+    example="特征工程构建 → XGBoost模型 → 因子分析/回测",
     notes=[
-        "data 需连线提供含特征列与目标列的 DataFrame",
-        "需已安装 xgboost（make install-ml）",
+        "data 需连线提供含特征列与目标列的 DataFrame；需已安装 xgboost（make install-ml）",
+        "填 date_col/code_col 后输出 factor_panel(date×code)与 return_data，可直接接因子分析/回测节点",
+        "walk_forward=true 时按 train_window/test_window 滚动训练，预测为各折样本外拼接",
     ],
 )
 class XGBNode(BaseWorkNode):
@@ -401,34 +575,38 @@ class XGBNode(BaseWorkNode):
                 data=pd.DataFrame(), predictions=[], metrics={"error": "数据准备失败"}
             )
 
-        X_train, X_test, y_train, y_test = _split_data(X, y, input.test_ratio)
-
-        if input.task_type == "classification":
-            model = xgb.XGBClassifier(
+        def _factory():
+            common = dict(
                 n_estimators=input.n_estimators,
                 learning_rate=input.learning_rate,
                 max_depth=input.max_depth,
                 random_state=42,
                 verbosity=0,
             )
-        else:
-            model = xgb.XGBRegressor(
-                n_estimators=input.n_estimators,
-                learning_rate=input.learning_rate,
-                max_depth=input.max_depth,
-                random_state=42,
-                verbosity=0,
-            )
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
+            if input.task_type == "classification":
+                return xgb.XGBClassifier(**common)
+            return xgb.XGBRegressor(**common)
 
-        metrics = (
-            _classification_metrics(y_test, y_pred)
-            if input.task_type == "classification"
-            else _regression_metrics(y_test, y_pred)
+        oos_pos, y_pred, y_true, model = _oos_predict(
+            _factory,
+            X,
+            y,
+            input.test_ratio,
+            input.walk_forward,
+            input.train_window,
+            input.test_window,
         )
-        return MLPredictionOutput(
-            data=input.data, predictions=y_pred.tolist(), metrics=metrics
+        metrics = (
+            _classification_metrics(y_true, y_pred)
+            if input.task_type == "classification"
+            else _regression_metrics(y_true, y_pred)
+        )
+        if model is not None and hasattr(model, "feature_importances_"):
+            metrics["feature_importances"] = dict(
+                zip(fcols, [float(x) for x in model.feature_importances_])
+            )
+        return _finalize_prediction(
+            input.data, oos_pos, y_pred, metrics, input.date_col, input.code_col
         )
 
 
@@ -1070,11 +1248,12 @@ class GNNInput(BaseModel):
     name="GNN模型",
     group="07-机器学习",
     box_color="#E91E63",
-    description="图神经网络，用于股票关联关系建模",
+    description="图神经网络（experimental），用于股票关联关系建模",
     example="特征工程构建 → GNN模型 → 输出",
     notes=[
         "data 需连线提供特征数据",
         "需已安装 PyTorch（make install-ml）",
+        "experimental：当前以全连接图近似（并限 1 万条边），未基于真实股票关系构建邻接矩阵，效果仅供实验参考",
     ],
 )
 class GNNNode(BaseWorkNode):

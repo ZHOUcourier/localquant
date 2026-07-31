@@ -5,11 +5,12 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
 
 from backend.config import settings
-from backend.services import market_data
+from backend.services import data_download, market_data, reference_data
 from backend.services.duckdb_service import DuckDBService
 
 router = APIRouter()
@@ -24,6 +25,16 @@ class QueryRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     symbol: str
+    period: str = "1d"
+    start_date: str = ""
+    end_date: str = ""
+
+
+class BatchDownloadRequest(BaseModel):
+    """批量下载：sector 与 symbols 二选一（sector 优先，展开成分股）"""
+
+    sector: str = ""
+    symbols: list[str] = []
     period: str = "1d"
     start_date: str = ""
     end_date: str = ""
@@ -115,6 +126,75 @@ async def get_sectors():
     if not qmt.connected:
         return []
     return qmt.get_sector_list()
+
+
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+@router.post("/download-batch")
+async def download_batch(req: BatchDownloadRequest):
+    """批量下载行情（SSE 逐只进度）：板块/指数展开或代码列表
+
+    SSE 事件：batch_start / symbol_complete / symbol_failed /
+            reference_saved / batch_complete / batch_failed
+    """
+    if req.sector:
+        try:
+            codes = data_download.expand_sector(req.sector)
+        except (ConnectionError, ValueError) as e:
+            raise HTTPException(status_code=503, detail=str(e))
+    else:
+        codes = [s.strip() for s in req.symbols if s.strip()]
+    if not codes:
+        raise HTTPException(status_code=400, detail="未指定板块或代码列表")
+
+    return StreamingResponse(
+        data_download.batch_download_stream(
+            codes,
+            period=req.period,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            sector=req.sector,
+        ),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+@router.post("/update-cached")
+async def update_cached(period: str = "1d"):
+    """一键补齐：已缓存品种按各自末日期增量下载至最新（SSE）"""
+    codes, per_code_start = data_download.build_update_plan(period)
+    if not codes:
+        raise HTTPException(status_code=404, detail="本地无缓存品种，无可补齐")
+
+    return StreamingResponse(
+        data_download.batch_download_stream(
+            codes, period=period, per_code_start=per_code_start
+        ),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+@router.get("/coverage")
+async def coverage(period: str = "1d"):
+    """缓存覆盖度：每只股票的起止日期与条数"""
+    entries = market_data.cache_coverage(period)
+    return {"period": period, "count": len(entries), "entries": entries}
+
+
+@router.get("/reference-status")
+async def reference_status():
+    """参考数据快照现状（成分/行业/股本/合约详情）"""
+    return {
+        "reference": reference_data.reference_status(),
+        "snapshot_indices": reference_data.list_snapshot_indices(),
+    }
 
 
 @router.get("/stocks")

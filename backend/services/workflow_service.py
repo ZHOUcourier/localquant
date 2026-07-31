@@ -246,16 +246,127 @@ async def run(workflow_id: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# 参数扫描（网格搜索）
+# ---------------------------------------------------------------------------
+
+# 从节点输出中提取的关键指标（回测 metrics / 因子分析 summary）
+_METRIC_KEYS = [
+    "annual_return",
+    "sharpe_ratio",
+    "max_drawdown",
+    "ic_mean",
+    "rank_ic",
+    "ic_ir",
+    "total_return",
+    "annualizedReturn",
+    "sharpeRatio",
+    "maxDrawdown",
+]
+
+
+def _extract_metrics(node_outputs: dict[str, Any]) -> dict[str, float]:
+    """从末端分析/回测节点输出中提取数值指标（summary / metrics 字段）"""
+    metrics: dict[str, float] = {}
+    for out in node_outputs.values():
+        if not isinstance(out, dict):
+            continue
+        for container_key in ("summary", "metrics"):
+            block = out.get(container_key)
+            if isinstance(block, dict):
+                for k in _METRIC_KEYS:
+                    if k in block and isinstance(block[k], (int, float)):
+                        metrics[k] = float(block[k])
+    return metrics
+
+
+async def run_sweep(
+    workflow_id: str,
+    param_grid: dict[str, list],
+    note: str = "",
+) -> dict[str, Any] | None:
+    """参数扫描：对 param_grid 做笛卡尔积，逐组合复用 runner 执行（启节点缓存）
+
+    param_grid: {"<node_uuid>.<param>": [值列表]}，对应覆写节点 static_input_data。
+    每组合写入 experiments（params=组合, metrics=末端分析/回测指标），
+    实验页可直接用现有 compare 对比。
+    """
+    import itertools
+    from copy import deepcopy
+
+    from backend.models.experiment import ExperimentCreate
+    from backend.services.experiment_service import experiment_service
+
+    wf = await get_workflow(workflow_id)
+    if not wf:
+        return None
+    if not param_grid:
+        return {"error": "param_grid 为空，无可扫描的参数"}
+
+    keys = list(param_grid.keys())
+    value_lists = [param_grid[k] for k in keys]
+    combos = list(itertools.product(*value_lists))
+
+    results: list[dict] = []
+    for combo in combos:
+        overrides = dict(zip(keys, combo))
+        nodes = deepcopy(wf["nodes"])
+        # 将 {node_uuid.param: value} 写入对应节点的 static_input_data
+        for spec, val in overrides.items():
+            node_uuid, _, param = spec.partition(".")
+            for n in nodes:
+                if n["uuid"] == node_uuid:
+                    n.setdefault("static_input_data", {})
+                    n["static_input_data"][param] = val
+                    break
+
+        run_id = str(uuid.uuid4())
+        ctx = await run_workflow(run_id, nodes, wf["links"], use_cache=True)
+        metrics = _extract_metrics(ctx.node_outputs)
+
+        # 写入实验记录（供实验页 compare 对比）
+        exp = await experiment_service.create(
+            ExperimentCreate(
+                source="workflow",
+                source_id=workflow_id,
+                name=f"{wf.get('name', 'sweep')} | "
+                + ", ".join(f"{k.split('.')[-1]}={v}" for k, v in overrides.items()),
+                note=note,
+                tags=["sweep"],
+                params={k: v for k, v in overrides.items()},
+                metrics=metrics,
+            )
+        )
+        results.append(
+            {
+                "run_id": run_id,
+                "experiment_id": exp["id"],
+                "params": overrides,
+                "metrics": metrics,
+                "status": ctx.status,
+            }
+        )
+
+    return {
+        "workflow_id": workflow_id,
+        "total": len(combos),
+        "results": results,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 运行（SSE 流式）
 # ---------------------------------------------------------------------------
 
 
-async def run_stream(workflow_id: str) -> AsyncGenerator[str, None]:
+async def run_stream(
+    workflow_id: str, use_cache: bool = True
+) -> AsyncGenerator[str, None]:
     """
     流式运行工作流，yield SSE 事件字符串。
 
     调用方（路由层）用 StreamingResponse 包装即可。
     注意：调用前应先通过 get_workflow 验证工作流存在。
+    use_cache: 是否启用节点级输出缓存（默认启用；False 为忽略缓存强制重跑）。
     """
     wf = await get_workflow(workflow_id)
     if not wf:
@@ -286,7 +397,7 @@ async def run_stream(workflow_id: str) -> AsyncGenerator[str, None]:
     report: dict[str, Any] = {}
     try:
         async for sse_event in run_workflow_stream(
-            run_id, wf["nodes"], wf["links"], report
+            run_id, wf["nodes"], wf["links"], report, use_cache=use_cache
         ):
             yield sse_event
     finally:

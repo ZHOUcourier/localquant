@@ -577,13 +577,17 @@ class FactorDecayNode(BaseWorkNode):
         "input_type": "combobox",
         "options": ["weighted_sum", "equal_weight", "ic_weighted"],
     },
+    ic_window={"input_type": "number_field"},
     factors={"input_type": "None"},
+    return_data={"input_type": "None"},
 )
 class FactorCombineInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     factors: Optional[pd.DataFrame] = None  # 多列因子数据
+    return_data: Optional[pd.DataFrame] = None  # 收益面板（ic_weighted 必需）
     weights: dict[str, float] = Field(default_factory=dict)  # 因子名 -> 权重
     method: str = "weighted_sum"
+    ic_window: int = 120
     output_name: str = "combined_factor"
 
 
@@ -596,11 +600,12 @@ class FactorCombineOutput(BaseModel):
     name="多因子合成",
     group="06-因子分析",
     box_color="#FF9800",
-    description="将多列因子按权重加权求和或等权合成为综合因子列",
+    description="将多列因子按权重加权求和、等权或 IC 加权合成为综合因子列",
     example="因子标准化 → 多因子合成 → IC 计算",
     notes=[
         "factors 需连线提供多列因子 DataFrame；建议先标准化再合成",
-        "ic_weighted 需收益数据支持，当前退化为等权；weights 未指定的因子默认等权",
+        "ic_weighted 需连线 return_data（收益面板/序列），按各因子近 ic_window 期 RankIC 均值加权，无收益数据时报错而非退化等权",
+        "weights 未指定的因子默认等权；ic_window 默认 120 交易日",
     ],
 )
 class FactorCombineNode(BaseWorkNode):
@@ -632,10 +637,52 @@ class FactorCombineNode(BaseWorkNode):
             for col in numeric_df.columns:
                 combined += numeric_df[col] * weights.get(col, 1.0 / n)
             result[output_name] = combined
-        else:  # equal_weight / ic_weighted(退化等权)
+        elif method == "ic_weighted":
+            w = self._column_ic_weights(numeric_df, input.return_data, input.ic_window)
+            combined = pd.Series(0.0, index=numeric_df.index)
+            for col in numeric_df.columns:
+                combined += numeric_df[col] * w.get(col, 0.0)
+            result[output_name] = combined
+        else:  # equal_weight
             result[output_name] = numeric_df.mean(axis=1)
 
         return FactorCombineOutput(combined_factor=result)
+
+    @staticmethod
+    def _column_ic_weights(
+        numeric_df: pd.DataFrame,
+        return_data: Optional[pd.DataFrame],
+        ic_window: int,
+    ) -> dict[str, float]:
+        """列级 IC 加权：每列因子与收益对齐后取 RankIC，|IC| 归一、符号对齐方向
+
+        return_data 为多列时取首列作为收益序列；无 return_data 时显式报错。
+        """
+        if return_data is None or not _valid(return_data):
+            raise ValueError(
+                "ic_weighted 合成需要连线 return_data（收益面板/序列），或改用 equal_weight/weighted_sum"
+            )
+        ret = (
+            return_data.iloc[:, 0]
+            if return_data.shape[1] >= 1
+            else return_data.squeeze()
+        )
+        ret = ret.tail(ic_window) if len(ret) > ic_window else ret
+        ics: dict[str, float] = {}
+        for col in numeric_df.columns:
+            s = numeric_df[col].reindex(ret.index)
+            common = s.dropna().index.intersection(ret.dropna().index)
+            if len(common) > 10:
+                ics[col] = float(s[common].rank().corr(ret[common].rank()))
+            else:
+                ics[col] = 0.0
+        total = sum(abs(v) for v in ics.values())
+        if total < 1e-12:
+            m = max(len(numeric_df.columns), 1)
+            return {col: 1.0 / m for col in numeric_df.columns}
+        return {
+            col: (abs(v) / total) * (1.0 if v >= 0 else -1.0) for col, v in ics.items()
+        }
 
 
 def _valid(df) -> bool:

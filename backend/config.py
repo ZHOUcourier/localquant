@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     ai_effort: str = "medium"  # 推理强度 minimal/low/medium/high（支持的模型生效）
     ai_engine: str = "api"  # api=供应商接口 / cli=本机 CLI 工具
     ai_cli: str = "claude"  # 见 services/ai_providers.CLI_TOOLS
+    ai_cli_model: str = ""  # CLI 模型（空=用 CLI 自身默认）
+    ai_cli_effort: str = "default"  # CLI 推理强度 default/minimal/low/medium/high
 
     # QUBE AI Agent（与设置页 AI 配置完全独立）
     qube_provider: str = "opencode-zen"
@@ -43,6 +45,8 @@ class Settings(BaseSettings):
     qube_base_url: str = ""  # 仅 custom（BYOK）需要
     qube_engine: str = "api"  # api / cli
     qube_cli: str = "claude"
+    qube_cli_model: str = ""  # CLI 模型（空=用 CLI 自身默认）
+    qube_cli_effort: str = "default"  # CLI 推理强度 default/minimal/low/medium/high
 
     # 代码执行沙箱（OpenSandbox 容器隔离；仅 QUBE/回测信号代码）
     # Docker/opensandbox-server 不可用时自动降级为进程内执行

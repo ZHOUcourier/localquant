@@ -8,8 +8,10 @@ import { useBackendHealth } from '@/composables/useBackendHealth'
 
 const { online, checking } = useBackendHealth()
 const route = useRoute()
-// 工作流编辑器需要满幅画布（iframe 内嵌 ComfyUI），不加内边距
-const isCanvasPage = computed(() => /^\/workflow\/[^/]+$/.test(route.path))
+// 满幅页（无内边距）：工作流编辑器（iframe 内嵌 ComfyUI）与 QUBE（左中右分屏，自带 h-full 布局）
+const isFullBleedPage = computed(
+  () => /^\/workflow\/[^/]+$/.test(route.path) || route.path === '/qube',
+)
 </script>
 
 <template>
@@ -34,8 +36,8 @@ const isCanvasPage = computed(() => /^\/workflow\/[^/]+$/.test(route.path))
           ，页面数据将无法加载
         </div>
 
-        <!-- 内容区留白对齐 opencode 官网（content-panel padding: 2rem 3rem）；画布页不加内边距 -->
-        <main class="flex-1 min-h-0 overflow-auto" :class="isCanvasPage ? '' : 'px-12 py-8'">
+        <!-- 内容区留白对齐 opencode 官网（content-panel padding: 2rem 3rem）；满幅页（画布/QUBE）不加内边距 -->
+        <main class="flex-1 min-h-0 overflow-auto" :class="isFullBleedPage ? '' : 'px-12 py-8'">
           <RouterView />
         </main>
       </div>

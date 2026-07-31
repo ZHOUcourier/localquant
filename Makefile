@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend install install-backend install-frontend install-ml sandbox-server clean
+.PHONY: dev dev-backend dev-frontend install install-backend install-frontend install-ml sandbox-server test clean
 
 # 安装所有依赖
 install: install-backend install-frontend
@@ -30,6 +30,10 @@ dev-backend:
 dev-frontend:
 	cd frontend && npm run dev
 
+# 后端回归测试（回测已知答案/IC 对齐/中性化等，不依赖 QMT）
+test:
+	uv run pytest -q
+
 # 清理
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
@@ -44,4 +48,5 @@ help:
 	@echo "  make dev            - 启动开发模式（前后端）"
 	@echo "  make dev-backend    - 仅启动后端"
 	@echo "  make dev-frontend   - 仅启动前端"
+	@echo "  make test           - 运行后端回归测试"
 	@echo "  make clean          - 清理缓存"

@@ -5,8 +5,13 @@ import { Loader2, Maximize2, Minimize2, X } from 'lucide-vue-next'
 import { useWorkflow } from '@/composables/useWorkflow'
 import ComprehensiveReport from '@/components/factor/ComprehensiveReport.vue'
 import AlphaLensReport from '@/components/factor/AlphaLensReport.vue'
+import BacktestReport from '@/components/factor/BacktestReport.vue'
 import NodeCodeDialog from '@/components/workflow/NodeCodeDialog.vue'
-import type { FactorReport, AlphaLensReport as AlphaLensReportT } from '@/components/factor/types'
+import type {
+  FactorReport,
+  AlphaLensReport as AlphaLensReportT,
+  BacktestReport as BacktestReportT,
+} from '@/components/factor/types'
 
 /**
  * 工作流编辑器 = iframe 内嵌官方 ComfyUI 前端（方案 C.4）
@@ -62,15 +67,22 @@ const reportLoading = ref(false)
 const reportError = ref<string | null>(null)
 const report = ref<FactorReport | null>(null)
 const alReport = ref<AlphaLensReportT | null>(null)
-const reportKind = ref<'factor' | 'alphalens'>('factor')
+const btReport = ref<BacktestReportT | null>(null)
+const reportKind = ref<'factor' | 'alphalens' | 'backtest'>('factor')
 const reportTitle = ref('')
 
-async function openNodeReport(nodeId: string, runId: string, nodeTitle: string, kind: 'factor' | 'alphalens') {
+async function openNodeReport(
+  nodeId: string,
+  runId: string,
+  nodeTitle: string,
+  kind: 'factor' | 'alphalens' | 'backtest',
+) {
   reportOpen.value = true
   reportLoading.value = true
   reportError.value = null
   report.value = null
   alReport.value = null
+  btReport.value = null
   reportKind.value = kind
   reportTitle.value = nodeTitle
   try {
@@ -81,6 +93,7 @@ async function openNodeReport(nodeId: string, runId: string, nodeTitle: string, 
     const data = await res.json().catch(() => null)
     if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`)
     if (kind === 'alphalens') alReport.value = data.report
+    else if (kind === 'backtest') btReport.value = data.report
     else report.value = data.report
   } catch (e) {
     reportError.value = e instanceof Error ? e.message : String(e)
@@ -108,11 +121,19 @@ function onMessage(e: MessageEvent) {
   const d = e.data
   if (!d || typeof d !== 'object') return
   if (d.type === 'localquant:show-node-report') {
+    const kind =
+      d.reportKind === 'alphalens'
+        ? 'alphalens'
+        : d.reportKind === 'backtest'
+          ? 'backtest'
+          : 'factor'
+    const defaultTitle =
+      kind === 'alphalens' ? '因子分析（AlphaLens）' : kind === 'backtest' ? '回测结果' : '因子分析'
     openNodeReport(
       String(d.nodeId || ''),
       String(d.runId || ''),
-      String(d.nodeTitle || '因子分析'),
-      d.reportKind === 'alphalens' ? 'alphalens' : 'factor',
+      String(d.nodeTitle || defaultTitle),
+      kind,
     )
   } else if (d.type === 'localquant:edit-node-code') {
     codeClassType.value = String(d.classType || '')
@@ -200,6 +221,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <ComprehensiveReport
             v-else-if="reportKind === 'factor'"
             :report="report"
+            :factor-name="reportTitle"
+            :loading="reportLoading"
+          />
+          <BacktestReport
+            v-else-if="reportKind === 'backtest'"
+            :report="btReport"
             :factor-name="reportTitle"
             :loading="reportLoading"
           />

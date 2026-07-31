@@ -113,8 +113,25 @@ _FACTOR_REFERENCE = {
 
 @router.get("/reference")
 async def factor_reference():
-    """因子编写参考：可用字段、算子与示例（与公式求值环境一致）"""
-    return _FACTOR_REFERENCE
+    """因子编写参考：可用字段、算子与示例（与公式求值环境一致）
+
+    turnover/market_cap 的可用性根据参考数据快照现状动态标注（需已下载股本快照）。
+    """
+    from backend.services import reference_data
+
+    ref_status = reference_data.reference_status()
+    cap_ready = ref_status.get("capital", {}).get("rows", 0) > 0
+    ind_ready = ref_status.get("industry", {}).get("rows", 0) > 0
+
+    result = dict(_FACTOR_REFERENCE)
+    fields = [dict(f) for f in _FACTOR_REFERENCE["fields"]]
+    for f in fields:
+        if f["name"] == "turnover / market_cap":
+            f["available"] = cap_ready
+        elif f["name"] == "INDUSTRY_NEUTRALIZE":
+            f["available"] = ind_ready
+    result["fields"] = fields
+    return result
 
 
 def _dict_to_df(d: dict) -> pd.DataFrame:
@@ -377,8 +394,14 @@ async def register_factor(req: FactorCreate):
     factor_id = str(uuid.uuid4())
     now = int(time.time() * 1000)
     db = await get_db()
+    # 同名因子版本自增（保留历史行，不覆盖），便于查看/回滚历史公式
+    cursor = await db.execute(
+        "SELECT MAX(version) FROM factors WHERE name = ?", (req.name,)
+    )
+    row = await cursor.fetchone()
+    next_version = (row[0] or 0) + 1
     await db.execute(
-        "INSERT INTO factors (id, name, description, category, formula, code, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+        "INSERT INTO factors (id, name, description, category, formula, code, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             factor_id,
             req.name,
@@ -386,13 +409,56 @@ async def register_factor(req: FactorCreate):
             req.category,
             req.formula,
             req.code,
+            next_version,
             now,
             now,
         ),
     )
     await db.commit()
     await db.close()
-    return {"id": factor_id, "name": req.name}
+
+    # 注册后自动跑一次本地分析并存入实验表（最佳努力；数据不足则跳过，不阻断注册）
+    analysis = {"ok": False, "message": "未分析"}
+    try:
+        formula = (req.formula or "").strip()
+        if formula:
+            analysis = factor_research.analyze_formula_on_local(formula)
+            if analysis.get("ok"):
+                from backend.models.experiment import ExperimentCreate
+                from backend.services.experiment_service import experiment_service
+
+                await experiment_service.create(
+                    ExperimentCreate(
+                        source="factor",
+                        source_id=factor_id,
+                        name=f"{req.name} v{next_version}",
+                        note="注册时自动指标快照",
+                        tags=["factor", "register"],
+                        params={"formula": formula, "version": next_version},
+                        metrics=analysis["metrics"],
+                    )
+                )
+    except Exception as e:
+        logger.warning(f"自建因子注册分析快照失败（不影响注册）: {e}")
+
+    return {
+        "id": factor_id,
+        "name": req.name,
+        "version": next_version,
+        "analysis": analysis,
+    }
+
+
+@router.get("/library/{name}/versions")
+async def factor_versions(name: str):
+    """同名因子的历史版本列表（按版本降序），供查看/回滚"""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM factors WHERE name = ? ORDER BY version DESC", (name,)
+    )
+    rows = await cursor.fetchall()
+    await db.close()
+    return [dict(row) for row in rows]
 
 
 @router.delete("/library/{factor_id}")

@@ -21,6 +21,8 @@ class RunBacktestRequest(BaseModel):
     initial_capital: float = 1_000_000
     commission_rate: float = 0.001
     slippage: float = 0.001
+    stamp_tax: float = 0.0005
+    normalize: str = "none"  # none / long_only / dollar_neutral
 
 
 class TearSheetRequest(BaseModel):
@@ -43,6 +45,8 @@ class RunStrategyRequest(BaseModel):
     initial_capital: float = 1_000_000
     commission_rate: float = 0.001
     slippage: float = 0.001
+    stamp_tax: float = 0.0005
+    normalize: str = "none"  # none / long_only / dollar_neutral
     risk_free_rate: float = 0.03
 
 
@@ -102,14 +106,24 @@ async def run_strategy(req: RunStrategyRequest):
             status_code=400, detail="信号为空 — 请检查信号逻辑与数据区间"
         )
 
-    # 3. 回测 + 绩效
+    # 3. 回测 + 绩效（接入停牌/涨跌停等参考面板，缺失项记入 assumptions）
     try:
+        reference = market_data.load_reference_panels(
+            close=prices, volume=panels.get("volume")
+        )
         result = backtest_analysis.run_backtest(
             signals=signals_df,
             prices=prices,
             initial_capital=req.initial_capital,
             commission_rate=req.commission_rate,
             slippage=req.slippage,
+            stamp_tax=req.stamp_tax,
+            normalize=req.normalize,
+            tradable_mask=reference["tradable_mask"],
+            up_limit=reference["up_limit"],
+            down_limit=reference["down_limit"],
+            high=panels.get("high"),
+            low=panels.get("low"),
         )
         equity_curve = result["equity_curve"]
         strategy_returns = result["strategy_returns"]
@@ -134,6 +148,7 @@ async def run_strategy(req: RunStrategyRequest):
             "strategy_returns": _ser(strategy_returns),
             "drawdown_series": _ser(dd["drawdown_series"]),
             "tear_sheet": {**tear, "max_drawdown": dd["max_drawdown"]},
+            "assumptions": result["assumptions"],
         }
     except HTTPException:
         raise
@@ -157,6 +172,8 @@ async def run_backtest(req: RunBacktestRequest):
             initial_capital=req.initial_capital,
             commission_rate=req.commission_rate,
             slippage=req.slippage,
+            stamp_tax=req.stamp_tax,
+            normalize=req.normalize,
         )
 
         # 序列化
@@ -181,6 +198,7 @@ async def run_backtest(req: RunBacktestRequest):
                 for k, v in strategy_returns.items()
             },
             "initial_capital": req.initial_capital,
+            "assumptions": result["assumptions"],
         }
     except Exception as e:
         logger.error(f"回测执行失败: {e}")

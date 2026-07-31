@@ -25,6 +25,7 @@ from backend.plugins.ui_control import ui
         "input_type": "combobox",
         "options": ["standardize", "normalize", "pca", "none"],
     },
+    pca_variance={"input_type": "number_field"},
     lag_periods={
         "input_type": "text_field",
         "placeholder": "滞后阶数(逗号分隔)，如 1,3,5,10",
@@ -37,6 +38,7 @@ class FeatureEngineeringInput(BaseModel):
     feature_cols: str = Field(default="", title="特征列名(逗号分隔)")
     target_col: str = Field(default="", title="目标列名(可选)")
     method: str = Field(default="standardize", title="特征变换方法")
+    pca_variance: float = Field(default=0.95, title="PCA 保留方差比例")
     lag_periods: str = Field(default="", title="滞后阶数(逗号分隔)")
     add_rolling: bool = Field(default=False, title="是否添加滚动统计量")
     rolling_windows: str = Field(default="5,10,20", title="滚动窗口(逗号分隔)")
@@ -57,6 +59,7 @@ class FeatureEngineeringOutput(BaseModel):
     notes=[
         "data 需连线提供；feature_cols 留空时对全部数值列处理",
         "滞后阶数与滚动窗口均用逗号分隔，如 1,5,10",
+        "method=pca 时对特征降维，保留 pca_variance 比例的方差（默认 0.95），输出 PC1/PC2/... 主成分列",
     ],
 )
 class FeatureEngineeringNode(BaseWorkNode):
@@ -129,4 +132,36 @@ class FeatureEngineeringNode(BaseWorkNode):
         # 去除 NaN 行
         result = result.dropna()
 
+        # PCA 降维（在删除 NaN 行之后对全部特征列做）
+        if method == "pca":
+            result, all_feature_names = self._apply_pca(
+                result, all_feature_names, input.pca_variance, input.target_col
+            )
+
         return FeatureEngineeringOutput(data=result, feature_names=all_feature_names)
+
+    @staticmethod
+    def _apply_pca(
+        result: pd.DataFrame,
+        feature_names: list,
+        variance: float,
+        target_col: str,
+    ) -> tuple[pd.DataFrame, list]:
+        """对特征列做 PCA 降维，保留 variance 比例方差，输出 PC1/PC2/... 主成分列"""
+        from sklearn.decomposition import PCA
+
+        cols = [c for c in feature_names if c in result.columns]
+        if len(cols) < 2:
+            return result, feature_names
+        X = result[cols].astype(float)
+        if X.empty:
+            return result, feature_names
+        n_comp = variance if 0 < variance < 1 else min(len(cols), int(variance) or 1)
+        pca = PCA(n_components=n_comp)
+        comps = pca.fit_transform(X.values)
+        pc_cols = [f"PC{i + 1}" for i in range(comps.shape[1])]
+        pc_df = pd.DataFrame(comps, index=result.index, columns=pc_cols)
+        # 保留非特征列（如目标列），拼接主成分
+        keep = [c for c in result.columns if c not in cols]
+        out = pd.concat([result[keep], pc_df], axis=1)
+        return out, pc_cols

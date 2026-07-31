@@ -60,7 +60,12 @@ async def _chat(system: str, user: str, temperature: float = 0.2) -> str:
     """调用当前 AI 引擎返回文本：api=OpenAI 兼容 chat/completions，cli=本机 CLI"""
     if settings.ai_engine == "cli":
         try:
-            return await run_cli(settings.ai_cli, f"{system}\n\n{user}")
+            return await run_cli(
+                settings.ai_cli,
+                f"{system}\n\n{user}",
+                model=settings.ai_cli_model,
+                effort=settings.ai_cli_effort,
+            )
         except RuntimeError as e:
             raise HTTPException(status_code=502, detail=str(e))
     base_url, api_key, model = _resolve_ai_config()
@@ -272,7 +277,8 @@ async def ai_status():
         return {
             "configured": bool(tool and _shutil.which(tool["bin"])),
             "provider": f"cli:{settings.ai_cli}",
-            "model": tool["label"] if tool else settings.ai_cli,
+            "model": settings.ai_cli_model
+            or (tool["label"] if tool else settings.ai_cli),
         }
     provider = resolve_provider(settings.ai_provider)
     preset = PROVIDER_PRESETS[provider]

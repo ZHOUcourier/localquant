@@ -70,3 +70,35 @@ export interface AlphaLensReport {
   quantile_turnover: Record<string, Record<string, number>>
   rank_autocorrelation: Record<string, Record<string, number>>
 }
+
+/** 回测综合报告（回测节点 output.report，与因子分析同构） */
+export interface BacktestReport {
+  summary: Record<string, number>
+  /** 策略净值曲线 {date: nav}（起点归一为 1） */
+  nav_curve: Record<string, number>
+  /** 基准净值曲线 {date: nav}（可能为空） */
+  benchmark_curve: Record<string, number>
+  /** 回撤曲线 {date: drawdown}（≤0） */
+  drawdown_curve: Record<string, number>
+  /** 月度收益 {year: {month: ret}} */
+  monthly_returns: Record<string, Record<string, number>>
+  /** 前 N 大回撤区间 */
+  top_drawdowns: {
+    trough_date: string
+    peak_date?: string
+    recovery_date?: string | null
+    drawdown: number
+    [k: string]: unknown
+  }[]
+  /** 相对基准指标（如提供基准） */
+  benchmark?: {
+    total_return: number
+    annual_return: number
+    tracking_error: number
+    information_ratio: number
+  } | null
+  /** 未能处理的假设清单（停牌/涨跌停/归一等） */
+  assumptions: string[]
+  initial_capital: number
+  trading_days: number
+}

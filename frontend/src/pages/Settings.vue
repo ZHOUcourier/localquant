@@ -16,6 +16,8 @@ interface ConfigData {
   ai_effort: string
   ai_engine: string
   ai_cli: string
+  ai_cli_model: string
+  ai_cli_effort: string
   factor_service_url: string
   backend_port: number
   frontend_port: number
@@ -46,6 +48,9 @@ interface CliInfo {
   label: string
   bin: string
   available: boolean
+  models: string[]
+  supports_model: boolean
+  supports_effort: boolean
 }
 
 const queryClient = useQueryClient()
@@ -68,6 +73,8 @@ const form = reactive({
   ai_effort: 'medium',
   ai_engine: 'api',
   ai_cli: 'claude',
+  ai_cli_model: '',
+  ai_cli_effort: 'default',
   factor_service_url: '',
   backend_port: 8000,
   frontend_port: 5173,
@@ -95,6 +102,15 @@ const { data: cliData } = useQuery<{ tools: CliInfo[] }>({
 const providers = computed(() => providerData.value?.providers ?? [])
 const cliTools = computed(() => cliData.value?.tools ?? [])
 const selectedProvider = computed(() => providers.value.find((p) => p.id === form.ai_provider))
+const selectedCli = computed(() => cliTools.value.find((t) => t.id === form.ai_cli))
+// CLI 强度（多一个“CLI 默认”）
+const CLI_EFFORT_LEVELS = [
+  { k: 'default', label: 'CLI 默认' },
+  { k: 'minimal', label: '极简' },
+  { k: 'low', label: '低' },
+  { k: 'medium', label: '中' },
+  { k: 'high', label: '高' },
+]
 // 预置供应商的模型下拉选项（BYOK 无清单，降级手输）
 const modelOptions = computed<SelectOption[]>(() =>
   (selectedProvider.value?.models ?? []).map((m) => ({ value: m, label: m })),
@@ -110,6 +126,8 @@ watch(config, (c) => {
   form.ai_effort = c.ai_effort ?? 'medium'
   form.ai_engine = c.ai_engine ?? 'api'
   form.ai_cli = c.ai_cli ?? 'claude'
+  form.ai_cli_model = c.ai_cli_model ?? ''
+  form.ai_cli_effort = c.ai_cli_effort ?? 'default'
   form.factor_service_url = c.factor_service_url ?? ''
   form.backend_port = c.backend_port ?? 8000
   form.frontend_port = c.frontend_port ?? 5173
@@ -127,6 +145,8 @@ const saveMutation = useMutation({
       ai_effort: form.ai_effort,
       ai_engine: form.ai_engine,
       ai_cli: form.ai_cli,
+      ai_cli_model: form.ai_cli_model,
+      ai_cli_effort: form.ai_cli_effort,
       factor_service_url: form.factor_service_url,
       backend_port: Number(form.backend_port),
       frontend_port: Number(form.frontend_port),
@@ -316,6 +336,42 @@ function selectProvider(p: ProviderInfo) {
                   />
                 </button>
               </div>
+            </div>
+
+            <!-- CLI 模型（建议芯片 + 自由输入；留空=CLI 默认） -->
+            <div v-if="selectedCli?.supports_model">
+              <label class="block text-xs text-[#646262] mb-1">CLI 模型（留空 = 用 CLI 自身默认）</label>
+              <div v-if="selectedCli?.models?.length" class="mb-1.5 flex flex-wrap gap-1.5">
+                <button
+                  v-for="m in selectedCli.models"
+                  :key="m"
+                  type="button"
+                  class="rounded-[4px] px-2 py-0.5 text-[11px] cursor-pointer"
+                  :class="form.ai_cli_model === m ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
+                  @click="form.ai_cli_model = m"
+                >
+                  {{ m }}
+                </button>
+              </div>
+              <Input v-model="form.ai_cli_model" placeholder="模型名（可自由输入，留空用默认）" />
+            </div>
+
+            <!-- CLI 推理强度（仅支持的工具显示） -->
+            <div v-if="selectedCli?.supports_effort">
+              <label class="block text-xs text-[#646262] mb-1">推理强度</label>
+              <div class="flex flex-wrap gap-1.5">
+                <button
+                  v-for="lv in CLI_EFFORT_LEVELS"
+                  :key="lv.k"
+                  type="button"
+                  class="rounded-[4px] px-3 py-1 text-xs cursor-pointer"
+                  :class="form.ai_cli_effort === lv.k ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
+                  @click="form.ai_cli_effort = lv.k"
+                >
+                  {{ lv.label }}
+                </button>
+              </div>
+              <div class="mt-1 text-[10px] text-[#9a9898]">选“CLI 默认”则不传强度参数；具体档位是否生效取决于所选模型/供应商。</div>
             </div>
           </template>
 

@@ -127,33 +127,44 @@ class PythonCodeInputNode(BaseWorkNode):
 
 
 @ui(
+    mode={
+        "input_type": "combobox",
+        "options": ["手工列表", "指数成分(as-of逐日)"],
+    },
     stock_codes={
         "input_type": "text_field",
         "placeholder": "000001.SZ,600000.SH,000002.SZ",
     },
+    index_name={"input_type": "text_field", "placeholder": "如：沪深300"},
 )
 class StockPoolInput(BaseModel):
+    mode: str = Field(default="手工列表", title="股票池模式")
     stock_codes: str = Field(default="", title="股票代码(逗号分隔)")
+    index_name: str = Field(default="", title="指数/板块名")
 
 
 class StockPoolOutput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     stock_list: list = Field(default_factory=list, title="股票池")
     count: int = Field(default=0, title="数量")
+    membership: Optional[pd.DataFrame] = Field(default=None, title="逐日成员掩码")
+    assumptions: list = Field(default_factory=list, title="假设清单")
 
 
 @work_node(
     name="自定义股票池",
     group="10-基础工具",
     box_color="#607D8B",
-    description="手工定义股票选择范围，输出股票代码列表供下游节点使用",
+    description="定义股票选择范围：手工列表或按指数成分 as-of 逐日重建（去幸存者偏差），输出股票代码列表供下游使用",
     example="自定义股票池 → 因子构建（公式） → IC 分析",
     notes=[
-        "股票代码用逗号分隔，如 000001.SZ,600000.SH",
-        "输出 stock_list（列表）与 count（数量）两个字段",
+        "手工列表：股票代码用逗号分隔，如 000001.SZ,600000.SH",
+        "指数成分(as-of逐日)：按指数历史成分快照重建逐日股票池，输出 membership 掩码（index=日期, columns=股票）避免幸存者偏差",
+        "成分快照不足时回退为最新成分静态列表并在 assumptions 中明示（早于首次快照的区间仍有幸存者偏差）",
     ],
 )
 class StockPoolNode(BaseWorkNode):
-    """定义股票选择范围（股票代码列表），输出股票池"""
+    """定义股票选择范围（手工列表 / 指数成分 as-of）"""
 
     @classmethod
     def input_model(cls) -> Optional[Type[BaseModel]]:
@@ -164,8 +175,36 @@ class StockPoolNode(BaseWorkNode):
         return StockPoolOutput
 
     def run(self, input: StockPoolInput) -> Optional[BaseModel]:
+        if input.mode.startswith("指数成分"):
+            return self._index_membership(input.index_name.strip())
         codes = [c.strip() for c in input.stock_codes.split(",") if c.strip()]
         return StockPoolOutput(stock_list=codes, count=len(codes))
+
+    @staticmethod
+    def _index_membership(index_name: str) -> "StockPoolOutput":
+        """按指数成分快照重建逐日股票池；快照不足时回退静态并标记假设"""
+        from backend.services import reference_data
+
+        if not index_name:
+            raise ValueError("指数成分模式：请填写指数/板块名")
+        mask = reference_data.load_index_membership(index_name)
+        if mask is None or mask.empty:
+            raise ValueError(
+                f"无「{index_name}」的成分快照 — 请先在数据管理页按该指数批量下载以积累成分快照"
+            )
+        # 当前（最新快照）成分作为静态列表输出；完整逐日成员在 membership
+        latest = mask.iloc[-1]
+        codes = sorted(latest.index[latest].tolist())
+        n_snapshots = len(mask.index)
+        assumptions = [
+            f"指数成分由快照积累（共 {n_snapshots} 个快照日），早于首次快照的区间仍为当前成分"
+        ]
+        return StockPoolOutput(
+            stock_list=codes,
+            count=len(codes),
+            membership=mask,
+            assumptions=assumptions,
+        )
 
 
 # ============================================================

@@ -33,8 +33,27 @@ function mkBtn(text, color, outline) {
 const CORE_NODE_TYPES = new Set([
   'KSampler', 'CLIPLoader', 'CLIPTextEncode', 'UNETLoader', 'VAELoader', 'VAEDecode',
   'EmptySD3LatentImage', 'ModelSamplingAuraFlow', 'SaveImage', 'EmptyLatentImage',
-  'CheckpointLoaderSimple', 'KSamplerAdvanced',
+  'CheckpointLoaderSimple', 'KSamplerAdvanced', 'TripleCLIPLoader', 'ModelSamplingSD3',
+  'CLIPTextEncodeSD3', 'ConditioningZeroOut', 'VAEEncode', 'LoadImage', 'PreviewImage',
+  'DualCLIPLoader', 'ControlNetLoader', 'LoraLoader', 'ModelSamplingFlux', 'FluxGuidance',
 ]);
+
+// 清除“默认文生图”图：非空且全部为 comfy-core 节点时判定为官方默认图，清空即可。
+// localquant 未注册任何 core 节点，故含 core 节点的图只可能是捆绑的默认图，清空安全。
+// 返回是否执行了清空。
+function clearIfDefaultGraph(app) {
+  try {
+    const nodes = app?.graph?._nodes || [];
+    if (nodes.length === 0) return false;
+    const allCore = nodes.every((n) => CORE_NODE_TYPES.has(n.type));
+    if (!allCore) return false;
+    app.graph.clear();
+    app.graph.setDirtyCanvas?.(true, true);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ————————————————————————————————————————————————————————————————
 // 外壳（LocalQuant 前端）通信：iframe 内嵌时可把弹窗类交互委托给外壳
@@ -88,16 +107,21 @@ function patchQueuePrompt() {
   });
 }
 
-// 因子分析节点：在外壳弹窗展示综合报告（与因子研究页同构同源）
+// 因子分析/回测节点：在外壳弹窗展示综合报告（与因子研究页同构同源）
 function showAnalysisResult(node, kind) {
   const nodeId = String(node.id);
+  const titleMap = {
+    alphalens: '因子分析（AlphaLens）',
+    backtest: '回测结果',
+    factor: '因子分析',
+  };
   const payload = {
     type: 'localquant:show-node-report',
     reportKind: kind || 'factor',
     workflowId: shellCtx.workflowId,
     nodeId,
     runId: lastRunByNode[nodeId] || '',
-    nodeTitle: node.title || (kind === 'alphalens' ? '因子分析（AlphaLens）' : '因子分析'),
+    nodeTitle: node.title || titleMap[kind] || titleMap.factor,
   };
   if (!postToShell(payload)) {
     alert('请在 LocalQuant 主界面的工作流编辑器中使用此功能');
@@ -416,19 +440,20 @@ whenReady((app) => {
         render: (el) => mountSystemMonitor(el),
       },
     ],
-    // 启动后清空官方默认 SD3 示例图（localquant 无这些 comfy-core 节点）
+    // 启动后清空官方默认示例图；并持续守卫（关掉最后一个标签页时 ComfyUI 会再生默认文生图）
     setup() {
       try {
-        const nodes = app.graph?._nodes || [];
-        const looksLikeDefault = nodes.length > 0 && nodes.some((n) => CORE_NODE_TYPES.has(n.type));
-        const hasLocalquant = nodes.some((n) => !CORE_NODE_TYPES.has(n.type) && window.comfyAPI?.app?.app);
-        if (looksLikeDefault && !hasLocalquant) {
-          app.graph.clear();
-          app.graph.setDirtyCanvas?.(true, true);
+        if (clearIfDefaultGraph(app)) {
           console.info('[LocalQuant] 已清空官方默认示例图，从空白画布开始');
         }
       } catch (e) {
         console.warn('[LocalQuant] 清空默认图失败', e);
+      }
+
+      // 持续守卫：关闭最后一个工作流后 ComfyUI 会新建一个默认文生图标签，
+      // 启动时的一次性清空拦不到；轻量轮询发现即清（localquant 图永不含 core 节点，安全）。
+      if (!window.__lqDefaultGraphGuard) {
+        window.__lqDefaultGraphGuard = setInterval(() => clearIfDefaultGraph(app), 1000);
       }
 
       // 右侧「节点代码」侧边栏：跟随选中节点
@@ -490,6 +515,17 @@ whenReady((app) => {
           const r = origCreated?.apply(this, arguments);
           const node = this;
           const w = this.addWidget('button', '📊 显示分析结果', null, () => showAnalysisResult(node, kind));
+          w.serialize = false;
+          return r;
+        };
+      }
+      // 回测节点：常驻「显示回测结果」按钮，弹出与因子分析同构的回测综合报告
+      if (classType === 'BacktestNode') {
+        const origCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+          const r = origCreated?.apply(this, arguments);
+          const node = this;
+          const w = this.addWidget('button', '📊 显示回测结果', null, () => showAnalysisResult(node, 'backtest'));
           w.serialize = false;
           return r;
         };

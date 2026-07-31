@@ -50,6 +50,9 @@ interface CliInfo {
   label: string
   bin: string
   available: boolean
+  models: string[]
+  supports_model: boolean
+  supports_effort: boolean
 }
 
 const route = useRoute()
@@ -244,6 +247,8 @@ const cfg = ref({
   qube_api_key: '',
   qube_base_url: '',
   qube_cli: 'claude',
+  qube_cli_model: '',
+  qube_cli_effort: 'default',
 })
 const cfgKeyMasked = ref('')
 const cfgSaving = ref(false)
@@ -256,7 +261,17 @@ const EFFORT_LEVELS = [
   { k: 'high', label: '高' },
 ]
 
+// CLI 强度：多一个“CLI 默认”（不传 flag，用工具自身默认）
+const CLI_EFFORT_LEVELS = [
+  { k: 'default', label: 'CLI 默认' },
+  { k: 'minimal', label: '极简' },
+  { k: 'low', label: '低' },
+  { k: 'medium', label: '中' },
+  { k: 'high', label: '高' },
+]
+
 const selectedProvider = computed(() => providers.value.find((p) => p.id === cfg.value.qube_provider))
+const selectedCli = computed(() => cliTools.value.find((t) => t.id === cfg.value.qube_cli))
 
 async function loadConfig() {
   const d = await jsonFetch('/api/qube/config')
@@ -268,6 +283,8 @@ async function loadConfig() {
   cfg.value.qube_effort = d.qube_effort || 'medium'
   cfg.value.qube_base_url = d.qube_base_url
   cfg.value.qube_cli = d.qube_cli
+  cfg.value.qube_cli_model = d.qube_cli_model || ''
+  cfg.value.qube_cli_effort = d.qube_cli_effort || 'default'
   cfgKeyMasked.value = d.qube_api_key_masked
 }
 
@@ -293,6 +310,8 @@ async function saveConfig() {
       qube_effort: cfg.value.qube_effort,
       qube_base_url: cfg.value.qube_base_url,
       qube_cli: cfg.value.qube_cli,
+      qube_cli_model: cfg.value.qube_cli_model,
+      qube_cli_effort: cfg.value.qube_cli_effort,
     }
     if (cfg.value.qube_api_key) body.qube_api_key = cfg.value.qube_api_key
     await jsonFetch('/api/qube/config', {
@@ -582,6 +601,44 @@ onMounted(async () => {
           </div>
           <div class="mb-3 text-[11px] leading-relaxed text-[#9a9898]">
             使用你本机已登录的 CLI 工具作为 Agent 引擎（无需 API Key）。
+          </div>
+
+          <!-- CLI 模型（建议芯片 + 自由输入；留空=CLI 默认） -->
+          <div v-if="selectedCli?.supports_model" class="mb-3">
+            <label class="mb-1 block text-xs text-[#646262]">模型（留空 = 用 CLI 自身默认）</label>
+            <div v-if="selectedCli?.models?.length" class="mb-1.5 flex flex-wrap gap-1.5">
+              <button
+                v-for="m in selectedCli.models"
+                :key="m"
+                class="rounded-[4px] px-2 py-0.5 text-[11px]"
+                :class="cfg.qube_cli_model === m ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
+                @click="cfg.qube_cli_model = m"
+              >
+                {{ m }}
+              </button>
+            </div>
+            <input
+              v-model="cfg.qube_cli_model"
+              placeholder="模型名（可自由输入，留空用默认）"
+              class="w-full rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-2.5 py-1.5 text-xs outline-none focus:border-[#007aff]"
+            />
+          </div>
+
+          <!-- CLI 推理强度（仅支持的工具显示） -->
+          <div v-if="selectedCli?.supports_effort" class="mb-3">
+            <label class="mb-1 block text-xs text-[#646262]">推理强度</label>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="lv in CLI_EFFORT_LEVELS"
+                :key="lv.k"
+                class="rounded-[4px] px-3 py-1 text-xs"
+                :class="cfg.qube_cli_effort === lv.k ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
+                @click="cfg.qube_cli_effort = lv.k"
+              >
+                {{ lv.label }}
+              </button>
+            </div>
+            <div class="mt-1 text-[10px] text-[#9a9898]">选“CLI 默认”则不传强度参数；具体档位是否生效取决于所选模型/供应商。</div>
           </div>
         </template>
 

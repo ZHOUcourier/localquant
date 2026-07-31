@@ -16,6 +16,13 @@ class FromTemplateRequest(BaseModel):
     template_id: str
 
 
+class SweepRequest(BaseModel):
+    """参数扫描：param_grid = {"<node_uuid>.<param>": [值列表]}"""
+
+    param_grid: dict[str, list]
+    note: str = ""
+
+
 @router.get("/templates")
 async def list_templates():
     return await workflow_service.list_templates()
@@ -176,17 +183,18 @@ async def run_workflow(workflow_id: str):
 
 
 @router.post("/{workflow_id}/run/stream")
-async def run_workflow_stream(workflow_id: str):
+async def run_workflow_stream(workflow_id: str, use_cache: bool = Query(True)):
     """
     运行工作流（SSE 流式返回进度）
 
     SSE 事件类型：
     - execution_order: 执行顺序
     - node_start: 节点开始执行
-    - node_complete: 节点执行完成
+    - node_complete: 节点执行完成（含 cached 标志）
     - node_failed: 节点执行失败
     - workflow_complete: 整体完成
     - workflow_failed: 整体失败
+    use_cache: 默认启用节点缓存；传 false 忽略缓存强制重跑。
     """
     # 先验证工作流存在
     wf = await workflow_service.get_workflow(workflow_id)
@@ -194,7 +202,9 @@ async def run_workflow_stream(workflow_id: str):
         raise HTTPException(status_code=404, detail="Workflow not found")
 
     async def event_generator():
-        async for event in workflow_service.run_stream(workflow_id):
+        async for event in workflow_service.run_stream(
+            workflow_id, use_cache=use_cache
+        ):
             yield event
 
     return StreamingResponse(
@@ -206,6 +216,26 @@ async def run_workflow_stream(workflow_id: str):
             "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
         },
     )
+
+
+@router.post("/{workflow_id}/sweep")
+async def run_sweep(workflow_id: str, body: SweepRequest):
+    """参数扫描（网格搜索）：逐组合执行并写入实验，返回每组指标与 experiment_id"""
+    result = await workflow_service.run_sweep(
+        workflow_id, body.param_grid, note=body.note
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return result
+
+
+@router.post("/cache/clear")
+async def clear_cache():
+    """清空节点级输出缓存"""
+    from backend.engine.runner import clear_node_cache
+
+    removed = clear_node_cache()
+    return {"ok": True, "removed": removed}
 
 
 @router.get("/{workflow_id}/runs")

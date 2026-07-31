@@ -44,7 +44,11 @@ def _build_eval_ns(
         start_date=start_date,
         end_date=end_date,
     )
-    ns = build_operator_namespace(panels)
+    # 行业分类快照（供 INDUSTRY_NEUTRALIZE 算子）；无快照时为空，算子调用时再报错
+    from backend.services import reference_data
+
+    industry_map = reference_data.load_industry_map()
+    ns = build_operator_namespace(panels, industry_map=industry_map)
     if isinstance(data, pd.DataFrame) and not data.empty:
         # 允许上游面板作为额外变量 df 参与公式（不覆盖基础字段）
         ns["df"] = data
@@ -353,6 +357,10 @@ class FactorStandardizeNode(BaseWorkNode):
 
 @ui(
     factor_col={"input_type": "text_field"},
+    method={
+        "input_type": "combobox",
+        "options": ["行业+市值", "仅行业", "仅市值"],
+    },
     factor_data={"input_type": "None"},
     industry_data={"input_type": "None"},
     market_cap_data={"input_type": "None"},
@@ -363,22 +371,25 @@ class FactorNeutralizeInput(BaseModel):
     industry_data: Optional[pd.DataFrame] = None
     market_cap_data: Optional[pd.DataFrame] = None
     factor_col: str = "factor"
+    method: str = "行业+市值"
 
 
 class FactorNeutralizeOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     factor_data: Optional[pd.DataFrame] = None
+    assumptions: list = []
 
 
 @work_node(
     name="因子中性化",
     group="05-因子构建",
     box_color="#4CAF50",
-    description="用行业哑变量/对数市值对因子做 OLS 回归取残差，剥离风格暴露；行业与市值数据可来自 QMT 板块/财务数据",
+    description="用行业哑变量/对数市值对因子做 OLS 回归取残差，剔离风格暴露；行业与市值优先取参考数据快照，也可由上游连线提供",
     example="因子标准化 → 因子中性化 → IC 计算",
     notes=[
         "factor_data 必连；industry_data / market_cap_data 为可选连线输入",
-        "都未提供时仅做截面去均值；行业数据取第一列作行业编码，市值取对数参与回归",
+        "未连线时自动从参考数据快照装配行业分类与流通市值面板（需先在数据管理页下载）",
+        "method 选行业+市值/仅行业/仅市值；所需数据缺失时在 assumptions 中明示而非静默退化",
     ],
 )
 class FactorNeutralizeNode(BaseWorkNode):
@@ -402,17 +413,86 @@ class FactorNeutralizeNode(BaseWorkNode):
             raise ValueError("因子中性化：未接收到有效的 factor_data")
 
         factor_col = input.factor_col or "factor"
-        result = factor_data.copy()
-        if factor_col not in result.columns:
-            # 面板因子：无指定列时按行(截面)去均值中性化
-            return FactorNeutralizeOutput(
-                factor_data=result.sub(result.mean(axis=1), axis=0)
+        method = input.method or "行业+市值"
+        assumptions: list[str] = []
+
+        # 列因子（单列）走旧的逐日回归路径；面板因子（columns=股票）走新路径
+        if factor_col in factor_data.columns:
+            return self._neutralize_single_col(
+                factor_data, factor_col, input.industry_data, input.market_cap_data
             )
 
+        # 面板因子：从参考数据快照装配行业与市值（未连线时）
+        from backend.services import market_data, reference_data
+
+        use_ind = method in ("行业+市值", "仅行业")
+        use_cap = method in ("行业+市值", "仅市值")
+
+        industry_map: dict = {}
+        if use_ind:
+            industry_map = reference_data.load_industry_map()
+            if not industry_map:
+                assumptions.append("无行业分类快照，未做行业中性化（请先下载数据）")
+
+        market_cap = None
+        if use_cap:
+            market_cap = reference_data.build_market_cap_panel(factor_data)
+            if market_cap is None:
+                assumptions.append("无股本快照，未做市值中性化（请先下载数据）")
+
+        result = self._neutralize_panel(
+            factor_data, industry_map if use_ind else {}, market_cap
+        )
+        return FactorNeutralizeOutput(factor_data=result, assumptions=assumptions)
+
+    @staticmethod
+    def _neutralize_panel(
+        factor: pd.DataFrame,
+        industry_map: dict,
+        market_cap: Optional[pd.DataFrame],
+    ) -> pd.DataFrame:
+        """面板因子（index=日期, columns=股票）逐日截面行业哑变量+对数市值回归取残差"""
+        ind_ser = pd.Series(industry_map) if industry_map else None
+        result = factor.copy().astype(float)
+        for date in factor.index:
+            y = factor.loc[date].dropna()
+            if len(y) < 10:
+                continue
+            cols = list(y.index)
+            X_parts = [pd.Series(1.0, index=cols, name="const")]
+            if ind_ser is not None:
+                groups = ind_ser.reindex(cols).dropna()
+                if not groups.empty:
+                    dummies = pd.get_dummies(groups, drop_first=True).astype(float)
+                    dummies = dummies.reindex(cols).fillna(0.0)
+                    X_parts.append(dummies)
+            if market_cap is not None and date in market_cap.index:
+                cap = market_cap.loc[date].reindex(cols)
+                cap = np.log(cap.clip(lower=1))
+                if cap.notna().any():
+                    X_parts.append(cap.fillna(cap.mean()).rename("log_cap"))
+            X = pd.concat(X_parts, axis=1)
+            if X.shape[1] <= 1:  # 仅常数项 → 无可回归变量，退为去均值
+                result.loc[date, cols] = (y - y.mean()).values
+                continue
+            try:
+                beta = np.linalg.lstsq(X.values, y.values, rcond=None)[0]
+                result.loc[date, cols] = y.values - X.values @ beta
+            except Exception:
+                result.loc[date, cols] = (y - y.mean()).values
+        return result
+
+    def _neutralize_single_col(
+        self,
+        factor_data: pd.DataFrame,
+        factor_col: str,
+        industry_data,
+        market_cap_data,
+    ) -> "FactorNeutralizeOutput":
+        """单列因子（上游直接提供 industry_data/market_cap_data 列）回归残差"""
+        result = factor_data.copy()
         y = result[factor_col].astype(float)
         X_parts = []
-        industry_data = input.industry_data
-        market_cap_data = input.market_cap_data
 
         if isinstance(industry_data, pd.DataFrame) and not industry_data.empty:
             ind_col = industry_data.columns[0]
@@ -432,7 +512,10 @@ class FactorNeutralizeNode(BaseWorkNode):
 
         if not X_parts:
             result[factor_col] = y - y.mean()
-            return FactorNeutralizeOutput(factor_data=result)
+            return FactorNeutralizeOutput(
+                factor_data=result,
+                assumptions=["未提供行业/市值数据，仅做截面去均值"],
+            )
 
         X = pd.concat(X_parts, axis=1)
         common_idx = result.index.intersection(X.index)

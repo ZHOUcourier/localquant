@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useMutation, useQuery } from '@tanstack/vue-query'
-import { Wifi, WifiOff, Database, Download, ShieldCheck, Loader2 } from 'lucide-vue-next'
-import { Card, Button, Input, Select, Badge, Dialog } from '@/components/ui'
+import { Wifi, WifiOff, Database, Download, ShieldCheck, Loader2, Layers, RefreshCw } from 'lucide-vue-next'
+import { Card, Button, Input, Select, Badge, Dialog, Table, ScrollArea } from '@/components/ui'
 
 interface DataStatus {
   qmt_connected?: boolean
@@ -19,6 +19,18 @@ interface QualityResult {
   issues?: string[]
   summary?: string
   [key: string]: unknown
+}
+
+interface CoverageEntry {
+  code: string
+  start: string | null
+  end: string | null
+  rows: number
+}
+
+interface ReferenceStatus {
+  reference?: Record<string, { rows: number; latest: string | null }>
+  snapshot_indices?: string[]
 }
 
 const periodOptions = [
@@ -74,6 +86,193 @@ const qualityMutation = useMutation<QualityResult, Error, void>({
     }).then((r) => r.json()),
   onSuccess: () => (qualityOpen.value = true),
 })
+
+// ── 批量下载（SSE 逐只进度） ────────────────────────────
+
+const batchSector = ref('')
+const batchSymbols = ref('')
+const batchPeriod = ref('1d')
+const batchStart = ref('')
+const batchEnd = ref('')
+
+const batch = reactive({
+  running: false,
+  total: 0,
+  done: 0,
+  ok: 0,
+  failedCodes: [] as string[],
+  currentCode: '',
+  message: '',
+  error: '',
+  referenceLogs: [] as string[],
+})
+
+const batchProgress = computed(() =>
+  batch.total > 0 ? Math.round((batch.done / batch.total) * 100) : 0,
+)
+
+/** 消费 POST SSE 流（fetch + ReadableStream，EventSource 不支持 POST） */
+async function consumeSse(
+  url: string,
+  body: unknown,
+  onEvent: (type: string, data: Record<string, unknown>) => void,
+) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => null)
+    throw new Error(err?.detail ?? `接口错误 (HTTP ${res.status})`)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() ?? ''
+    for (const block of blocks) {
+      let eventType = 'message'
+      let data = ''
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) eventType = line.slice(7).trim()
+        else if (line.startsWith('data: ')) data += line.slice(6)
+      }
+      if (!data) continue
+      try {
+        onEvent(eventType, JSON.parse(data))
+      } catch {
+        // 忽略非 JSON 块
+      }
+    }
+  }
+}
+
+function handleBatchEvent(type: string, data: Record<string, unknown>) {
+  if (type === 'batch_start') {
+    batch.total = data.total as number
+  } else if (type === 'symbol_complete') {
+    batch.done++
+    batch.ok++
+    batch.currentCode = data.code as string
+  } else if (type === 'symbol_failed') {
+    batch.done++
+    batch.failedCodes.push(data.code as string)
+    batch.currentCode = data.code as string
+  } else if (type === 'reference_saved') {
+    const err = data.error ? `（失败: ${data.error}）` : ''
+    batch.referenceLogs.push(`${data.kind}: ${data.rows} 条${err}`)
+  } else if (type === 'batch_complete') {
+    batch.message = `完成：成功 ${data.ok} 只，失败 ${data.failed} 只`
+  } else if (type === 'batch_failed') {
+    batch.error = (data.message as string) ?? '批量下载失败'
+  }
+}
+
+async function runBatch(payload: { sector?: string; symbols?: string[] }) {
+  batch.running = true
+  batch.total = 0
+  batch.done = 0
+  batch.ok = 0
+  batch.failedCodes = []
+  batch.currentCode = ''
+  batch.message = ''
+  batch.error = ''
+  batch.referenceLogs = []
+  try {
+    await consumeSse(
+      '/api/data/download-batch',
+      {
+        sector: payload.sector ?? '',
+        symbols: payload.symbols ?? [],
+        period: batchPeriod.value,
+        start_date: batchStart.value,
+        end_date: batchEnd.value,
+      },
+      handleBatchEvent,
+    )
+  } catch (e) {
+    batch.error = e instanceof Error ? e.message : '批量下载失败'
+  } finally {
+    batch.running = false
+    refetchStatus()
+    refetchCoverage()
+    refetchReference()
+  }
+}
+
+function startBatch() {
+  if (batchSector.value.trim()) {
+    runBatch({ sector: batchSector.value.trim() })
+  } else {
+    const symbols = batchSymbols.value
+      .split(/[\s,，;；]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    runBatch({ symbols })
+  }
+}
+
+function retryFailed() {
+  runBatch({ symbols: [...batch.failedCodes] })
+}
+
+// ── 一键补齐 ──────────────────────────────────────────
+
+async function runUpdateCached() {
+  batch.running = true
+  batch.total = 0
+  batch.done = 0
+  batch.ok = 0
+  batch.failedCodes = []
+  batch.currentCode = ''
+  batch.message = ''
+  batch.error = ''
+  batch.referenceLogs = []
+  try {
+    await consumeSse('/api/data/update-cached?period=1d', {}, handleBatchEvent)
+  } catch (e) {
+    batch.error = e instanceof Error ? e.message : '补齐失败'
+  } finally {
+    batch.running = false
+    refetchStatus()
+    refetchCoverage()
+    refetchReference()
+  }
+}
+
+// ── 覆盖度与参考数据 ──────────────────────────────────
+
+const { data: coverageData, refetch: refetchCoverage } = useQuery<{
+  count: number
+  entries: CoverageEntry[]
+}>({
+  queryKey: ['data-coverage'],
+  queryFn: () => fetch('/api/data/coverage?period=1d').then((r) => r.json()),
+})
+
+const { data: referenceData, refetch: refetchReference } = useQuery<ReferenceStatus>({
+  queryKey: ['reference-status'],
+  queryFn: () => fetch('/api/data/reference-status').then((r) => r.json()),
+})
+
+const coverageColumns = [
+  { key: 'code', title: '代码', dataIndex: 'code' },
+  { key: 'start', title: '起始', dataIndex: 'start' },
+  { key: 'end', title: '截止', dataIndex: 'end' },
+  { key: 'rows', title: '条数', dataIndex: 'rows' },
+]
+
+const referenceLabels: Record<string, string> = {
+  index_constituents: '指数成分快照',
+  industry: '行业分类',
+  capital: '股本记录',
+  instrument: '合约详情',
+}
 </script>
 
 <template>
@@ -208,6 +407,137 @@ const qualityMutation = useMutation<QualityResult, Error, void>({
           class="mt-3 rounded-[4px] border border-[#30d158] bg-[#30d158]/10 px-3 py-2 font-mono text-xs text-[#30d158]"
         >
           下载完成: {{ downloadMutation.data.value?.symbol }} 共 {{ downloadMutation.data.value?.rows }} 条数据已写入本地缓存
+        </div>
+      </Card>
+    </div>
+
+    <!-- 批量下载（板块/指数/代码列表） -->
+    <div class="mt-4">
+      <Card title="批量下载">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+          <div>
+            <label class="block text-xs text-[#646262] mb-1">板块/指数名（如：沪深300）</label>
+            <Input v-model="batchSector" placeholder="优先于代码列表" />
+          </div>
+          <div class="lg:col-span-2">
+            <label class="block text-xs text-[#646262] mb-1">代码列表（逗号/空格/换行分隔）</label>
+            <Input v-model="batchSymbols" placeholder="000001.SZ, 600000.SH ..." />
+          </div>
+          <div>
+            <label class="block text-xs text-[#646262] mb-1">周期</label>
+            <Select v-model="batchPeriod" :options="periodOptions" />
+          </div>
+          <div class="flex gap-2">
+            <Button
+              variant="primary"
+              :disabled="batch.running || (!batchSector.trim() && !batchSymbols.trim())"
+              @click="startBatch"
+            >
+              <Layers :size="14" class="mr-1" />
+              批量下载
+            </Button>
+            <Button
+              variant="secondary"
+              :disabled="batch.running"
+              @click="runUpdateCached"
+            >
+              <RefreshCw :size="14" class="mr-1" />
+              一键补齐
+            </Button>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+          <div>
+            <label class="block text-xs text-[#646262] mb-1">开始日期</label>
+            <Input v-model="batchStart" type="date" />
+          </div>
+          <div>
+            <label class="block text-xs text-[#646262] mb-1">结束日期</label>
+            <Input v-model="batchEnd" type="date" />
+          </div>
+        </div>
+
+        <!-- 进度（真实 SSE 事件驱动） -->
+        <div v-if="batch.running || batch.total > 0" class="mt-4 space-y-2">
+          <div class="flex items-center justify-between text-xs text-[#646262]">
+            <span class="flex items-center gap-1.5">
+              <Loader2 v-if="batch.running" :size="13" class="animate-spin" />
+              {{ batch.done }} / {{ batch.total }}
+              <span v-if="batch.currentCode" class="font-mono">{{ batch.currentCode }}</span>
+            </span>
+            <span class="font-mono">{{ batchProgress }}%</span>
+          </div>
+          <div class="h-1.5 rounded-full bg-[#e3e0e0] overflow-hidden">
+            <div
+              class="h-full rounded-full bg-[#007aff] transition-all duration-200"
+              :style="{ width: `${batchProgress}%` }"
+            />
+          </div>
+          <div v-if="batch.message" class="text-xs text-[#30d158] font-mono">{{ batch.message }}</div>
+          <div v-if="batch.referenceLogs.length" class="text-xs text-[#646262] font-mono">
+            参考数据快照 — {{ batch.referenceLogs.join('；') }}
+          </div>
+          <div
+            v-if="batch.failedCodes.length"
+            class="rounded-[4px] border border-[#ff9f0a] bg-[#ff9f0a]/10 px-3 py-2 text-xs"
+          >
+            <div class="flex items-center justify-between">
+              <span class="text-[#ff9f0a]">失败 {{ batch.failedCodes.length }} 只：
+                <span class="font-mono">{{ batch.failedCodes.slice(0, 10).join(', ') }}{{ batch.failedCodes.length > 10 ? ' …' : '' }}</span>
+              </span>
+              <Button variant="secondary" size="sm" :disabled="batch.running" @click="retryFailed">
+                重试失败项
+              </Button>
+            </div>
+          </div>
+          <div
+            v-if="batch.error"
+            class="rounded-[4px] border border-[#ff3b30] bg-[#ff3b30]/10 px-3 py-2 font-mono text-xs text-[#ff3b30]"
+          >
+            {{ batch.error }}
+          </div>
+        </div>
+      </Card>
+    </div>
+
+    <!-- 缓存覆盖度 & 参考数据 -->
+    <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-2">
+        <Card :title="`缓存覆盖度（日线，${coverageData?.count ?? 0} 只）`">
+          <div v-if="!coverageData?.entries?.length" class="py-6 text-center text-xs text-[#646262]">
+            本地无缓存数据 — 请先使用上方批量下载
+          </div>
+          <ScrollArea v-else class="max-h-[320px]">
+            <Table :columns="coverageColumns" :data-source="coverageData.entries" row-key="code" />
+          </ScrollArea>
+        </Card>
+      </div>
+      <Card title="参考数据快照">
+        <div class="space-y-3 py-2">
+          <div
+            v-for="(label, key) in referenceLabels"
+            :key="key"
+            class="flex items-center justify-between"
+          >
+            <span class="text-sm text-[#201d1d]">{{ label }}</span>
+            <span class="text-xs font-mono" :class="referenceData?.reference?.[key]?.rows ? 'text-[#007aff]' : 'text-[#646262]'">
+              {{ referenceData?.reference?.[key]?.rows ?? 0 }} 条
+              <template v-if="referenceData?.reference?.[key]?.latest">
+                · {{ referenceData.reference[key].latest }}
+              </template>
+            </span>
+          </div>
+          <div v-if="referenceData?.snapshot_indices?.length" class="pt-2 border-t border-[#e3e0e0]">
+            <div class="text-xs text-[#646262] mb-1.5">已有成分快照的指数/板块</div>
+            <div class="flex flex-wrap gap-1.5">
+              <Badge v-for="name in referenceData.snapshot_indices" :key="name" variant="info">
+                {{ name }}
+              </Badge>
+            </div>
+          </div>
+          <p class="text-xs text-[#646262] leading-relaxed pt-1">
+            参考数据随批量下载自动快照；指数历史成分从首次快照日起逐日积累，更早区间仍为当前成分（存在幸存者偏差）。
+          </p>
         </div>
       </Card>
     </div>

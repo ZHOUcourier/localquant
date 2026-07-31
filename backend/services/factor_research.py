@@ -162,11 +162,15 @@ class FactorResearchService:
 
         Args:
             factor_data: 因子值 DataFrame (index=date, columns=stocks)
-            return_data: 收益率 DataFrame (index=date, columns=stocks)
+            return_data: 收益率 DataFrame (index=date, columns=stocks)，
+                r[T] 为 T-1→T 日收益（close.pct_change 口径）
             periods: 分析周期列表
 
         Returns:
             IC 时序、IC 均值、IC_IR、RankIC 等
+
+        对齐约定：T 日因子 vs T→T+p 前向累计收益（取 r[T+1..T+p] 累乘），
+        p=1 时即次日收益，无前视。
         """
         periods = periods or [1, 5, 10, 20]
         results = {}
@@ -178,12 +182,11 @@ class FactorResearchService:
 
             for i in range(len(dates) - period):
                 date = dates[i]
-                future_date = dates[i + period] if i + period < len(dates) else None
-                if future_date is None:
-                    break
 
                 factor_values = factor_data.loc[date].dropna()
-                future_returns = return_data.loc[future_date].dropna()
+                # T→T+p 前向累计收益：r[t] 为 t-1→t，故取 (T, T+p] 区间累乘
+                fwd_rows = return_data.reindex(dates[i + 1 : i + period + 1])
+                future_returns = ((1.0 + fwd_rows).prod(min_count=1) - 1.0).dropna()
 
                 common = factor_values.index.intersection(future_returns.index)
                 if len(common) < 10:
@@ -249,15 +252,20 @@ class FactorResearchService:
         return_data: pd.DataFrame,
         n_groups: int = 5,
     ) -> dict:
-        """分层收益分析"""
+        """分层收益分析
+
+        对齐约定：T 日因子分组 → T+1 日收益计入该组（r[T+1] 为 T→T+1 收益），
+        避免用因子形成时已实现的当日收益（前视）。
+        """
         group_returns = {f"group_{i + 1}": [] for i in range(n_groups)}
         dates = factor_data.index
 
-        for date in dates:
+        for i in range(len(dates) - 1):
+            date, nxt = dates[i], dates[i + 1]
             factor_values = factor_data.loc[date].dropna()
             returns = (
-                return_data.loc[date].dropna()
-                if date in return_data.index
+                return_data.loc[nxt].dropna()
+                if nxt in return_data.index
                 else pd.Series(dtype=float)
             )
 
@@ -274,7 +282,7 @@ class FactorResearchService:
                 if mask.sum() > 0:
                     group_returns[f"group_{g + 1}"].append(
                         {
-                            "date": str(date),
+                            "date": str(nxt),
                             "return": float(r[mask].mean()),
                             "count": int(mask.sum()),
                         }
@@ -489,20 +497,25 @@ class FactorResearchService:
     def _group_daily_returns(
         self, factor_data: pd.DataFrame, return_data: pd.DataFrame, n_groups: int
     ) -> tuple[dict, pd.Series]:
-        """按截面分位数分组，返回 {组标签: 日收益Series} 与 基准(全体等权)日收益"""
+        """按截面分位数分组，返回 {组标签: 日收益Series} 与 基准(全体等权)日收益
+
+        对齐约定：T 日因子分组 → T+1 日收益（避免前视），收益记在 T+1 日。
+        """
         group_daily: dict[str, dict] = {f"G{i + 1}": {} for i in range(n_groups)}
         bench: dict = {}
-        for date in factor_data.index:
+        dates = factor_data.index
+        for i in range(len(dates) - 1):
+            date, nxt = dates[i], dates[i + 1]
             fv = factor_data.loc[date].dropna()
-            if date not in return_data.index:
+            if nxt not in return_data.index:
                 continue
-            rv = return_data.loc[date].dropna()
+            rv = return_data.loc[nxt].dropna()
             common = fv.index.intersection(rv.index)
             if len(common) < n_groups * 2:
                 continue
             f = fv[common]
             r = rv[common]
-            bench[date] = float(r.mean())
+            bench[nxt] = float(r.mean())
             try:
                 groups = pd.qcut(f, q=n_groups, labels=False, duplicates="drop")
             except Exception:
@@ -510,7 +523,7 @@ class FactorResearchService:
             for g in range(n_groups):
                 mask = groups == g
                 if mask.sum() > 0:
-                    group_daily[f"G{g + 1}"][date] = float(r[mask].mean())
+                    group_daily[f"G{g + 1}"][nxt] = float(r[mask].mean())
         gd = {k: pd.Series(v).sort_index() for k, v in group_daily.items() if v}
         return gd, pd.Series(bench).sort_index()
 
@@ -627,6 +640,14 @@ class FactorResearchService:
         """IC/RankIC 完整报告：时序/累计/分布(含偏峰度)/自相关/衰减/均值/IR"""
         s = series.dropna()
         to_map = lambda x: {str(k): float(v) for k, v in x.items()}
+
+        def _hist_range(vals: pd.Series) -> tuple[float, float] | None:
+            """当序列近乎恒定（如完美因子 IC≡1）时给直方图一个非零区间，避免报错"""
+            lo, hi = float(vals.min()), float(vals.max())
+            if hi - lo < 1e-9:
+                return lo - 0.5, hi + 0.5
+            return None
+
         if s.empty:
             return {
                 "series": {},
@@ -637,7 +658,9 @@ class FactorResearchService:
                 "mean": 0.0,
                 "ir": 0.0,
             }
-        counts, edges = np.histogram(s.values, bins=min(30, max(len(s) // 2, 5)))
+        counts, edges = np.histogram(
+            s.values, bins=min(30, max(len(s) // 2, 5)), range=_hist_range(s)
+        )
         centers = [
             round(float((edges[i] + edges[i + 1]) / 2), 4) for i in range(len(counts))
         ]
@@ -787,22 +810,74 @@ class FactorResearchService:
         factors: dict[str, pd.DataFrame],
         weights: dict[str, float] = None,
         method: str = "equal",
+        return_data: pd.DataFrame = None,
+        ic_window: int = 120,
     ) -> pd.DataFrame:
-        """多因子合成"""
+        """多因子合成
+
+        method:
+          - equal: 等权
+          - ic_weighted: 按各因子滚动窗口 RankIC 均值加权（绝对值归一为权重，
+            符号对齐方向）；需传入 return_data，否则报错而非静默退化等权。
+        显式传入 weights 时优先使用 weights。
+        """
         factor_names = list(factors.keys())
+        if not factor_names:
+            raise ValueError("多因子合成：未提供任何因子")
 
         if weights is None:
-            if method == "equal":
-                weights = {name: 1.0 / len(factor_names) for name in factor_names}
-            elif method == "ic_weighted":
+            if method == "ic_weighted":
+                weights = self._ic_weights(factors, return_data, ic_window)
+            else:
                 weights = {name: 1.0 / len(factor_names) for name in factor_names}
 
         standardized = {}
         for name, df in factors.items():
-            standardized[name] = df.div(df.std(axis=1), axis=0) * weights.get(name, 0)
+            std = df.std(axis=1).replace(0, np.nan)
+            standardized[name] = df.div(std, axis=0) * weights.get(name, 0.0)
 
         combined = sum(standardized.values())
         return combined
+
+    def _ic_weights(
+        self,
+        factors: dict[str, pd.DataFrame],
+        return_data: pd.DataFrame,
+        ic_window: int,
+    ) -> dict[str, float]:
+        """按各因子近 ic_window 期 RankIC 均值计算权重：|IC| 归一、符号对齐方向"""
+        if return_data is None or return_data.empty:
+            raise ValueError(
+                "ic_weighted 合成需要 return_data（收益面板） — "
+                "请连线上游因子构建节点的 return_data，或改用等权合成"
+            )
+        ics: dict[str, float] = {}
+        for name, fac in factors.items():
+            dates = fac.index
+            # 仅取窗口内最近的截面对，T 日因子 vs T+1 日收益（无前视）
+            vals: list[float] = []
+            recent = dates[-(ic_window + 1) :] if len(dates) > ic_window else dates
+            for i in range(len(recent) - 1):
+                f = fac.loc[recent[i]].dropna()
+                nxt = recent[i + 1]
+                if nxt not in return_data.index:
+                    continue
+                r = return_data.loc[nxt].dropna()
+                common = f.index.intersection(r.index)
+                if len(common) > 10:
+                    vals.append(f[common].rank().corr(r[common].rank()))
+            ics[name] = float(np.nanmean(vals)) if vals else 0.0
+
+        total = sum(abs(v) for v in ics.values())
+        if total < 1e-12:
+            # 全部因子 IC 近 0，回退等权（不再是静默退化：这是无信息的合理默认）
+            n = len(factors)
+            return {name: 1.0 / n for name in factors}
+        # 权重 = |IC|/Σ|IC|，符号对齐 IC 方向
+        return {
+            name: (abs(v) / total) * (1.0 if v >= 0 else -1.0)
+            for name, v in ics.items()
+        }
 
     # ── 预置因子相关方法 ─────────────────────────────────────────────
 
@@ -978,16 +1053,94 @@ class FactorResearchService:
             )
             await db.commit()
 
-            # 预置因子的 IC 指标需行情数据源支持才能真正重算；
-            # 无数据源时维持库内数值，不伪造结果。
-            factor["recalc_mode"] = "overwrite"
-            factor["recalc_message"] = (
-                "重算为覆盖更新：新指标直接写回当前因子记录（不另存新因子），"
-                "覆盖前的旧值已自动存入历史快照，可在详情中查看。"
-            )
+            # 基于本地缓存行情真实重算 IC（数据充足时）；数据不足时明确告知，不伪造
+            recalc = await self._recompute_ic_from_local(factor)
+            if recalc.get("ok"):
+                metrics = recalc["metrics"]
+                sets = ", ".join(f"{k} = ?" for k in metrics)
+                await db.execute(
+                    f"UPDATE preset_factors SET {sets}, data_date = ? WHERE id = ?",
+                    (*metrics.values(), recalc["data_date"], factor_id),
+                )
+                await db.commit()
+                factor.update(metrics)
+                factor["data_date"] = recalc["data_date"]
+                factor["recalc_mode"] = "recomputed"
+                factor["recalc_message"] = (
+                    f"已基于本地 {recalc['n_stocks']} 只股票、"
+                    f"{recalc['n_dates']} 个交易日的行情真实重算 IC 指标，旧值已存入历史快照。"
+                )
+            else:
+                factor["recalc_mode"] = "insufficient_data"
+                factor["recalc_message"] = recalc.get(
+                    "message",
+                    "本地行情数据不足，未重算 — 请先在数据管理页下载足够的股票与区间数据。",
+                )
             return factor
         finally:
             await db.close()
+
+    async def _recompute_ic_from_local(self, factor: dict) -> dict:
+        """用本地缓存行情面板真实重算单因子 IC 指标；数据不足返回 ok=False。
+
+        仅对公式型因子重算（从 description 提取公式）；非公式型因子返回数据不足。
+        """
+        formula = extract_formula(factor.get("description"))
+        return self.analyze_formula_on_local(formula)
+
+    def analyze_formula_on_local(self, formula: str) -> dict:
+        """在本地缓存行情面板上对公式因子跑完整分析，返回 {ok, metrics, ...}。
+
+        供预置因子重算与自建因子注册时的指标快照复用；数据不足时 ok=False。
+        """
+        if not formula:
+            return {"ok": False, "message": "无可解析公式，暂不支持本地分析"}
+        try:
+            from backend.services import market_data, reference_data
+            from backend.services.factor_operators import build_operator_namespace
+
+            codes = market_data.list_cached_codes("1d")
+            if len(codes) < 30:
+                return {
+                    "ok": False,
+                    "message": f"本地仅 {len(codes)} 只股票缓存，不足以稳定估计 IC（至少 30 只）",
+                }
+            panels = market_data.load_price_panels(codes=codes)
+            close = panels.get("close")
+            if close is None or len(close.index) < 60:
+                return {"ok": False, "message": "本地行情区间不足 60 个交易日"}
+            ns = build_operator_namespace(
+                panels, industry_map=reference_data.load_industry_map()
+            )
+            factor_df = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+            if isinstance(factor_df, pd.Series):
+                factor_df = factor_df.to_frame()
+            if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
+                return {"ok": False, "message": "公式未产出有效因子面板"}
+            return_data = close.pct_change()
+            report = self.full_factor_analysis(
+                factor_df.dropna(how="all"), return_data, periods=[1, 5, 10, 20]
+            )
+            s = report["summary"]
+            metrics = {
+                "ic_mean": float(s.get("ic_mean", 0.0)),
+                "rank_ic": float(s.get("rank_ic", 0.0)),
+                "ic_ir": float(s.get("ic_ir", 0.0)),
+                "ic_std": float(s.get("ic_std", 0.0)),
+                "annualized_return": float(s.get("annual_return", 0.0)),
+                "maximum_drawdown": float(s.get("max_drawdown", 0.0)),
+                "sharpe_ratio": float(s.get("sharpe_ratio", 0.0)),
+            }
+            return {
+                "ok": True,
+                "metrics": metrics,
+                "data_date": str(close.index[-1])[:10],
+                "n_stocks": len(close.columns),
+                "n_dates": len(close.index),
+            }
+        except Exception as e:
+            logger.warning(f"公式因子本地分析失败: {e}")
+            return {"ok": False, "message": f"本地分析失败: {e}"}
 
     async def add_to_pool(self, factor_id: int) -> bool:
         """将因子加入因子池"""

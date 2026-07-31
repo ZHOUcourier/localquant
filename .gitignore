@@ -8,3 +8,9 @@ __pycache__/
 node_modules/
 frontend/dist/
 .DS_Store
+
+# 工具缓存（各自也有内层自动 .gitignore，此处显式列出更清晰）
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+# 注：.qoder/ 为故意纳管（含计划/截图），不忽略

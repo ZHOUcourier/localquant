@@ -87,6 +87,8 @@ QUBE_ENV_KEYS = {
     "QUBE_BASE_URL": "qube_base_url",
     "QUBE_ENGINE": "qube_engine",
     "QUBE_CLI": "qube_cli",
+    "QUBE_CLI_MODEL": "qube_cli_model",
+    "QUBE_CLI_EFFORT": "qube_cli_effort",
 }
 
 
@@ -98,6 +100,8 @@ class QubeConfigUpdate(BaseModel):
     qube_base_url: Optional[str] = None
     qube_engine: Optional[str] = None  # api / cli
     qube_cli: Optional[str] = None
+    qube_cli_model: Optional[str] = None
+    qube_cli_effort: Optional[str] = None
 
 
 def _mask(key: str) -> str:
@@ -119,7 +123,10 @@ async def get_qube_config():
         "qube_base_url": settings.qube_base_url,
         "qube_engine": settings.qube_engine,
         "qube_cli": settings.qube_cli,
+        "qube_cli_model": settings.qube_cli_model,
+        "qube_cli_effort": settings.qube_cli_effort or "default",
         "effort_levels": ["minimal", "low", "medium", "high"],
+        "cli_effort_levels": ["default", "minimal", "low", "medium", "high"],
         "providers": list_providers(),
         "cli_tools": list_cli_tools(),
     }
@@ -296,7 +303,12 @@ async def qube_complete(system: str, user: str) -> str:
     """用 QUBE 引擎做一次性文本补全（供策略 AI 优化等非对话场景复用）"""
     if settings.qube_engine == "cli":
         try:
-            return await run_cli(settings.qube_cli, f"{system}\n\n{user}")
+            return await run_cli(
+                settings.qube_cli,
+                f"{system}\n\n{user}",
+                model=settings.qube_cli_model,
+                effort=settings.qube_cli_effort,
+            )
         except RuntimeError as e:
             raise HTTPException(status_code=502, detail=str(e))
     base_url, api_key, model = _resolve_qube_api()
@@ -387,7 +399,12 @@ async def qube_chat(body: ChatRequest):
         prompt = "\n".join(parts)
         full: list[str] = []
         try:
-            async for chunk in stream_cli(settings.qube_cli, prompt):
+            async for chunk in stream_cli(
+                settings.qube_cli,
+                prompt,
+                model=settings.qube_cli_model,
+                effort=settings.qube_cli_effort,
+            ):
                 full.append(chunk)
                 yield _sse({"type": "delta", "delta": chunk, "text": chunk})
         except RuntimeError as e:

@@ -131,3 +131,101 @@ def panel_to_dict(panel: pd.DataFrame) -> dict:
         if clean:
             result[str(ts.date())] = clean
     return result
+
+
+# ── 缓存覆盖度 ─────────────────────────────────────────────
+
+# {path: (mtime, entry)} — 文件未变时免重复读 parquet
+_coverage_cache: dict[str, tuple[float, dict]] = {}
+
+
+def cache_coverage(period: str = "1d") -> list[dict]:
+    """扫描本地缓存，返回每只股票的起止日期与条数
+
+    Returns:
+        [{code, start, end, rows}]，按 code 排序
+    """
+    period_dir = _cache._cache_dir / period
+    if not period_dir.exists():
+        return []
+
+    entries: list[dict] = []
+    for f in sorted(period_dir.glob("*.parquet")):
+        stem = f.stem
+        if "_" in stem:
+            head, market = stem.rsplit("_", 1)
+            code = f"{head}.{market}"
+        else:
+            code = stem
+
+        mtime = f.stat().st_mtime
+        cached = _coverage_cache.get(str(f))
+        if cached and cached[0] == mtime:
+            entries.append(cached[1])
+            continue
+
+        try:
+            df = pd.read_parquet(f)
+            idx = normalize_timestamp(df.index)
+            entry = {
+                "code": code,
+                "start": str(pd.Timestamp(idx.min()).date()) if len(idx) else None,
+                "end": str(pd.Timestamp(idx.max()).date()) if len(idx) else None,
+                "rows": len(df),
+            }
+        except Exception as e:
+            logger.warning(f"读取缓存 {f} 失败: {e}")
+            entry = {"code": code, "start": None, "end": None, "rows": 0}
+        _coverage_cache[str(f)] = (mtime, entry)
+        entries.append(entry)
+    return entries
+
+
+# ── 参考数据面板装配 ─────────────────────────────────────
+
+
+def load_reference_panels(
+    close: pd.DataFrame,
+    volume: pd.DataFrame | None = None,
+) -> dict:
+    """装配回测/中性化所需的参考面板，缺失项为 None 并记入 assumptions
+
+    Returns:
+        {
+          tradable_mask: DataFrame|None,   可交易掩码（停牌推断）
+          up_limit / down_limit: DataFrame|None,  涨跌停近似价
+          market_cap: DataFrame|None,      流通市值面板
+          industry_map: dict[code, industry],
+          assumptions: [str],              未能处理的假设清单（报告页展示）
+        }
+    """
+    from backend.services import reference_data
+
+    assumptions: list[str] = []
+
+    tradable = None
+    if volume is not None and not volume.empty:
+        tradable = reference_data.build_tradable_mask(
+            volume.reindex(index=close.index, columns=close.columns)
+        )
+    else:
+        assumptions.append("无成交量数据，未处理停牌（停牌日仍可交易）")
+
+    up_limit, down_limit = reference_data.build_limit_prices(close)
+
+    market_cap = reference_data.build_market_cap_panel(close)
+    if market_cap is None:
+        assumptions.append("无股本快照，市值面板不可用（市值中性化/换手率不可用）")
+
+    industry_map = reference_data.load_industry_map()
+    if not industry_map:
+        assumptions.append("无行业分类快照，行业中性化不可用")
+
+    return {
+        "tradable_mask": tradable,
+        "up_limit": up_limit,
+        "down_limit": down_limit,
+        "market_cap": market_cap,
+        "industry_map": industry_map,
+        "assumptions": assumptions,
+    }

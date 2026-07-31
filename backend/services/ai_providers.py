@@ -293,6 +293,70 @@ CLI_TOOLS: dict[str, dict] = {
     "pi": {"label": "Pi Agent", "bin": "pi", "args": ["{prompt}"]},
 }
 
+# 每个 CLI 工具的模型/强度参数元数据（与 CLI_TOOLS 分开维护，便于扩展）：
+#   model_flag  : 模型参数 flag（如 ["-m"] / ["--model"]）；None 表示该工具不注入模型（用其自身默认）
+#   effort      : 强度写法模式 — variant(--variant L)/flag(--effort L)/config(-c model_reasoning_effort=L)/suffix(model:L)/None
+#   models      : 建议模型下拉（前端仍可自由输入；空列表=仅自由输入）
+# 已核实本机已装工具的 --help；opencode/claude/pi 准确，codex/gemini/cursor-agent 依公开文档。
+CLI_TOOL_META: dict[str, dict] = {
+    "claude": {
+        "model_flag": ["--model"],
+        "effort": "flag",
+        "models": ["sonnet", "opus", "haiku"],
+    },
+    "codex": {
+        "model_flag": ["-m"],
+        "effort": "config",
+        "models": ["gpt-5-codex", "gpt-5", "o4-mini"],
+    },
+    "opencode": {
+        "model_flag": ["-m"],
+        "effort": "variant",
+        "models": [
+            "anthropic/claude-sonnet-4-5",
+            "openai/gpt-5",
+            "google/gemini-2.5-pro",
+        ],
+    },
+    "pi": {
+        "model_flag": ["--model"],
+        "effort": "suffix",
+        "models": ["sonnet", "opus"],
+    },
+    "cursor-agent": {"model_flag": ["--model"], "effort": None, "models": []},
+    "gemini": {"model_flag": ["-m"], "effort": None, "models": []},
+}
+
+
+def _cli_meta(cli_id: str) -> dict:
+    return CLI_TOOL_META.get(cli_id, {})
+
+
+def _apply_cli_model_effort(
+    cli_id: str, model: str, effort: str
+) -> tuple[str, list[str]]:
+    """根据工具元数据，把 model/effort 转为（可能改写的 model, 额外 flag 列表）
+
+    effort 为空/"default" 时不注入（用 CLI 自身默认）；suffix 模式把强度拼入模型串。
+    """
+    meta = _cli_meta(cli_id)
+    model = (model or "").strip()
+    effort = (effort or "").strip()
+    use_effort = effort and effort != "default"
+    extra: list[str] = []
+    mode = meta.get("effort")
+    if use_effort and mode == "suffix" and model:
+        model = f"{model}:{effort}"
+    elif use_effort and mode == "variant":
+        extra += ["--variant", effort]
+    elif use_effort and mode == "flag":
+        extra += ["--effort", effort]
+    elif use_effort and mode == "config":
+        extra += ["-c", f"model_reasoning_effort={effort}"]
+    model_flag = meta.get("model_flag")
+    model_args = [*model_flag, model] if (model and model_flag) else []
+    return model, [*model_args, *extra]
+
 
 def resolve_provider(provider: str) -> str:
     """旧版供应商 id → 新 id；未知 id 归为 custom"""
@@ -331,32 +395,54 @@ def list_providers() -> list[dict]:
 
 
 def list_cli_tools() -> list[dict]:
-    """有序 CLI 工具清单 + 本机可用性探测"""
-    return [
-        {
-            "id": cid,
-            "label": t["label"],
-            "bin": t["bin"],
-            "available": shutil.which(t["bin"]) is not None,
-        }
-        for cid, t in CLI_TOOLS.items()
-    ]
+    """有序 CLI 工具清单 + 本机可用性探测 + 模型/强度元数据"""
+    tools = []
+    for cid, t in CLI_TOOLS.items():
+        meta = _cli_meta(cid)
+        tools.append(
+            {
+                "id": cid,
+                "label": t["label"],
+                "bin": t["bin"],
+                "available": shutil.which(t["bin"]) is not None,
+                "models": meta.get("models", []),
+                "supports_model": meta.get("model_flag") is not None,
+                "supports_effort": meta.get("effort") is not None,
+            }
+        )
+    return tools
 
 
-def build_cli_command(cli_id: str, prompt: str) -> Optional[list[str]]:
-    """CLI id + 提示词 → 完整命令行；未知/不可用返回 None"""
+def build_cli_command(
+    cli_id: str, prompt: str, model: str = "", effort: str = ""
+) -> Optional[list[str]]:
+    """CLI id + 提示词(+模型/强度) → 完整命令行；未知/不可用返回 None
+
+    model/effort 按工具元数据注入到位置参数 prompt 之前（flag 先于正文）；
+    为空/“default”时不注入，用 CLI 自身默认。
+    """
     tool = CLI_TOOLS.get(cli_id)
     if not tool:
         return None
     binary = shutil.which(tool["bin"])
     if not binary:
         return None
-    return [binary, *[a.replace("{prompt}", prompt) for a in tool["args"]]]
+    _model, extra = _apply_cli_model_effort(cli_id, model, effort)
+    out = [binary]
+    for a in tool["args"]:
+        if a == "{prompt}":
+            out.extend(extra)  # 模型/强度 flag 注入在位置参数之前
+            out.append(prompt)
+        else:
+            out.append(a.replace("{prompt}", prompt))
+    return out
 
 
-async def run_cli(cli_id: str, prompt: str, timeout: float = 300.0) -> str:
+async def run_cli(
+    cli_id: str, prompt: str, timeout: float = 300.0, model: str = "", effort: str = ""
+) -> str:
     """一次性运行 CLI（print 模式），返回 stdout 文本"""
-    cmd = build_cli_command(cli_id, prompt)
+    cmd = build_cli_command(cli_id, prompt, model, effort)
     if not cmd:
         raise RuntimeError(f"CLI 工具不可用: {cli_id}（请确认已安装并在 PATH 中）")
     proc = await asyncio.create_subprocess_exec(
@@ -378,9 +464,9 @@ async def run_cli(cli_id: str, prompt: str, timeout: float = 300.0) -> str:
     return (stdout or b"").decode(errors="replace").strip()
 
 
-async def stream_cli(cli_id: str, prompt: str):
+async def stream_cli(cli_id: str, prompt: str, model: str = "", effort: str = ""):
     """流式运行 CLI：逐段 yield stdout 文本（QUBE 对话使用）"""
-    cmd = build_cli_command(cli_id, prompt)
+    cmd = build_cli_command(cli_id, prompt, model, effort)
     if not cmd:
         raise RuntimeError(f"CLI 工具不可用: {cli_id}（请确认已安装并在 PATH 中）")
     proc = await asyncio.create_subprocess_exec(

@@ -99,9 +99,31 @@ def ZSCORE(x):
     return x.sub(mean, axis=0).div(std, axis=0)
 
 
-def INDUSTRY_NEUTRALIZE(x, *args, **kwargs):
-    """行业中性化占位实现 — 本地无行业分类数据时退化为截面去均值"""
-    return x.sub(x.mean(axis=1), axis=0)
+def INDUSTRY_NEUTRALIZE(x, industry_map=None):
+    """行业中性化：逐日截面在行业内去均值（剔离行业暴露）
+
+    industry_map: {code: industry} 行业分类映射；为空时从求值命名空间注入的
+    _INDUSTRY_MAP 取（由 build_operator_namespace 填入）。无行业数据时显式报错，
+    不再静默退化为全市场去均值（去均值请直接用 ZSCORE/减均值）。
+    """
+    if industry_map is None:
+        industry_map = globals().get("_ACTIVE_INDUSTRY_MAP")
+    if not industry_map:
+        raise ValueError(
+            "INDUSTRY_NEUTRALIZE 需要行业分类数据 — 请先在「数据管理」页下载数据以采集行业快照"
+        )
+    industry = pd.Series(industry_map)
+    # 仅保留有行业归属且在因子列中的股票
+    cols = [c for c in x.columns if c in industry.index]
+    if not cols:
+        raise ValueError("INDUSTRY_NEUTRALIZE：因子股票与行业分类无交集")
+    sub = x[cols]
+    groups = industry.reindex(cols)
+    # 按行业分组做截面去均值（对每个日期/行业）
+    demeaned = sub.sub(sub.T.groupby(groups).transform("mean").T)
+    result = x.copy()
+    result[cols] = demeaned
+    return result
 
 
 # ── 时序算子（按列 axis=0）────────────────────────────────────
@@ -882,11 +904,16 @@ def BOLLINGERDIFF(a, b):
     return 2 * (a - b)
 
 
-def build_operator_namespace(panels: dict) -> dict:
+def build_operator_namespace(panels: dict, industry_map: dict | None = None) -> dict:
     """构建公式求值命名空间：基础字段 + vwap/returns + 全部算子（大小写别名）
 
     panels: {"open","high","low","close","volume","amount"} 面板 DataFrame
+    industry_map: 可选 {code: industry}，供 INDUSTRY_NEUTRALIZE 算子使用
     """
+    # 行业映射注入模块全局，供 INDUSTRY_NEUTRALIZE 无参调用时取用
+    if industry_map:
+        globals()["_ACTIVE_INDUSTRY_MAP"] = industry_map
+
     close = panels.get("close")
     volume = panels.get("volume")
     amount = panels.get("amount")

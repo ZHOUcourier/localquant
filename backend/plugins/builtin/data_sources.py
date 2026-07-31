@@ -268,11 +268,15 @@ class TradingCalendarNode(BaseWorkNode):
 @ui(
     sector={
         "input_type": "text_field",
-        "placeholder": "留空获取全市场，填写板块名获取板块成分股",
+        "placeholder": "留空获取全市场A股，填写板块名获取板块成分股",
     },
+    exclude_st={"input_type": "boolean"},
+    min_list_days={"input_type": "number_field"},
 )
 class StockListInput(BaseModel):
     sector: str = Field(default="", title="板块名称(可选)")
+    exclude_st: bool = Field(default=True, title="剔除ST")
+    min_list_days: int = Field(default=0, title="上市至少天数")
 
 
 class StockListOutput(BaseModel):
@@ -284,10 +288,12 @@ class StockListOutput(BaseModel):
     name="股票列表",
     group="01-数据获取",
     box_color="orange",
-    description="获取股票列表：填写板块名返回板块成分股，留空时返回板块列表供筛选",
+    description="获取股票列表：填写板块名返回板块成分股，留空返回全市场A股；可剔除ST与上市不足N天的新股",
     example="股票列表 → QMT行情数据",
     notes=[
-        "留空时当前实现返回的是板块列表（非全市场股票），建议填写板块名使用",
+        "留空时返回全市场A股（优先沪深A股板块，回退各市场A股并集）；填写板块名返回该板块成分股",
+        "exclude_st 默认剔除名称含 ST 的股票；min_list_days>0 时剔除上市不足该天数的新股",
+        "ST/上市日取自合约详情快照（需先在数据管理页下载），无快照时不过滤",
     ],
 )
 class StockListNode(BaseWorkNode):
@@ -305,9 +311,46 @@ class StockListNode(BaseWorkNode):
         if input.sector.strip():
             stocks = qmt_client.get_sector_stocks(input.sector.strip())
         else:
-            # 获取全市场：先获取所有板块再汇总去重，或直接返回板块列表
-            # 这里使用板块列表作为 fallback
-            sectors = qmt_client.get_sector_list()
-            stocks = sectors  # 无板块筛选时返回板块列表供后续使用
+            # 留空 → 全市场 A 股（聚合各市场 A 股板块并集）
+            stocks = qmt_client.get_all_a_stocks()
 
+        stocks = self._apply_filters(stocks, input.exclude_st, input.min_list_days)
         return StockListOutput(stock_list=stocks, count=len(stocks))
+
+    @staticmethod
+    def _apply_filters(
+        stocks: list[str], exclude_st: bool, min_list_days: int
+    ) -> list[str]:
+        """根据合约详情快照剔除 ST 与上市不足 N 天的新股（无快照时不过滤）"""
+        if not stocks or (not exclude_st and min_list_days <= 0):
+            return stocks
+        try:
+            from backend.services import reference_data
+
+            inst = reference_data.load_instrument_frame()
+        except Exception:
+            inst = None
+        if inst is None:
+            return stocks
+
+        import pandas as pd
+
+        keep: list[str] = []
+        cutoff = pd.Timestamp.today() - pd.Timedelta(days=min_list_days)
+        for code in stocks:
+            if code not in inst.index:
+                keep.append(code)  # 无详情不误删
+                continue
+            row = inst.loc[code]
+            if exclude_st and "ST" in str(row.get("name", "")).upper():
+                continue
+            if min_list_days > 0:
+                ld = row.get("list_date")
+                if ld:
+                    try:
+                        if pd.to_datetime(ld) > cutoff:
+                            continue
+                    except Exception:
+                        pass
+            keep.append(code)
+        return keep

@@ -3,6 +3,7 @@
 xtquant 仅 Windows 可用，macOS/Linux 开发环境下自动降级为未连接状态。
 所有方法在未连接时调用会抛出 ConnectionError，不会导致进程崩溃。
 """
+
 from __future__ import annotations
 
 from typing import Any, Callable, Optional
@@ -163,6 +164,28 @@ class QMTClient:
             logger.warning(f"Failed to get sector stocks for '{sector}': {e}")
             return []
 
+    # 全市场 A 股候选板块名（QMT 各版本命名可能不同，取并集）
+    _WHOLE_MARKET_SECTORS = [
+        "沪深A股",
+        "沪深京A股",
+        "沪深300",
+        "上证A股",
+        "深证A股",
+        "京市A股",
+    ]
+
+    def get_all_a_stocks(self) -> list[str]:
+        """获取全市场 A 股：优先「沪深A股」板块，回退聚合各市场 A 股板块并集"""
+        self._ensure_connected()
+        for name in ("沪深A股", "沪深京A股"):
+            stocks = self.get_sector_stocks(name)
+            if stocks:
+                return sorted(set(stocks))
+        merged: set[str] = set()
+        for name in ("上证A股", "深证A股", "京市A股"):
+            merged.update(self.get_sector_stocks(name))
+        return sorted(merged)
+
     # ── 合约详情 ─────────────────────────────────────────────
 
     def get_instrument_detail(self, codes: list[str]) -> dict[str, dict]:
@@ -224,7 +247,9 @@ class QMTClient:
 
     # ── 实时行情 ─────────────────────────────────────────────
 
-    def subscribe_realtime(self, codes: list[str], callback: Optional[Callable] = None) -> int:
+    def subscribe_realtime(
+        self, codes: list[str], callback: Optional[Callable] = None
+    ) -> int:
         """订阅实时行情
 
         Returns:
