@@ -1,11 +1,11 @@
-"""AI 路由 — 基于 OpenAI 兼容接口的 AI 辅助能力
+"""AI 路由 — 基于 OpenAI 兼容接口 / 本机 CLI 工具的 AI 辅助能力
 
-两个场景，提示词均在后端预置：
+场景化接口（提示词均在后端预置）：
 - /node-code   修改节点代码（明确告知 AI 节点结构、能改什么、不能改什么）
 - /workflow    自然语言生成/修改工作流 JSON（附带全部可用节点目录与格式约束）
 
-所有主流厂商（OpenAI/DeepSeek/Moonshot/通义/智谱）均走 OpenAI 兼容
-chat/completions 协议，自定义服务填 Base URL 即可。
+供应商预置见 services/ai_providers（对齐 models.dev）：预置供应商自带
+Base URL，仅自定义（BYOK）需要用户自填；也可切换为本机 CLI 工具引擎。
 """
 
 import json
@@ -17,34 +17,33 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.services.ai_providers import (
+    PROVIDER_PRESETS,
+    apply_effort,
+    list_cli_tools,
+    list_providers,
+    resolve_provider,
+    run_cli,
+)
 
 router = APIRouter()
 
-# 各厂商预置：默认 Base URL 与默认模型（前端也有一份用于展示）
-PROVIDER_PRESETS: dict[str, dict[str, str]] = {
-    "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
-    "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
-    "moonshot": {"base_url": "https://api.moonshot.cn/v1", "model": "moonshot-v1-8k"},
-    "qwen": {
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen-plus",
-    },
-    "zhipu": {
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-4-flash",
-    },
-    "custom": {"base_url": "", "model": ""},
-}
-
 
 def _resolve_ai_config() -> tuple[str, str, str]:
-    """解析当前生效的 (base_url, api_key, model)，未配置时抛 400"""
+    """解析当前生效的 (base_url, api_key, model)，未配置时抛 400
+
+    预置供应商直接用注册表里的 Base URL；仅 custom（BYOK）读用户自填。
+    """
     if not settings.openai_api_key:
         raise HTTPException(
             status_code=400, detail="未配置 AI API Key，请到「设置 → AI 配置」中填写"
         )
-    preset = PROVIDER_PRESETS.get(settings.ai_provider, PROVIDER_PRESETS["custom"])
-    base_url = (settings.openai_base_url or preset["base_url"]).rstrip("/")
+    provider = resolve_provider(settings.ai_provider)
+    preset = PROVIDER_PRESETS[provider]
+    if provider == "custom":
+        base_url = (settings.openai_base_url or "").rstrip("/")
+    else:
+        base_url = preset["base_url"].rstrip("/")
     model = settings.ai_model or preset["model"]
     if not base_url:
         raise HTTPException(
@@ -58,7 +57,12 @@ def _resolve_ai_config() -> tuple[str, str, str]:
 
 
 async def _chat(system: str, user: str, temperature: float = 0.2) -> str:
-    """调用 OpenAI 兼容 chat/completions，返回文本内容"""
+    """调用当前 AI 引擎返回文本：api=OpenAI 兼容 chat/completions，cli=本机 CLI"""
+    if settings.ai_engine == "cli":
+        try:
+            return await run_cli(settings.ai_cli, f"{system}\n\n{user}")
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e))
     base_url, api_key, model = _resolve_ai_config()
     payload = {
         "model": model,
@@ -68,6 +72,7 @@ async def _chat(system: str, user: str, temperature: float = 0.2) -> str:
         ],
         "temperature": temperature,
     }
+    apply_effort(payload, settings.ai_effort)
     try:
         async with httpx.AsyncClient(timeout=180.0) as client:
             resp = await client.post(
@@ -88,6 +93,18 @@ async def _chat(system: str, user: str, temperature: float = 0.2) -> str:
         raise HTTPException(
             status_code=502, detail=f"AI 响应格式异常: {resp.text[:300]}"
         )
+
+
+@router.get("/providers")
+async def ai_providers():
+    """有序供应商预置清单（byok=true 的需要用户自填 Base URL）"""
+    return {"providers": list_providers()}
+
+
+@router.get("/cli-tools")
+async def ai_cli_tools():
+    """有序 CLI 工具清单 + 本机可用性"""
+    return {"tools": list_cli_tools()}
 
 
 def _strip_code_fence(text: str) -> str:
@@ -246,14 +263,27 @@ async def ai_generate_workflow(body: WorkflowAIRequest):
 @router.get("/status")
 async def ai_status():
     """AI 配置状态（供前端判断是否已可用）"""
-    preset = PROVIDER_PRESETS.get(settings.ai_provider, PROVIDER_PRESETS["custom"])
+    if settings.ai_engine == "cli":
+        import shutil as _shutil
+
+        from backend.services.ai_providers import CLI_TOOLS
+
+        tool = CLI_TOOLS.get(settings.ai_cli)
+        return {
+            "configured": bool(tool and _shutil.which(tool["bin"])),
+            "provider": f"cli:{settings.ai_cli}",
+            "model": tool["label"] if tool else settings.ai_cli,
+        }
+    provider = resolve_provider(settings.ai_provider)
+    preset = PROVIDER_PRESETS[provider]
+    base_url = settings.openai_base_url if provider == "custom" else preset["base_url"]
     return {
         "configured": bool(
             settings.openai_api_key
-            and (settings.openai_base_url or preset["base_url"])
+            and base_url
             and (settings.ai_model or preset["model"])
         ),
-        "provider": settings.ai_provider,
+        "provider": provider,
         "model": settings.ai_model or preset["model"],
     }
 

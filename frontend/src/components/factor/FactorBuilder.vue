@@ -153,7 +153,14 @@ function cellClass(v: number | undefined): string {
             ✦ AI
           </button>
         </div>
-        <Input v-model="formula" placeholder="例: close / close.shift(5) - 1" />
+        <CodeEditor
+          v-model="formula"
+          language="python"
+          :height="72"
+          :lint="false"
+          title="因子公式编辑"
+          :font-size="13"
+        />
       </div>
 
       <!-- 代码模式 -->

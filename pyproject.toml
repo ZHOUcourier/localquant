@@ -20,6 +20,7 @@ dependencies = [
     "duckdb>=1.0.0",
     "quantstats>=0.0.62",
     "statsmodels>=0.14.0",
+    "alphalens-reloaded>=0.4.6",
     "aiosqlite>=0.20.0",
     "loguru>=0.7.0",
     "python-dotenv>=1.0.0",
@@ -37,4 +38,9 @@ dependencies = [
     "comfyui-frontend-package==1.47.10",
     "python-multipart>=0.0.32",
     "ruff>=0.16.0",
+    # 代码执行沙箱（OpenSandbox 客户端/SDK）：回测信号代码容器隔离执行。
+    # 实际隔离还需本机 Docker Desktop + opensandbox-server（make sandbox-server）；
+    # 二者未就绪时自动降级为进程内执行（见 backend/services/sandbox.py）。
+    "opensandbox>=0.1.15",
+    "opensandbox-code-interpreter>=0.1.2",
 ]

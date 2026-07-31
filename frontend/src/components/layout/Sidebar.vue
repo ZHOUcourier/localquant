@@ -7,6 +7,8 @@ import {
   History,
   Database,
   Settings,
+  Sparkles,
+  BookMarked,
 } from 'lucide-vue-next'
 
 const navItems = [
@@ -14,6 +16,8 @@ const navItems = [
   { to: '/data', icon: Database, label: '数据中心', end: false },
   { to: '/factor', icon: FlaskConical, label: '因子研究', end: false },
   { to: '/workflow', icon: GitBranch, label: '工作流', end: false },
+  { to: '/qube', icon: Sparkles, label: 'QUBE', end: false },
+  { to: '/strategies', icon: BookMarked, label: '策略库', end: false },
   { to: '/runs', icon: Play, label: '运行中心', end: false },
   { to: '/experiments', icon: History, label: '实验管理', end: false },
   { to: '/settings', icon: Settings, label: '设置', end: false },

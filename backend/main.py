@@ -60,6 +60,8 @@ from backend.routes import (
     explorer,
     factor,
     plugins,
+    qube,
+    strategy,
     system,
     workflow,
 )
@@ -76,6 +78,8 @@ app.include_router(backtest.router, prefix="/api/backtest", tags=["backtest"])
 app.include_router(experiment.router, prefix="/api/experiment", tags=["experiment"])
 app.include_router(settings_routes.router, prefix="/api/config", tags=["config"])
 app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
+app.include_router(qube.router, prefix="/api/qube", tags=["qube"])
+app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 
 # ComfyUI 协议适配层 + 官方前端托管（/comfy/api/* + /comfy/ws + /comfy/）

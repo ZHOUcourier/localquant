@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend install install-backend install-frontend install-ml clean
+.PHONY: dev dev-backend dev-frontend install install-backend install-frontend install-ml sandbox-server clean
 
 # 安装所有依赖
 install: install-backend install-frontend
@@ -8,6 +8,12 @@ install-backend:
 
 install-frontend:
 	cd frontend && npm install
+
+# 启动 OpenSandbox 服务（回测信号代码容器隔离；需先启动 Docker Desktop）。
+# opensandbox 客户端已随 make install 安装；未跑本服务时回测自动降级为进程内执行。
+# 与 make dev 并行，单开一个终端跑。
+sandbox-server:
+	uvx opensandbox-server
 
 # 开发模式（并行启动前后端，Ctrl+C 同时退出）
 dev:
@@ -33,7 +39,8 @@ clean:
 # 帮助
 help:
 	@echo "可用命令:"
-	@echo "  make install        - 安装所有依赖"
+	@echo "  make install        - 安装所有依赖（含 OpenSandbox 客户端）"
+	@echo "  make sandbox-server - 启动 OpenSandbox 服务（需先开 Docker）"
 	@echo "  make dev            - 启动开发模式（前后端）"
 	@echo "  make dev-backend    - 仅启动后端"
 	@echo "  make dev-frontend   - 仅启动前端"

@@ -40,3 +40,33 @@ export interface FactorReport {
   rank_ic: ICBlock
   latest: { date: string; symbol: string; factor_value: number }[]
 }
+
+/** AlphaLens 报告（后端 /api/factor/alphalens 返回，调用 alphalens-reloaded 计算） */
+export interface AlphaLensReport {
+  periods: string[]
+  quantiles: number
+  has_group: boolean
+  ic_summary: {
+    period: string
+    ic_mean: number
+    ic_std: number
+    ic_ir: number
+    risk_adjusted: number
+    t_stat: number
+    p_value: number
+    positive_ratio: number
+  }[]
+  ic_series: Record<string, Record<string, number>>
+  ic_by_group: { group: string; period: string; ic_mean: number }[]
+  mean_return_by_quantile: { factor_quantile: number; period: string; mean_return: number }[]
+  mean_return_by_quantile_group: {
+    group: string
+    factor_quantile: number
+    period: string
+    mean_return: number
+  }[]
+  cumulative_return_by_quantile: Record<string, Record<string, Record<string, number>>>
+  factor_weighted_cumulative: Record<string, Record<string, number>>
+  quantile_turnover: Record<string, Record<string, number>>
+  rank_autocorrelation: Record<string, Record<string, number>>
+}

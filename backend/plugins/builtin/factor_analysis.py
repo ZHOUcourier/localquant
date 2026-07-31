@@ -56,6 +56,9 @@ class FactorAnalysisOutput(BaseModel):
     ic_distribution: Optional[pd.DataFrame] = None  # IC / Rank_IC 分布直方图
     ic_autocorr: Optional[pd.DataFrame] = None  # IC / Rank_IC 自相关
     latest_ranking: Optional[pd.DataFrame] = None  # 最新一期因子值排名
+    report: Optional[dict] = (
+        None  # 完整综合报告（与 /api/factor/analysis 同构，供节点内直接展示）
+    )
 
 
 @work_node(
@@ -180,6 +183,91 @@ class FactorAnalysisNode(BaseWorkNode):
             ic_distribution=dist_df,
             ic_autocorr=pd.DataFrame(ac_rows),
             latest_ranking=pd.DataFrame(rep["latest"]),
+            report=rep,
+        )
+
+
+# 因子分析（AlphaLens）—— 调用业界标准 alphalens-reloaded，与自研「因子分析」互补
+
+
+@ui(
+    periods={"input_type": "text_field"},
+    quantiles={"input_type": "number_field"},
+    factor_data={"input_type": "None"},
+    return_data={"input_type": "None"},
+    sector_data={"input_type": "None"},
+)
+class AlphaLensInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    factor_data: Optional[pd.DataFrame] = None
+    return_data: Optional[pd.DataFrame] = None
+    sector_data: Optional[pd.DataFrame] = (
+        None  # 行业面板（可选，首行作为 {股票: 行业}）
+    )
+    periods: str = "1,5,10"
+    quantiles: int = 5
+
+
+class AlphaLensOutput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    ic_summary: Optional[pd.DataFrame] = None  # 各周期 IC 汇总（含 t/p/IR）
+    ic_by_group: Optional[pd.DataFrame] = None  # 行业分组 IC
+    mean_return_by_quantile: Optional[pd.DataFrame] = None  # 分层平均收益
+    report: Optional[dict] = (
+        None  # 完整 AlphaLens 报告（与 /api/factor/alphalens 同构）
+    )
+
+
+@work_node(
+    name="因子分析（AlphaLens）",
+    group="06-因子分析",
+    box_color="#FF9800",
+    description="调用业界标准 alphalens-reloaded 产出行业分组 IC/分层收益、因子加权多空组合、分位数换手率与因子秩自相关（与自研「因子分析」互补）",
+    example="因子构建 → 因子分析（AlphaLens） → 输出",
+    notes=[
+        "factor_data / return_data 需从上游连线（面板：index=日期, columns=股票）",
+        "sector_data 可选：行业/板块面板，接入后启用行业分组分析（AlphaLens 核心增量）",
+        "periods 多周期逗号分隔，quantiles 为分位数；节点上可点「显示分析结果」看报告",
+    ],
+)
+class AlphaLensNode(BaseWorkNode):
+    """AlphaLens 式因子分析（复用 alphalens_analysis.full_alphalens_analysis）"""
+
+    @classmethod
+    def input_model(cls) -> Optional[Type[BaseModel]]:
+        return AlphaLensInput
+
+    @classmethod
+    def output_model(cls) -> Optional[Type[BaseModel]]:
+        return AlphaLensOutput
+
+    def run(self, input: AlphaLensInput) -> Optional[BaseModel]:
+        from backend.services.alphalens_analysis import full_alphalens_analysis
+
+        if not _valid(input.factor_data) or not _valid(input.return_data):
+            raise ValueError(
+                "因子分析（AlphaLens）：需上游连线提供 factor_data 与 return_data（面板 DataFrame）"
+            )
+        periods = [
+            int(p.strip()) for p in (input.periods or "1,5,10").split(",") if p.strip()
+        ]
+        # 行业面板 → {股票: 行业}（取最新一行；允许为空）
+        sector_map = None
+        if _valid(input.sector_data):
+            last = input.sector_data.iloc[-1].dropna()
+            sector_map = {str(k): str(v) for k, v in last.items()}
+        rep = full_alphalens_analysis(
+            input.factor_data,
+            input.return_data,
+            periods,
+            int(input.quantiles or 5),
+            sector_map,
+        )
+        return AlphaLensOutput(
+            ic_summary=pd.DataFrame(rep["ic_summary"]),
+            ic_by_group=pd.DataFrame(rep["ic_by_group"]),
+            mean_return_by_quantile=pd.DataFrame(rep["mean_return_by_quantile"]),
+            report=rep,
         )
 
 

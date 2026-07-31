@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from backend.database import get_db
 from backend.models.factor import (
+    AlphaLensRequest,
     CorrelationRequest,
     FactorCreate,
     ICAnalysisRequest,
@@ -284,6 +285,35 @@ async def full_analysis(req: QuantileRequest):
     except Exception as e:
         logger.error(f"因子分析失败: {e}")
         raise HTTPException(status_code=500, detail=f"因子分析失败: {e}")
+
+
+@router.post("/alphalens")
+async def alphalens_analysis(req: AlphaLensRequest):
+    """AlphaLens 式因子分析（调用 alphalens-reloaded）：行业分组 IC/分层收益、
+    因子加权多空组合、分位数换手率、因子秩自相关（与自研 factor_research 互补）
+    """
+    from backend.services.alphalens_analysis import full_alphalens_analysis
+
+    try:
+        factor_df = _dict_to_df(req.factor_data)
+        return_df = _dict_to_df(req.return_data)
+        factor_df.index = pd.to_datetime(factor_df.index)
+        return_df.index = pd.to_datetime(return_df.index)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"数据解析失败: {e}")
+    try:
+        return full_alphalens_analysis(
+            factor_df,
+            return_df,
+            periods=req.periods,
+            quantiles=req.quantiles,
+            sector_map=req.sector_map or None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"AlphaLens 分析失败: {e}")
+        raise HTTPException(status_code=500, detail=f"AlphaLens 分析失败: {e}")
 
 
 @router.post("/neutralize")

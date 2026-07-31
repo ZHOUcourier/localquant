@@ -5,10 +5,13 @@
  * 全屏为覆盖整个视口的网页全屏（fixed inset-0，隐藏其他 UI），
  * 非浏览器 Fullscreen API；Esc 或按钮退出。
  * 所有涉及代码编辑的界面统一使用本组件。
+ *
+ * Python 代码自动接入 ruff 内联诊断（去抖调用 /api/plugins/lint → markers），
+ * 可通过 :lint="false" 关闭；补全由 lib/monaco 全局注册。
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Maximize2, Minimize2 } from 'lucide-vue-next'
-import { monaco } from '@/lib/monaco'
+import { applyRuffMarkers, lintPython, monaco } from '@/lib/monaco'
 
 const props = withDefaults(
   defineProps<{
@@ -18,8 +21,10 @@ const props = withDefaults(
     /** 全屏时顶栏显示的标题 */
     title?: string
     fontSize?: number
+    /** ruff 内联诊断（仅 python 生效；默认开启，只读时也标注） */
+    lint?: boolean
   }>(),
-  { language: 'python', height: 300, readOnly: false, title: '代码编辑', fontSize: 12 },
+  { language: 'python', height: 300, readOnly: false, title: '代码编辑', fontSize: 12, lint: true },
 )
 
 const model = defineModel<string>({ default: '' })
@@ -27,6 +32,27 @@ const model = defineModel<string>({ default: '' })
 const fullscreen = ref(false)
 const editorEl = ref<HTMLDivElement | null>(null)
 let editor: ReturnType<typeof monaco.editor.create> | null = null
+let lintTimer: ReturnType<typeof setTimeout> | null = null
+let lintSeq = 0
+
+function scheduleLint() {
+  if (!props.lint || props.language !== 'python') return
+  if (lintTimer) clearTimeout(lintTimer)
+  lintTimer = setTimeout(runLint, 600)
+}
+
+async function runLint() {
+  const m = editor?.getModel()
+  if (!m) return
+  const seq = ++lintSeq
+  try {
+    const { diagnostics } = await lintPython(m.getValue())
+    // 仅应用最新一次请求的结果，避免乱序覆盖
+    if (seq === lintSeq && editor?.getModel() === m) applyRuffMarkers(m, diagnostics)
+  } catch {
+    /* lint 服务不可用时静默，不影响编辑 */
+  }
+}
 
 function createEditor() {
   if (!editorEl.value) return
@@ -47,11 +73,16 @@ function createEditor() {
   editor.onDidChangeModelContent(() => {
     const v = editor?.getValue() ?? ''
     if (v !== model.value) model.value = v
+    scheduleLint()
   })
+  scheduleLint()
 }
 
 onMounted(createEditor)
-onBeforeUnmount(() => editor?.dispose())
+onBeforeUnmount(() => {
+  if (lintTimer) clearTimeout(lintTimer)
+  editor?.dispose()
+})
 
 // 外部值变化 → 同步进编辑器（避免光标跳动只在值不同时设置）
 watch(model, (v) => {
@@ -61,7 +92,11 @@ watch(
   () => props.language,
   (lang) => {
     const m = editor?.getModel()
-    if (m) monaco.editor.setModelLanguage(m, lang)
+    if (m) {
+      monaco.editor.setModelLanguage(m, lang)
+      monaco.editor.setModelMarkers(m, 'ruff', [])
+      scheduleLint()
+    }
   },
 )
 watch(fullscreen, (fs) => {

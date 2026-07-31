@@ -69,8 +69,12 @@ def _dict_to_df(d: dict) -> "pd.DataFrame":
 
 @router.post("/run-strategy")
 async def run_strategy(req: RunStrategyRequest):
-    """基于本地行情数据执行策略回测：执行信号代码 → 回测 → 绩效报告"""
-    import pandas as pd
+    """基于本地行情数据执行策略回测：执行信号代码 → 回测 → 绩效报告
+
+    信号代码在 OpenSandbox 容器中隔离执行（Docker 不可用时降级进程内），
+    见 services/sandbox.run_signals；回测计算本身在宿主机进行。
+    """
+    from backend.services.sandbox import run_signals
 
     # 1. 加载真实行情（无数据时返回明确错误）
     try:
@@ -84,32 +88,16 @@ async def run_strategy(req: RunStrategyRequest):
 
     prices = panels["close"]
 
-    # 2. 执行用户信号代码，要求定义 generate_signals(prices, **kwargs)
-    exec_ctx: dict = {"pd": pd}
+    # 2. 在沙箱（或降级进程内）执行信号代码，要求定义 generate_signals(prices, **kwargs)
     try:
-        exec(req.signal_code, {"__builtins__": __builtins__}, exec_ctx)  # noqa: S102
-        fn = exec_ctx.get("generate_signals")
-        if not callable(fn):
-            raise ValueError("信号代码必须定义 generate_signals(prices, **kwargs) 函数")
-        signals_raw = fn(prices)
+        signals_df, sandboxed = await run_signals(req.signal_code, prices)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"信号生成失败: {e}")
         raise HTTPException(status_code=400, detail=f"信号代码执行失败: {e}")
 
-    if isinstance(signals_raw, dict):
-        signals_df = pd.DataFrame.from_dict(signals_raw, orient="index")
-        signals_df.index = pd.to_datetime(signals_df.index)
-        signals_df = signals_df.sort_index()
-    elif isinstance(signals_raw, pd.DataFrame):
-        signals_df = signals_raw
-    else:
-        raise HTTPException(
-            status_code=400, detail="generate_signals 应返回 dict 或 DataFrame"
-        )
-
-    if signals_df.empty:
+    if signals_df is None or signals_df.empty:
         raise HTTPException(
             status_code=400, detail="信号为空 — 请检查信号逻辑与数据区间"
         )
@@ -141,6 +129,7 @@ async def run_strategy(req: RunStrategyRequest):
         return {
             "status": "ok",
             "initial_capital": req.initial_capital,
+            "sandboxed": sandboxed,
             "equity_curve": _ser(equity_curve),
             "strategy_returns": _ser(strategy_returns),
             "drawdown_series": _ser(dd["drawdown_series"]),

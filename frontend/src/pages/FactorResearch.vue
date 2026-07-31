@@ -8,7 +8,8 @@ import FactorLibrary from '@/components/factor/FactorLibrary.vue'
 import FactorPool from '@/components/factor/FactorPool.vue'
 import SystemResourceMonitor from '@/components/factor/SystemResourceMonitor.vue'
 import ComprehensiveReport from '@/components/factor/ComprehensiveReport.vue'
-import type { FactorResult, FactorReport } from '@/components/factor/types'
+import AlphaLensReport from '@/components/factor/AlphaLensReport.vue'
+import type { FactorResult, FactorReport, AlphaLensReport as AlphaLensReportT } from '@/components/factor/types'
 
 // 页级主 tab：因子研究 | 因子库
 const pageTabs: TabItem[] = [
@@ -56,6 +57,12 @@ const computedFactors = ref<Record<string, FactorMatrix>>({})
 const currentFactor = ref<string | null>(null)
 const returnData = ref<FactorMatrix | null>(null)
 
+// AlphaLens（按需运行，比综合报告重）：记住当前因子数据供单独调用
+const alReport = ref<AlphaLensReportT | null>(null)
+const alLoading = ref(false)
+const alError = ref<string | null>(null)
+const lastValues = ref<FactorMatrix | null>(null)
+
 const factorNames = computed(() => Object.keys(computedFactors.value))
 
 /** 对指定因子矩阵执行完整评估：一次 /api/factor/analysis 得到综合报告（与因子分析节点同源） */
@@ -75,6 +82,10 @@ async function evaluate(
       n_groups: groups,
     })
     report.value = rep
+    lastValues.value = values
+    // 因子切换/重算时清空上一个 AlphaLens 结果（避免错配）
+    alReport.value = null
+    alError.value = null
 
     // 相关性（需要至少 2 个因子）
     if (Object.keys(allFactors).length >= 2) {
@@ -97,6 +108,25 @@ async function evaluate(
           : String(e)
   } finally {
     evaluating.value = false
+  }
+}
+
+/** 按需运行 AlphaLens 分析（复用当前因子值与收益；因子研究页无行业数据，不传 sector_map） */
+async function runAlphaLens() {
+  if (!lastValues.value || !returnData.value) return
+  alLoading.value = true
+  alError.value = null
+  try {
+    alReport.value = await postJson<AlphaLensReportT>('/api/factor/alphalens', {
+      factor_data: lastValues.value,
+      return_data: returnData.value,
+      periods: [1, 5, 10],
+      quantiles: nGroups.value,
+    })
+  } catch (e) {
+    alError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    alLoading.value = false
   }
 }
 
@@ -314,6 +344,36 @@ const corrOption = computed(() => {
           <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] p-2">
             <VChart :option="corrOption" :height="360" />
           </div>
+        </div>
+      </Card>
+
+      <!-- AlphaLens 分析（按需，与自研综合报告互补） -->
+      <Card>
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <span class="text-sm font-semibold text-[#201d1d]">AlphaLens 分析</span>
+            <span class="ml-2 text-[11px] text-[#9a9898]">业界标准 alphalens-reloaded：分层/因子加权多空/换手率等</span>
+          </div>
+          <Button
+            variant="secondary"
+            :loading="alLoading"
+            :disabled="!report || alLoading"
+            @click="runAlphaLens"
+          >
+            {{ alReport ? '重新运行 AlphaLens' : '运行 AlphaLens 分析' }}
+          </Button>
+        </div>
+        <div v-if="alError" class="mb-2 rounded-[4px] border border-[#ff9f0a]/50 bg-[#ff9f0a]/10 px-3 py-2 text-xs text-[#8a5a00]">
+          {{ alError }}
+        </div>
+        <AlphaLensReport
+          v-if="alReport || alLoading"
+          :report="alReport"
+          :factor-name="currentFactor"
+          :loading="alLoading"
+        />
+        <div v-else class="py-6 text-center text-xs text-[#9a9898]">
+          {{ report ? '点击右上「运行 AlphaLens 分析」获取行业分组 IC / 分层收益 / 因子加权多空等报告' : '请先在左上构建并计算因子' }}
         </div>
       </Card>
     </template>

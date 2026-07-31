@@ -12,7 +12,7 @@ import { computed, ref, toRef, watch } from 'vue'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { Sparkles, RefreshCw } from 'lucide-vue-next'
-import { Dialog, Button } from '@/components/ui'
+import { Dialog, Button, CodeEditor } from '@/components/ui'
 import { usePresetFactorDetail, useFactorHistory, useRecalculateFactor } from '@/composables/usePresetFactors'
 
 function fmt(v: number | null | undefined, digits = 4): string {
@@ -223,7 +223,15 @@ function typeBadgeClass(t?: string): string {
                   复制公式
                 </button>
               </div>
-              <pre class="max-h-[220px] overflow-auto whitespace-pre-wrap break-words rounded-[4px] bg-[#201d1d] px-3 py-2.5 text-xs leading-relaxed text-[#fdfcfc]">{{ factor.formula_code || factor.formula }}</pre>
+              <CodeEditor
+                :model-value="factor.formula_code || factor.formula"
+                language="python"
+                :height="180"
+                read-only
+                :lint="false"
+                title="因子代码"
+                :font-size="12"
+              />
             </div>
           </template>
           <div v-else class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-3 text-xs leading-relaxed text-[#424245]">

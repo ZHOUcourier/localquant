@@ -36,6 +36,74 @@ const CORE_NODE_TYPES = new Set([
   'CheckpointLoaderSimple', 'KSamplerAdvanced',
 ]);
 
+// ————————————————————————————————————————————————————————————————
+// 外壳（LocalQuant 前端）通信：iframe 内嵌时可把弹窗类交互委托给外壳
+// （Monaco 编辑器 / 因子分析综合报告弹窗等能力仅外壳具备）
+// ————————————————————————————————————————————————————————————————
+const shellCtx = { workflowId: '', workflowName: '' };
+const embedded = window.parent && window.parent !== window;
+// 最近一次执行中各节点的 prompt_id（本页面会话内）
+const lastRunByNode = {};
+
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || typeof d !== 'object') return;
+  if (d.type === 'localquant:workflow-context') {
+    shellCtx.workflowId = d.workflowId || '';
+    shellCtx.workflowName = d.workflowName || '';
+  } else if (d.type === 'localquant:refresh-node-defs') {
+    refreshNodeDefs();
+  }
+});
+
+function postToShell(payload) {
+  if (!embedded) return false;
+  window.parent.postMessage(payload, window.location.origin);
+  return true;
+}
+
+// 入队请求注入 workflow_id（后端 workflow_runs 据此归属到工作流，报告接口依赖）
+function patchQueuePrompt() {
+  const api = window.comfyAPI?.api?.api;
+  if (!api?.fetchApi || api.__lqPatched) return;
+  const orig = api.fetchApi.bind(api);
+  api.fetchApi = (route, options) => {
+    try {
+      if (
+        typeof route === 'string' && route.endsWith('/prompt') &&
+        options?.method === 'POST' && shellCtx.workflowId
+      ) {
+        const body = JSON.parse(options.body);
+        body.extra_data = { ...(body.extra_data || {}), workflow_id: shellCtx.workflowId };
+        options = { ...options, body: JSON.stringify(body) };
+      }
+    } catch { /* 保持原请求 */ }
+    return orig(route, options);
+  };
+  api.__lqPatched = true;
+  // 记录节点 → 最近一次成功执行的 prompt_id（刷新报告时优先取本次运行）
+  api.addEventListener?.('executed', (ev) => {
+    const det = ev?.detail;
+    if (det?.node && det?.prompt_id) lastRunByNode[String(det.node)] = det.prompt_id;
+  });
+}
+
+// 因子分析节点：在外壳弹窗展示综合报告（与因子研究页同构同源）
+function showAnalysisResult(node, kind) {
+  const nodeId = String(node.id);
+  const payload = {
+    type: 'localquant:show-node-report',
+    reportKind: kind || 'factor',
+    workflowId: shellCtx.workflowId,
+    nodeId,
+    runId: lastRunByNode[nodeId] || '',
+    nodeTitle: node.title || (kind === 'alphalens' ? '因子分析（AlphaLens）' : '因子分析'),
+  };
+  if (!postToShell(payload)) {
+    alert('请在 LocalQuant 主界面的工作流编辑器中使用此功能');
+  }
+}
+
 // ——————————————————————————————————————————————————————————————
 // 可复用的「节点代码编辑器」：填充到任意容器（弹窗 / 侧边栏共用）
 // 返回 { load(classType, displayName) } 供侧边栏切换选中节点时刷新
@@ -209,8 +277,14 @@ function mountCodeEditor(root, { onRequestFullscreen, fullscreen } = {}) {
   return { load };
 }
 
-// 弹窗形式（右键菜单触发），支持网页全屏
+// 弹窗形式（右键菜单触发）：内嵌时优先委托外壳的 Monaco 编辑器弹窗，
+// 独立访问 /comfy/ 时降级为 iframe 内 textarea 弹窗
 function openCodeDialog({ classType, displayName }) {
+  if (postToShell({ type: 'localquant:edit-node-code', classType, displayName })) return;
+  openCodeDialogInline({ classType, displayName });
+}
+
+function openCodeDialogInline({ classType, displayName }) {
   const mask = document.createElement('div');
   mask.style.cssText =
     'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45)';
@@ -395,7 +469,7 @@ whenReady((app) => {
         console.warn('[LocalQuant] 注册节点代码侧边栏失败', e);
       }
     },
-    // 每个节点右键菜单加入代码/AI 入口
+    // 每个节点右键菜单加入代码/AI 入口；因子分析节点额外加「显示分析结果」按钮
     beforeRegisterNodeDef(nodeType, nodeData) {
       const classType = nodeData?.name;
       const displayName = nodeData?.display_name || classType;
@@ -408,7 +482,20 @@ whenReady((app) => {
         );
         return r;
       };
+      // 因子分析节点：常驻「显示分析结果」按钮，直接在工作流内查看综合报告
+      if (classType === 'FactorAnalysisNode' || classType === 'AlphaLensNode') {
+        const kind = classType === 'AlphaLensNode' ? 'alphalens' : 'factor';
+        const origCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+          const r = origCreated?.apply(this, arguments);
+          const node = this;
+          const w = this.addWidget('button', '📊 显示分析结果', null, () => showAnalysisResult(node, kind));
+          w.serialize = false;
+          return r;
+        };
+      }
     },
   });
+  patchQueuePrompt();
   console.info('[LocalQuant] 节点代码/AI/性能监控 扩展已加载');
 });

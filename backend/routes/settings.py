@@ -21,6 +21,9 @@ EDITABLE_KEYS = {
     "OPENAI_BASE_URL": "openai_base_url",
     "AI_PROVIDER": "ai_provider",
     "AI_MODEL": "ai_model",
+    "AI_EFFORT": "ai_effort",
+    "AI_ENGINE": "ai_engine",
+    "AI_CLI": "ai_cli",
     "FACTOR_SERVICE_URL": "factor_service_url",
     "BACKEND_PORT": "backend_port",
     "FRONTEND_PORT": "frontend_port",
@@ -34,6 +37,9 @@ class ConfigUpdate(BaseModel):
     openai_base_url: Optional[str] = None
     ai_provider: Optional[str] = None
     ai_model: Optional[str] = None
+    ai_effort: Optional[str] = None
+    ai_engine: Optional[str] = None
+    ai_cli: Optional[str] = None
     factor_service_url: Optional[str] = None
     backend_port: Optional[int] = None
     frontend_port: Optional[int] = None
@@ -59,6 +65,9 @@ async def get_config():
         "openai_base_url": settings.openai_base_url,
         "ai_provider": settings.ai_provider,
         "ai_model": settings.ai_model,
+        "ai_effort": settings.ai_effort,
+        "ai_engine": settings.ai_engine,
+        "ai_cli": settings.ai_cli,
         "factor_service_url": settings.factor_service_url,
         "backend_port": settings.backend_port,
         "frontend_port": settings.frontend_port,

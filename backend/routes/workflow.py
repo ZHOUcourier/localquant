@@ -78,6 +78,56 @@ async def get_node_output(run_id: str, node_uuid: str):
     return result
 
 
+@router.get("/node-report/{workflow_id}/{node_uuid}")
+async def get_node_report(
+    workflow_id: str,
+    node_uuid: str,
+    run_id: str = Query(
+        "", description="指定运行 id；缺省取该工作流最近一次含报告的运行"
+    ),
+):
+    """读取因子分析节点的完整综合报告（节点输出 pkl 中的 report 字段）
+
+    供工作流编辑器节点上的「显示分析结果」按钮使用，报告与因子研究页同构。
+    """
+    import pickle
+
+    from backend.config import settings
+    from backend.database import get_db
+
+    candidates: list[str] = [run_id] if run_id else []
+    if not candidates:
+        # 该工作流最近的运行记录（新 → 旧）
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT id FROM workflow_runs WHERE workflow_id = ? "
+                "ORDER BY started_at DESC LIMIT 50",
+                (workflow_id,),
+            )
+            candidates = [row["id"] for row in await cursor.fetchall()]
+        finally:
+            await db.close()
+
+    for rid in candidates:
+        pkl = settings.output_dir / rid / f"{node_uuid}.pkl"
+        if not pkl.exists():
+            continue
+        try:
+            with open(pkl, "rb") as f:
+                output = pickle.load(f)
+        except Exception:
+            continue
+        report = output.get("report") if isinstance(output, dict) else None
+        if report:
+            return {"run_id": rid, "report": report}
+
+    raise HTTPException(
+        status_code=404,
+        detail="未找到该节点的分析报告，请先运行工作流（旧版本产出的运行需重新执行一次）",
+    )
+
+
 @router.get("/{workflow_id}")
 async def get_workflow(workflow_id: str):
     wf = await workflow_service.get_workflow(workflow_id)

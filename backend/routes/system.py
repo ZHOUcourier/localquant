@@ -112,3 +112,11 @@ async def system_resources():
         },
         "gpu": _gpu_info(),
     }
+
+
+@router.get("/sandbox")
+async def sandbox_status():
+    """代码执行沙箱状态（OpenSandbox 是否就绪 / 否则降级进程内）"""
+    from backend.services.sandbox import sandbox_status as _status
+
+    return _status()
