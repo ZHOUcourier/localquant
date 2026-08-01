@@ -3,7 +3,7 @@ defineProps<{ title?: string }>()
 </script>
 
 <template>
-  <div class="rounded-[4px] border bg-[#f1eeee]" style="border-color: rgba(15, 0, 0, 0.12)">
+  <div class="rounded-[4px] border bg-[#f8f7f7]" style="border-color: rgba(15, 0, 0, 0.12)">
     <div
       v-if="title || $slots.title || $slots.extra"
       class="flex items-center justify-between px-3 py-2"

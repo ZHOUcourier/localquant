@@ -1,17 +1,16 @@
 """QUBE — 策略研究 AI Agent 路由（与设置页 AI 配置完全独立）
 
-- 会话/消息持久化（qube_sessions / qube_messages）
-- POST /chat：SSE 流式对话；引擎二选一
-    api：pi 风格 agent loop（services/qube_agent，工具调用循环：
-         查本地数据 / 跑回测 / 存策略），事件流 delta/tool_call/tool_result/done
-    cli：本机 CLI 工具（Claude Code / Codex / OpenCode / Pi 等）流式转发 stdout
-         （CLI 自身就是 agent，不叠加工具循环）
+- 会话/消息持久化（qube_sessions / qube_messages，含结构化工具轨迹 tool_calls_json）
+- POST /chat：SSE 流式对话；事件集对齐参考站协议：
+    delta / thinking / tool_start / tool / done / error
+- 技能库（qube_skills）、因子画板（qube_factors + factor_analyses）、
+  系统提示词（data/qube_system_prompt.md 可编辑，空回退内置 QUBE_SYSTEM）
 - 独立配置持久化到 .env 的 QUBE_* 键；模型从供应商 models 清单下拉选择
-- Agent 产出的完整策略要求包裹在 ```strategy 代码块中，或直接调
-  save_strategy 工具存入策略库（默认「工作中」，只有用户能设为「已保存」）
 """
 
+import asyncio
 import json
+import pathlib
 import time
 import uuid
 from typing import Optional
@@ -38,41 +37,68 @@ from backend.services.qube_agent import AgentConfig, build_qube_tools, run_agent
 
 router = APIRouter()
 
-QUBE_SYSTEM = """你是 QUBE，LocalQuant 本地量化投研平台的策略研究 Agent。
-你的职责：通过多轮对话帮助用户设计、验证、迭代 A 股量化策略（选股/因子/择时/风控）。
+QUBE_SYSTEM = """职责：通过多轮对话帮助用户设计、验证、迭代 A 股量化策略与因子。
 
 你拥有平台工具（优先用工具拿真实结果，不要臆想数据）：
-- read_doc：阅读「因子编写指南」（数据层形态/可用字段/内置算子），写代码前必查
-- preview_data：看真实行情样本（字段名/量级/日期区间），对齐后再写代码
-- get_data_status：查本地数据范围（确定可用区间）
-- run_backtest：对策略代码真实回测，拿到年化/夏普/回撤等指标
-- save_strategy：把成型策略存入平台策略库（状态=工作中）
+【查询】get_data_status 本地数据范围 / read_doc 因子编写指南 /
+        query_market_data 行情表格 / list_strategies / list_factors
+【策略】generate_stock_strategy_code 写策略代码进画板 /
+        list_strategy_versions · get_strategy_version · revert_strategy_to_version 版本管理
+【回测】set_backtest_params 推参数给画板 / run_backtest 真实回测 / get_backtest_result 诊断
+【因子】generate_stock_factor_code 写因子进画板 / run_factor_analysis IC+分组分析
+【其它】bind_chat_target 切换画板绑定 / remember 记录用户长期偏好
 
-推荐工作流：read_doc/preview_data 对齐平台约定 → 写 generate_signals 代码 →
-run_backtest 验证 → 根据指标/报错迭代 → save_strategy 存库。
-注意：代码在 OpenSandbox 容器中隔离执行（Docker 不可用时降级为进程内），
-已预装 pandas/numpy；信号函数入参 prices 为收盘价面板。
+推荐工作流：
+- 策略：read_doc/get_data_status 对齐约定 → generate_stock_strategy_code 写入画板 →
+  run_backtest 验证 → 根据指标/报错迭代（改代码时传 strategy_id）
+- 因子：read_doc 查算子 → generate_stock_factor_code（优先用 formula 公式）→
+  run_factor_analysis 拿 IC/分组结果 → 解读并给出改进建议
 
-要求：
-1. 用中文回答，结论先行，追问必要的缺失信息（股票池、频率、风险偏好等）。
+硬性约定：
+1. 用中文回答，结论先行；缺失关键信息（股票池/区间/风险偏好）时先追问。
 2. 平台数据全部来自本地 QMT 日线行情（open/high/low/close/volume/amount 面板），
-   不要引用外部数据源；因子/信号使用 pandas 面板（index=交易日, columns=股票代码）。
-3. 策略代码必须定义 generate_signals(prices, **kwargs)，prices 为收盘价面板
-   DataFrame，返回同形状的持仓权重/信号 DataFrame（可直接回测）。
-4. 设计出完整策略后：先用 run_backtest 验证，再用 save_strategy 存库，
-   并在回复中把策略正文包裹在 ```strategy 代码块中，格式：
-```strategy
-名称: <策略名>
-思路: <一句话核心逻辑>
-因子: <所用因子及公式>
-买入规则: <...>
-卖出规则: <...>
-风控: <...>
-参数: <...>
-实现:
-<generate_signals 完整 python 代码>
-```
-5. 回测失败时根据错误信息修正代码重试，不要把错误直接丢给用户。"""
+   不要引用外部数据源；面板 index=交易日、columns=股票代码。
+3. 策略代码必须定义 generate_signals(prices, **kwargs)，返回同形状持仓权重/信号 DataFrame；
+   代码在沙箱隔离执行，已预装 pandas/numpy。
+4. 代码一律通过 generate_stock_strategy_code / generate_stock_factor_code 写入画板，
+   不要把大段代码直接贴在回复里（回复只写结论、指标解读与下一步建议）。
+5. 回测/分析失败时根据错误信息修正代码重试，不要把错误直接丢给用户。"""
+
+# 用户可编辑的系统提示词（侧栏「系统提示词」弹窗；remember 工具也追加到这里）
+SYSTEM_PROMPT_PATH = pathlib.Path("data/qube_system_prompt.md")
+
+
+def get_system_prompt() -> str:
+    """生效的系统提示词：文件存在且非空用文件，否则用内置默认"""
+    try:
+        if SYSTEM_PROMPT_PATH.exists():
+            text = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    except Exception as e:
+        logger.warning(f"读取自定义系统提示词失败，回退内置: {e}")
+    return QUBE_SYSTEM
+
+
+# 工具 → 对话卡片展示名（前端工具卡标题）
+TOOL_DISPLAY_NAMES = {
+    "get_data_status": "查询本地数据概况",
+    "read_doc": "阅读平台文档",
+    "query_market_data": "查询行情数据",
+    "generate_stock_strategy_code": "已写入策略代码",
+    "list_strategies": "查看策略列表",
+    "list_strategy_versions": "查看策略版本列表",
+    "get_strategy_version": "读取策略版本",
+    "revert_strategy_to_version": "回滚策略版本",
+    "set_backtest_params": "已更新回测参数",
+    "run_backtest": "运行策略回测",
+    "get_backtest_result": "读取回测结果",
+    "generate_stock_factor_code": "已创建股票因子",
+    "run_factor_analysis": "运行因子分析",
+    "list_factors": "查看因子列表",
+    "bind_chat_target": "绑定对话目标",
+    "remember": "记录长期记忆",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +193,8 @@ async def list_sessions():
                     "title": r["title"],
                     "created_at": r["created_at"],
                     "updated_at": r["updated_at"],
+                    "bound_type": r["bound_type"],
+                    "bound_id": r["bound_id"],
                 }
                 for r in await cursor.fetchall()
             ]
@@ -191,6 +219,43 @@ async def create_session():
     return {"id": sid, "title": "新对话", "created_at": now, "updated_at": now}
 
 
+class SessionUpdate(BaseModel):
+    title: str
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(session_id: str, body: SessionUpdate):
+    """重命名会话"""
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="标题不能为空")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE qube_sessions SET title = ?, updated_at = ? WHERE id = ?",
+            (title[:60], int(time.time()), session_id),
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="会话不存在")
+    finally:
+        await db.close()
+    return {"ok": True, "title": title[:60]}
+
+
+@router.delete("/sessions")
+async def clear_sessions():
+    """清空全部对话（侧栏「清空全部对话」，前端二次确认后调用）"""
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM qube_messages")
+        cursor = await db.execute("DELETE FROM qube_sessions")
+        await db.commit()
+        return {"ok": True, "deleted": cursor.rowcount}
+    finally:
+        await db.close()
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     db = await get_db()
@@ -211,34 +276,58 @@ async def delete_session(session_id: str):
 
 @router.get("/sessions/{session_id}/messages")
 async def list_messages(session_id: str):
+    """历史消息（含结构化工具轨迹）+ workspace_resume（画板焦点恢复）"""
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT role, content, created_at FROM qube_messages "
+            "SELECT role, content, created_at, tool_calls_json FROM qube_messages "
             "WHERE session_id = ? ORDER BY id ASC",
             (session_id,),
         )
-        return {
-            "messages": [
-                {
-                    "role": r["role"],
-                    "content": r["content"],
-                    "created_at": r["created_at"],
-                }
-                for r in await cursor.fetchall()
-            ]
-        }
+        messages = []
+        for r in await cursor.fetchall():
+            item = {
+                "role": r["role"],
+                "content": r["content"],
+                "created_at": r["created_at"],
+                "tool_calls": None,
+            }
+            if r["tool_calls_json"]:
+                try:
+                    item["tool_calls"] = json.loads(r["tool_calls_json"])
+                except Exception:
+                    item["tool_calls"] = None
+            messages.append(item)
+
+        cursor = await db.execute(
+            "SELECT bound_type, bound_id FROM qube_sessions WHERE id = ?",
+            (session_id,),
+        )
+        sess = await cursor.fetchone()
+        resume = None
+        if sess and sess["bound_type"]:
+            resume = {"kind": sess["bound_type"], "id": sess["bound_id"]}
+        return {"messages": messages, "workspace_resume": resume}
     finally:
         await db.close()
 
 
-async def _save_message(session_id: str, role: str, content: str) -> None:
+async def _save_message(
+    session_id: str, role: str, content: str, tool_calls: Optional[dict] = None
+) -> None:
     now = int(time.time())
     db = await get_db()
     try:
         await db.execute(
-            "INSERT INTO qube_messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            (session_id, role, content, now),
+            "INSERT INTO qube_messages (session_id, role, content, created_at, tool_calls_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                session_id,
+                role,
+                content,
+                now,
+                json.dumps(tool_calls, ensure_ascii=False) if tool_calls else "",
+            ),
         )
         # 首条用户消息作为会话标题
         await db.execute(
@@ -346,11 +435,11 @@ async def qube_complete(system: str, user: str) -> str:
 
 @router.post("/chat")
 async def qube_chat(body: ChatRequest):
-    """QUBE 多轮对话（SSE）
+    """QUBE 多轮对话（SSE），事件集对齐参考站协议：
 
-    api 引擎：pi 风格 agent loop 事件流：
-      {type: delta|tool_call|tool_result|done|error, ...}
-    cli 引擎：{delta} 增量 + {done} 结束（兼容旧格式）
+    api 引擎：{type: delta|thinking|tool_start|tool|done|error}
+      tool 事件携带结构化 call（name/args/result/display_name/各类 id）
+    cli 引擎：{delta} 增量 + {done}（CLI 自身即 agent，无工具事件）
     """
     if not body.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
@@ -368,31 +457,94 @@ async def qube_chat(body: ChatRequest):
             base_url=base_url,
             api_key=api_key,
             model=model,
-            system=QUBE_SYSTEM,
+            system=get_system_prompt(),
             tools=build_qube_tools(body.session_id),
             effort=settings.qube_effort,
         )
         messages = [*history, {"role": "user", "content": body.message}]
-        trace: list[str] = []  # 工具轨迹（持久化进消息，刷新后可见）
-        final = ""
+        # 结构化轨迹：text/tool 交替时间线 + 工具调用列表 + 思考文本
+        calls: list[dict] = []
+        timeline: list[dict] = []
+        text_buf: list[str] = []
+        thinking_buf: list[str] = []
+        pending_args: dict[str, dict] = {}
+
+        def flush_text():
+            text = "".join(text_buf).strip()
+            if text:
+                timeline.append({"type": "text", "content": text})
+            text_buf.clear()
+
         async for event in run_agent_loop(cfg, messages):
-            if event["type"] == "tool_call":
-                trace.append(f"🔧 调用工具 {event['name']}")
-            elif event["type"] == "tool_result":
-                trace.append(f"✓ {event['name']} 完成")
-            elif event["type"] == "done":
+            kind = event["type"]
+            if kind == "delta":
+                text_buf.append(event["text"])
+                yield _sse(event)
+            elif kind == "thinking":
+                thinking_buf.append(event["text"])
+                yield _sse(event)
+            elif kind == "tool_call":
+                flush_text()
+                pending_args[event["name"]] = event.get("args") or {}
+                yield _sse(
+                    {
+                        "type": "tool_start",
+                        "name": event["name"],
+                        "display_name": TOOL_DISPLAY_NAMES.get(
+                            event["name"], event["name"]
+                        ),
+                        "args": event.get("args") or {},
+                    }
+                )
+            elif kind == "tool_result":
+                try:
+                    result = json.loads(event.get("result") or "{}")
+                except Exception:
+                    result = {"raw": event.get("result")}
+                call = {
+                    "name": event["name"],
+                    "display_name": TOOL_DISPLAY_NAMES.get(
+                        event["name"], event["name"]
+                    ),
+                    "args": pending_args.pop(event["name"], {}),
+                    "result": result,
+                }
+                # 结构化 id 提升到顶层，供前端工具卡直接取用
+                for key in (
+                    "strategy_id",
+                    "factor_id",
+                    "backtest_run_id",
+                    "factor_analysis_id",
+                ):
+                    if isinstance(result, dict) and result.get(key):
+                        call[key] = result[key]
+                calls.append(call)
+                timeline.append({"type": "tool", "call_index": len(calls) - 1})
+                yield _sse({"type": "tool", "call": call})
+            elif kind == "done":
+                flush_text()
                 final = event.get("content", "")
-            elif event["type"] == "error":
+                tool_calls = None
+                if calls or thinking_buf:
+                    tool_calls = {
+                        "calls": calls,
+                        "display_timeline": timeline,
+                        "thinking": "".join(thinking_buf),
+                    }
+                if final.strip() or tool_calls:
+                    await _save_message(
+                        body.session_id, "assistant", final.strip(), tool_calls
+                    )
+                yield _sse(event)
+            elif kind == "error":
                 yield _sse(event)
                 return
-            yield _sse(event)
-        content = ("\n".join(trace) + "\n\n" if trace else "") + final
-        if content.strip():
-            await _save_message(body.session_id, "assistant", content.strip())
+            else:
+                yield _sse(event)
 
     async def cli_stream():
         # CLI 无会话记忆：把系统提示 + 近几轮对话拼进一次性提示词
-        parts = [QUBE_SYSTEM, ""]
+        parts = [get_system_prompt(), ""]
         for m in history[-10:]:
             parts.append(f"{'用户' if m['role'] == 'user' else 'QUBE'}：{m['content']}")
         parts.append(f"用户：{body.message}")
@@ -425,3 +577,362 @@ async def qube_chat(body: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# 系统提示词（侧栏展示/编辑，替代参考站的「长期记忆」）
+# ---------------------------------------------------------------------------
+
+
+@router.get("/system-prompt")
+async def read_system_prompt():
+    return {
+        "prompt": get_system_prompt(),
+        "default_prompt": QUBE_SYSTEM,
+        "customized": SYSTEM_PROMPT_PATH.exists()
+        and bool(SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()),
+    }
+
+
+class SystemPromptUpdate(BaseModel):
+    prompt: str
+
+
+@router.put("/system-prompt")
+async def write_system_prompt(body: SystemPromptUpdate):
+    """保存系统提示词；传空 = 恢复内置默认（删文件）"""
+    text = body.prompt.strip()
+    if not text or text == QUBE_SYSTEM.strip():
+        SYSTEM_PROMPT_PATH.unlink(missing_ok=True)
+        return {"ok": True, "customized": False}
+    SYSTEM_PROMPT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SYSTEM_PROMPT_PATH.write_text(text, encoding="utf-8")
+    return {"ok": True, "customized": True}
+
+
+# ---------------------------------------------------------------------------
+# 技能库（内置 30 个与参考站一致；自定义技能 = prompt 模板插入输入框）
+# ---------------------------------------------------------------------------
+
+
+def _skill_row(r) -> dict:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "display_name": r["display_name"],
+        "description": r["description"],
+        "category": r["category"],
+        "category_id": r["category_id"],
+        "params": json.loads(r["params_json"] or "[]"),
+        "prompt": r["prompt"],
+        "builtin": bool(r["builtin"]),
+        "enabled": bool(r["enabled"]),
+        "source": r["source"],
+        "url": r["url"],
+        "stars": r["stars"],
+    }
+
+
+@router.get("/skills/builtin")
+async def list_builtin_skills():
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM qube_skills WHERE builtin = 1 ORDER BY id ASC"
+        )
+        return {"skills": [_skill_row(r) for r in await cursor.fetchall()]}
+    finally:
+        await db.close()
+
+
+@router.get("/skills/user")
+async def list_user_skills():
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM qube_skills WHERE builtin = 0 ORDER BY id DESC"
+        )
+        return {"skills": [_skill_row(r) for r in await cursor.fetchall()]}
+    finally:
+        await db.close()
+
+
+class SkillCreate(BaseModel):
+    display_name: str
+    description: str = ""
+    category: str = "对话"
+    prompt: str = ""
+
+
+_SKILL_CATEGORY_IDS = {
+    "记忆": "memory",
+    "策略": "strategy",
+    "回测": "backtest",
+    "调优": "optimization",
+    "仿真交易": "live",
+    "对话": "chat",
+    "因子": "factor",
+}
+
+
+@router.post("/skills")
+async def create_skill(body: SkillCreate):
+    """新建自定义技能（prompt 模板，点击插入输入框）"""
+    if not body.display_name.strip():
+        raise HTTPException(status_code=400, detail="技能名称不能为空")
+    if not body.prompt.strip():
+        raise HTTPException(status_code=400, detail="prompt 模板不能为空")
+    name = f"user_{uuid.uuid4().hex[:8]}"
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "INSERT INTO qube_skills (name, display_name, description, category, "
+            "category_id, params_json, prompt, builtin, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, ?, '[]', ?, 0, 1, ?)",
+            (
+                name,
+                body.display_name.strip(),
+                body.description,
+                body.category,
+                _SKILL_CATEGORY_IDS.get(body.category, "chat"),
+                body.prompt,
+                int(time.time()),
+            ),
+        )
+        await db.commit()
+        return {"ok": True, "id": cursor.lastrowid}
+    finally:
+        await db.close()
+
+
+class SkillUpdate(BaseModel):
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    prompt: Optional[str] = None
+
+
+async def _require_user_skill(db, skill_id: int):
+    cursor = await db.execute("SELECT * FROM qube_skills WHERE id = ?", (skill_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="技能不存在")
+    if row["builtin"]:
+        raise HTTPException(status_code=403, detail="系统内置技能不可修改")
+    return row
+
+
+@router.put("/skills/{skill_id}")
+async def update_skill(skill_id: int, body: SkillUpdate):
+    db = await get_db()
+    try:
+        await _require_user_skill(db, skill_id)
+        fields = {}
+        if body.display_name is not None:
+            fields["display_name"] = body.display_name.strip()
+        if body.description is not None:
+            fields["description"] = body.description
+        if body.category is not None:
+            fields["category"] = body.category
+            fields["category_id"] = _SKILL_CATEGORY_IDS.get(body.category, "chat")
+        if body.prompt is not None:
+            fields["prompt"] = body.prompt
+        if fields:
+            keys = ", ".join(f"{k} = ?" for k in fields)
+            await db.execute(
+                f"UPDATE qube_skills SET {keys} WHERE id = ?",  # noqa: S608
+                (*fields.values(), skill_id),
+            )
+            await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+@router.delete("/skills/{skill_id}")
+async def delete_skill(skill_id: int):
+    db = await get_db()
+    try:
+        await _require_user_skill(db, skill_id)
+        await db.execute("DELETE FROM qube_skills WHERE id = ?", (skill_id,))
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# 因子画板（qube_factors）+ 因子分析编排（factor_analyses）
+# ---------------------------------------------------------------------------
+
+
+def _factor_row(r) -> dict:
+    return {
+        "id": r["id"],
+        "session_id": r["session_id"],
+        "name": r["name"],
+        "description": r["description"],
+        "code_type": r["code_type"],
+        "code": r["code"],
+        "created_at": r["created_at"],
+        "updated_at": r["updated_at"],
+    }
+
+
+@router.get("/factors/{factor_id}")
+async def get_qube_factor(factor_id: str):
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM qube_factors WHERE id = ?", (factor_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="因子不存在")
+        return _factor_row(row)
+    finally:
+        await db.close()
+
+
+class QubeFactorUpdate(BaseModel):
+    name: Optional[str] = None
+    code_type: Optional[str] = None
+    code: Optional[str] = None
+
+
+@router.put("/factors/{factor_id}")
+async def update_qube_factor(factor_id: str, body: QubeFactorUpdate):
+    """画板编辑因子（改名/改代码/切换编写方式）"""
+    fields = {}
+    if body.name is not None and body.name.strip():
+        fields["name"] = body.name.strip()
+    if body.code_type in ("formula", "python"):
+        fields["code_type"] = body.code_type
+    if body.code is not None:
+        fields["code"] = body.code
+    if not fields:
+        return {"ok": True}
+    fields["updated_at"] = int(time.time())
+    db = await get_db()
+    try:
+        keys = ", ".join(f"{k} = ?" for k in fields)
+        cursor = await db.execute(
+            f"UPDATE qube_factors SET {keys} WHERE id = ?",  # noqa: S608
+            (*fields.values(), factor_id),
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="因子不存在")
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+@router.post("/factors/{factor_id}/save-to-library")
+async def save_factor_to_library(factor_id: str):
+    """把画板因子存入因子库（factors 表快照）"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM qube_factors WHERE id = ?", (factor_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="因子不存在")
+        now = int(time.time())
+        fid = str(uuid.uuid4())
+        is_formula = (row["code_type"] or "formula") == "formula"
+        await db.execute(
+            "INSERT INTO factors (id, name, description, category, formula, code, "
+            "version, created_at, updated_at) VALUES (?, ?, ?, 'QUBE', ?, ?, 1, ?, ?)",
+            (
+                fid,
+                row["name"],
+                row["description"] or "QUBE 对话产出",
+                row["code"] if is_formula else "",
+                "" if is_formula else row["code"],
+                now,
+                now,
+            ),
+        )
+        await db.commit()
+        return {"ok": True, "library_id": fid}
+    finally:
+        await db.close()
+
+
+class FactorAnalysisRequest(BaseModel):
+    factor_id: str
+    session_id: str = ""
+    period_start: str = ""
+    period_end: str = ""
+    adjustment_cycle: int = 5
+    group_number: int = 5
+    factor_direction: int = 1
+    stock_pool: list[str] = []
+
+
+@router.post("/factor-analysis")
+async def start_factor_analysis(body: FactorAnalysisRequest):
+    """画板「跑分析」：后台执行，前端轮询详情直至 done/error"""
+    from backend.services.qube_research import (
+        create_factor_analysis,
+        execute_factor_analysis,
+    )
+
+    aid = await create_factor_analysis(
+        body.factor_id,
+        body.session_id,
+        body.model_dump(exclude={"factor_id", "session_id"}),
+    )
+
+    async def _run():
+        try:
+            await execute_factor_analysis(aid)
+        except Exception:
+            pass  # 错误已落库（status=error），轮询侧展示
+
+    asyncio.create_task(_run())
+    return {"id": aid, "status": "running"}
+
+
+@router.get("/factor-analysis")
+async def list_factor_analyses(
+    factor_id: str = "", session_id: str = "", limit: int = 20
+):
+    from backend.services.qube_research import analysis_row_to_dict
+
+    db = await get_db()
+    try:
+        where, args = [], []
+        if factor_id:
+            where.append("factor_id = ?")
+            args.append(factor_id)
+        if session_id:
+            where.append("session_id = ?")
+            args.append(session_id)
+        sql = "SELECT * FROM factor_analyses"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        cursor = await db.execute(sql, (*args, limit))  # noqa: S608
+        return {"analyses": [analysis_row_to_dict(r) for r in await cursor.fetchall()]}
+    finally:
+        await db.close()
+
+
+@router.get("/factor-analysis/{analysis_id}")
+async def get_factor_analysis(analysis_id: str):
+    from backend.services.qube_research import analysis_row_to_dict
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM factor_analyses WHERE id = ?", (analysis_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="分析记录不存在")
+        return analysis_row_to_dict(row, with_detail=True)
+    finally:
+        await db.close()

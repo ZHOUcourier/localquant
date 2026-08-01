@@ -162,17 +162,30 @@ async def init_db():
             )
         """)
 
-        # QUBE 会话表
+        # QUBE 会话表（bound_type/bound_id：会话绑定的画板工件 factor/strategy）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS qube_sessions (
                 id TEXT PRIMARY KEY,
                 title TEXT DEFAULT '新对话',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                bound_type TEXT DEFAULT '',
+                bound_id TEXT DEFAULT ''
             )
         """)
 
-        # QUBE 消息表
+        # 迁移：早期 qube_sessions 无绑定列则补齐
+        cursor = await db.execute("PRAGMA table_info(qube_sessions)")
+        session_cols = [row[1] for row in await cursor.fetchall()]
+        if "bound_type" not in session_cols:
+            await db.execute(
+                "ALTER TABLE qube_sessions ADD COLUMN bound_type TEXT DEFAULT ''"
+            )
+            await db.execute(
+                "ALTER TABLE qube_sessions ADD COLUMN bound_id TEXT DEFAULT ''"
+            )
+
+        # QUBE 消息表（tool_calls_json：结构化工具轨迹 {calls, display_timeline, thinking}）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS qube_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,11 +193,109 @@ async def init_db():
                 role TEXT NOT NULL,
                 content TEXT DEFAULT '',
                 created_at INTEGER NOT NULL,
+                tool_calls_json TEXT DEFAULT '',
                 FOREIGN KEY (session_id) REFERENCES qube_sessions(id)
             )
         """)
 
+        # 迁移：早期 qube_messages 无 tool_calls_json 列则补齐
+        cursor = await db.execute("PRAGMA table_info(qube_messages)")
+        msg_cols = [row[1] for row in await cursor.fetchall()]
+        if "tool_calls_json" not in msg_cols:
+            await db.execute(
+                "ALTER TABLE qube_messages ADD COLUMN tool_calls_json TEXT DEFAULT ''"
+            )
+
+        # QUBE 对话产出的因子（画板工件；与因子库 factors 表独立，存入因子库时落快照）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS qube_factors (
+                id TEXT PRIMARY KEY,
+                session_id TEXT DEFAULT '',
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                code_type TEXT DEFAULT 'formula',
+                code TEXT DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """)
+
+        # 因子分析记录（9 阶段进度 + 指标/分组/图表结果，画板「历史分析」下拉数据源）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS factor_analyses (
+                id TEXT PRIMARY KEY,
+                factor_id TEXT NOT NULL,
+                session_id TEXT DEFAULT '',
+                status TEXT DEFAULT 'running',
+                progress_json TEXT DEFAULT '{}',
+                params_json TEXT DEFAULT '{}',
+                metrics_json TEXT DEFAULT '{}',
+                group_return_json TEXT DEFAULT '[]',
+                charts_json TEXT DEFAULT '{}',
+                error TEXT DEFAULT '',
+                created_at INTEGER NOT NULL,
+                finished_at INTEGER
+            )
+        """)
+
+        # 策略回测记录（8 阶段进度 + 指标/净值/交易明细/日志，回测中心与画板共用）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_runs (
+                id TEXT PRIMARY KEY,
+                strategy_id TEXT DEFAULT '',
+                strategy_name TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                status TEXT DEFAULT 'running',
+                progress_json TEXT DEFAULT '{}',
+                params_json TEXT DEFAULT '{}',
+                metrics_json TEXT DEFAULT '{}',
+                equity_json TEXT DEFAULT '[]',
+                trades_json TEXT DEFAULT '[]',
+                log_text TEXT DEFAULT '',
+                error TEXT DEFAULT '',
+                created_at INTEGER NOT NULL,
+                finished_at INTEGER
+            )
+        """)
+
+        # QUBE 技能库（builtin=1 系统内置不可改删；source/url 标注来源）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS qube_skills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                display_name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                category TEXT DEFAULT '',
+                category_id TEXT DEFAULT '',
+                params_json TEXT DEFAULT '[]',
+                prompt TEXT DEFAULT '',
+                builtin INTEGER DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                source TEXT DEFAULT '',
+                url TEXT DEFAULT '',
+                stars INTEGER DEFAULT 0
+            )
+        """)
+
+        # 迁移：早期 qube_skills 无来源列则补齐
+        cursor = await db.execute("PRAGMA table_info(qube_skills)")
+        skill_cols = [row[1] for row in await cursor.fetchall()]
+        if "source" not in skill_cols:
+            await db.execute(
+                "ALTER TABLE qube_skills ADD COLUMN source TEXT DEFAULT ''"
+            )
+            await db.execute("ALTER TABLE qube_skills ADD COLUMN url TEXT DEFAULT ''")
+            await db.execute(
+                "ALTER TABLE qube_skills ADD COLUMN stars INTEGER DEFAULT 0"
+            )
+
         await db.commit()
+
+    # 内置技能 seed（幂等，按 name 去重）
+    from backend.services.qube_skills import seed_builtin_skills
+
+    await seed_builtin_skills()
 
 
 async def get_db() -> aiosqlite.Connection:

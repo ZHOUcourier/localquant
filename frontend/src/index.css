@@ -32,10 +32,14 @@ html, body, #app {
   line-height: 1.5;
 }
 
-a {
-  color: var(--color-text-primary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
+/* 链接默认样式放进 @layer base：默认色不变，但组件里的工具类（如 text-[#646262]、
+   no-underline）可正常覆盖它，而不被这条未分层规则压住 */
+@layer base {
+  a {
+    color: var(--color-text-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
 }
 
 ::-webkit-scrollbar {
@@ -108,3 +112,83 @@ a {
   background: #e8e5e5 !important;
   border-color: rgba(15, 0, 0, 0.22) !important;
 }
+
+/* ── QUBE 空态动画（对齐参考站 split-char / anim-reveal-up 实现）── */
+@keyframes reveal-char {
+  0% { opacity: 0; transform: translateY(0.42em); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.split-char {
+  white-space: pre;
+  opacity: 0;
+  display: inline-block;
+  animation: reveal-char 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(var(--i, 0) * 32ms);
+}
+@keyframes reveal-up {
+  0% { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.anim-reveal-up {
+  opacity: 0;
+  animation: reveal-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(var(--i, 0) * 45ms + 60ms);
+}
+
+/* ── QUBE AI 消息 markdown（opencode 风：等宽字体、hairline 表格、surface-card 代码块）── */
+.md-body { font-size: 13px; line-height: 1.75; color: #201d1d; overflow-wrap: break-word; }
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+.md-body p { margin: 0.5em 0; white-space: pre-wrap; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+  margin: 0.9em 0 0.35em;
+  font-size: 13px;
+  font-weight: 600;
+}
+.md-body ul, .md-body ol { margin: 0.4em 0; padding-left: 1.4em; }
+.md-body ul { list-style: disc; }
+.md-body ol { list-style: decimal; }
+.md-body li { margin: 0.25em 0; }
+.md-body code {
+  background: #f1eeee;
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 12px;
+}
+.md-body pre {
+  background: #f1eeee;
+  border: 1px solid rgba(15, 0, 0, 0.12);
+  border-radius: 4px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+.md-body pre code { background: transparent; padding: 0; font-size: 12px; line-height: 1.6; }
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 12px;
+  display: block;
+  overflow-x: auto;
+}
+.md-body th {
+  text-align: left;
+  font-weight: 600;
+  padding: 4px 10px 4px 0;
+  border-bottom: 1px solid rgba(15, 0, 0, 0.22);
+  white-space: nowrap;
+}
+.md-body td {
+  padding: 4px 10px 4px 0;
+  border-bottom: 1px solid rgba(15, 0, 0, 0.08);
+  white-space: nowrap;
+}
+.md-body blockquote {
+  margin: 0.5em 0;
+  padding-left: 10px;
+  border-left: 2px solid rgba(15, 0, 0, 0.22);
+  color: #646262;
+}
+.md-body a { color: #007aff; text-decoration: underline; }
+.md-body hr { border: 0; border-top: 1px solid rgba(15, 0, 0, 0.12); margin: 0.8em 0; }

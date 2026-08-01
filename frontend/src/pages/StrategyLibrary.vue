@@ -1,14 +1,14 @@
 <script setup lang="ts">
 /**
- * StrategyLibrary — 策略库（工作中 / 已保存）
+ * StrategyLibrary — 策略库（工作产出 / 落地成果）
  *
- * 分类规则：QUBE 对话产出的策略与工作流都归「工作中」；
- * 只有用户点「设为已保存」才进入「已保存」（系统/AI 不会自动提升）。
+ * 分类规则：QUBE 对话产出的策略与工作流都归「工作产出」；
+ * 只有用户点「设为落地成果」才进入「落地成果」（系统/AI 不会自动提升）。
  * 工作流以虚拟条目出现（id=wf:xxx），提升时后端落快照行。
  */
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { BookMarked, ExternalLink, GitBranch, MessageSquare, Trash2, X } from 'lucide-vue-next'
+import { BookMarked, ExternalLink, GitBranch, MessageSquare, Radio, Trash2, X } from 'lucide-vue-next'
 import { Tabs } from '@/components/ui'
 import type { TabItem } from '@/components/ui'
 import CodeEditor from '@/components/ui/CodeEditor.vue'
@@ -27,8 +27,8 @@ interface Strategy {
 
 const router = useRouter()
 const tabs: TabItem[] = [
-  { key: 'working', label: '工作中' },
-  { key: 'saved', label: '已保存' },
+  { key: 'working', label: '工作产出' },
+  { key: 'saved', label: '落地成果' },
 ]
 const active = ref('working')
 const items = ref<Strategy[]>([])
@@ -94,8 +94,55 @@ function fmtTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString()
 }
 
-// 详情弹窗
+// 策略详情弹窗
 const detail = ref<Strategy | null>(null)
+
+// QMT 转写弹窗（导出方向：本平台 generate_signals → 迅投 QMT 实盘代码）
+const qmt = ref<{
+  strategy: Strategy
+  loading: boolean
+  code: string
+  note: string
+  filename: string
+  error: string
+} | null>(null)
+
+function openQmt(s: Strategy) {
+  qmt.value = { strategy: s, loading: false, code: '', note: '', filename: '', error: '' }
+}
+
+async function runQmt() {
+  if (!qmt.value) return
+  qmt.value.loading = true
+  qmt.value.error = ''
+  try {
+    const d = await jsonFetch(`/api/strategy/${encodeURIComponent(qmt.value.strategy.id)}/export-qmt`, {
+      method: 'POST',
+    })
+    qmt.value.code = d.code
+    qmt.value.note = d.note
+    qmt.value.filename = d.filename
+  } catch (e) {
+    qmt.value.error = e instanceof Error ? e.message : String(e)
+  } finally {
+    qmt.value.loading = false
+  }
+}
+
+async function copyQmt() {
+  if (qmt.value?.code) await navigator.clipboard.writeText(qmt.value.code)
+}
+
+function downloadQmt() {
+  if (!qmt.value?.code) return
+  const blob = new Blob([qmt.value.code], { type: 'text/x-python' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = qmt.value.filename || 'strategy_qmt.py'
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 onMounted(load)
 </script>
@@ -107,7 +154,7 @@ onMounted(load)
         <BookMarked :size="16" class="text-[#007aff]" />
         <span class="text-sm font-semibold text-[#201d1d]">策略库</span>
         <span class="text-[11px] text-[#9a9898]">
-          工作流与 QUBE 对话产出默认「工作中」；只有你能设为「已保存」
+          工作流与 QUBE 对话产出默认「工作产出」；只有你能设为「落地成果」
         </span>
       </div>
       <Tabs :items="tabs" :active-key="active" @change="switchTab" />
@@ -120,7 +167,7 @@ onMounted(load)
     <div class="min-h-0 flex-1 overflow-y-auto">
       <div v-if="loading" class="flex h-32 items-center justify-center text-xs text-[#646262]">加载中...</div>
       <div v-else-if="!items.length" class="flex h-32 items-center justify-center text-xs text-[#9a9898]">
-        {{ active === 'working' ? '暂无工作中的策略 — 去 QUBE 对话创建，或新建工作流' : '暂无已保存策略 — 在「工作中」里手动设为已保存' }}
+        {{ active === 'working' ? '暂无工作产出的策略 — 去 QUBE 对话创建，或新建工作流' : '暂无落地成果 — 在「工作产出」里手动设为落地成果' }}
       </div>
 
       <div v-else class="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
@@ -159,18 +206,26 @@ onMounted(load)
                 <ExternalLink :size="10" /> 打开
               </button>
               <button
+                v-if="s.source === 'chat' && !s.id.startsWith('wf:')"
+                class="flex items-center gap-0.5 rounded-[3px] border border-[rgba(15,0,0,0.12)] bg-transparent px-2 py-0.5 text-[11px] text-[#424245] hover:text-[#201d1d]"
+                title="转写为迅投 QMT 实盘代码"
+                @click="openQmt(s)"
+              >
+                <Radio :size="10" /> 转写 QMT
+              </button>
+              <button
                 v-if="s.status === 'working'"
                 class="rounded-[3px] border-0 bg-[#201d1d] px-2 py-0.5 text-[11px] text-[#fdfcfc] hover:opacity-85"
                 @click="promote(s)"
               >
-                设为已保存
+                设为落地成果
               </button>
               <button
                 v-else
                 class="rounded-[3px] border border-[rgba(15,0,0,0.12)] bg-transparent px-2 py-0.5 text-[11px] text-[#424245] hover:text-[#201d1d]"
                 @click="backToWorking(s)"
               >
-                移回工作中
+                移回工作产出
               </button>
               <button
                 v-if="!s.id.startsWith('wf:')"
@@ -208,6 +263,77 @@ onMounted(load)
             :title="detail.name"
             :font-size="12"
           />
+        </div>
+      </div>
+    </div>
+
+    <!-- QMT 转写弹窗 -->
+    <div v-if="qmt" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/45" @click.self="qmt = null">
+      <div
+        class="flex flex-col overflow-hidden rounded-[6px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc]"
+        style="width: min(840px, 92vw); height: min(80vh, 720px)"
+      >
+        <div class="flex shrink-0 items-center justify-between border-b border-[rgba(15,0,0,0.12)] bg-[#f1eeee] px-4 py-2.5">
+          <span class="flex items-center gap-1.5 text-[13px] font-semibold text-[#201d1d]">
+            <Radio :size="14" /> 策略转写 · {{ qmt.strategy.name }}
+          </span>
+          <button class="border-0 bg-transparent text-[#646262] hover:text-[#201d1d]" @click="qmt = null">
+            <X :size="15" />
+          </button>
+        </div>
+        <div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          <p class="text-[11px] leading-relaxed text-[#646262]">
+            把本平台策略（generate_signals）转写成迅投 QMT（miniQMT / xtquant）可直接运行的实盘代码。
+            若两边数据能力差异导致无法等价实现，AI 会明确告诉你哪里不行、为什么、怎么降级。
+            目前仅提供 QMT 转写。
+          </p>
+          <div v-if="qmt.error" class="rounded-[4px] border border-[#ff3b30]/40 bg-[#ff3b30]/8 px-3 py-2 text-xs text-[#ff3b30]">
+            {{ qmt.error }}
+          </div>
+          <div
+            v-if="qmt.note"
+            class="whitespace-pre-wrap rounded-[4px] border border-[#007aff]/25 bg-[#007aff]/6 px-3 py-2 text-[11px] leading-relaxed text-[#0056b3]"
+          >
+            {{ qmt.note }}
+          </div>
+          <div v-if="qmt.code" class="h-[360px]">
+            <CodeEditor
+              :model-value="qmt.code"
+              language="python"
+              height="100%"
+              read-only
+              :lint="false"
+              :title="qmt.filename"
+              :font-size="12"
+            />
+          </div>
+          <div v-else-if="!qmt.loading" class="flex h-40 items-center justify-center text-xs text-[#9a9898]">
+            点击下方「开始转写」生成 QMT 代码
+          </div>
+          <div v-else class="flex h-40 items-center justify-center text-xs text-[#646262]">AI 转写中…</div>
+        </div>
+        <div class="flex shrink-0 items-center justify-end gap-2 border-t border-[rgba(15,0,0,0.12)] px-4 py-2.5">
+          <button
+            v-if="qmt.code"
+            class="rounded-[4px] border border-[rgba(15,0,0,0.15)] px-3 py-1 text-xs text-[#424245] hover:text-[#201d1d]"
+            @click="copyQmt"
+          >
+            复制
+          </button>
+          <button
+            v-if="qmt.code"
+            class="rounded-[4px] border border-[rgba(15,0,0,0.15)] px-3 py-1 text-xs text-[#424245] hover:text-[#201d1d]"
+            @click="downloadQmt"
+          >
+            下载 .py
+          </button>
+          <button
+            :disabled="qmt.loading"
+            class="rounded-[4px] bg-[#201d1d] px-4 py-1 text-xs text-[#fdfcfc] hover:opacity-85 disabled:opacity-50"
+            @click="runQmt"
+          >
+            {{ qmt.loading ? '转写中…' : qmt.code ? '重新转写' : '开始转写' }}
+          </button>
         </div>
       </div>
     </div>

@@ -20,8 +20,10 @@ export const router = createRouter({
         { path: 'workflow/:id', component: () => import('./pages/WorkflowEditor.vue') },
         // QUBE — 策略研究 AI Agent（对话创建策略）
         { path: 'qube', component: () => import('./pages/Qube.vue') },
-        // 策略库（工作中 / 已保存）
+        // 策略库（工作产出 / 落地成果）
         { path: 'strategies', component: () => import('./pages/StrategyLibrary.vue') },
+        // 技能库（独立页：系统内置 + 自定义）
+        { path: 'skills', component: () => import('./pages/Skills.vue') },
         { path: 'runs', component: () => import('./pages/RunCenter.vue') },
         { path: 'experiments', component: () => import('./pages/Experiments.vue') },
         { path: 'settings', component: () => import('./pages/Settings.vue') },

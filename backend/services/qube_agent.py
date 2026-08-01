@@ -6,12 +6,14 @@
   继续下一轮；直到模型不再调工具或达到 max_turns
 - 事件流（供 SSE 透传，语义对齐 pi 的 agent 事件）：
     {"type": "delta",       "text": ...}                 增量文本
+    {"type": "thinking",    "text": ...}                 深度思考增量（reasoning_content）
     {"type": "tool_call",   "name": ..., "args": {...}}  工具开始执行
     {"type": "tool_result", "name": ..., "result": ...}  工具执行结果（摘要）
     {"type": "done",        "content": ...}              最终助手文本
     {"type": "error",       "message": ...}
 
-QUBE 注册的平台原生工具：本地数据概况 / 运行回测 / 保存策略到策略库。
+QUBE 注册的平台原生工具与技能库（qube_skills 表 enabled=1 项）一一对应：
+策略代码/版本/回测/因子/因子分析/行情查询/绑定目标/长期记忆。
 """
 
 import json
@@ -111,6 +113,14 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
                         if text:
                             content_parts.append(text)
                             yield {"type": "delta", "text": text}
+                        # 深度思考增量（DeepSeek/豆包等 reasoning 模型）
+                        think = (
+                            delta.get("reasoning_content")
+                            or delta.get("reasoning")
+                            or ""
+                        )
+                        if think:
+                            yield {"type": "thinking", "text": think}
                         for tc in delta.get("tool_calls") or []:
                             idx = tc.get("index", 0)
                             slot = calls.setdefault(
@@ -192,8 +202,26 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
 
 
 # ---------------------------------------------------------------------------
-# QUBE 平台原生工具
+# QUBE 平台原生工具（与技能库 enabled 项一一对应）
 # ---------------------------------------------------------------------------
+
+# 会话级回测参数（set_backtest_params 写入，run_backtest 合并使用；内存态）
+_SESSION_BT_PARAMS: dict[str, dict] = {}
+
+
+async def _bind_session(session_id: str, kind: str, target_id: str) -> None:
+    """把会话绑定到画板工件（factor/strategy），切回会话时画板恢复"""
+    from backend.database import get_db
+
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE qube_sessions SET bound_type = ?, bound_id = ? WHERE id = ?",
+            (kind, target_id, session_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
 
 
 async def _tool_get_data_status(_args: dict) -> dict:
@@ -245,14 +273,15 @@ async def _tool_read_doc(args: dict) -> dict:
     return {"name": name, "excerpt": text[:4000], "truncated": len(text) > 4000}
 
 
-async def _tool_preview_data(args: dict) -> dict:
-    """读取真实行情样本（收盘价面板尾部几行），供 agent 对齐字段名/量级后再写代码"""
+async def _tool_query_market_data(args: dict) -> dict:
+    """查询本地 A 股行情表格（只读）：指定标的/区间/字段，返回尾部样本"""
     from backend.services import market_data
 
-    codes = list(args.get("stock_pool") or [])
+    symbols = list(args.get("symbols") or [])
+    fields = [f for f in (args.get("fields") or ["close"]) if isinstance(f, str)]
     try:
         panels = market_data.load_price_panels(
-            codes=codes,
+            codes=symbols,
             start_date=str(args.get("start_date") or ""),
             end_date=str(args.get("end_date") or ""),
         )
@@ -261,91 +290,482 @@ async def _tool_preview_data(args: dict) -> dict:
     close = panels.get("close")
     if close is None or close.empty:
         return {"error": "行情为空"}
-    tail = close.tail(3).iloc[:, :5]
-    return {
+    out: dict = {
         "fields": list(panels.keys()),
         "stock_count": int(close.shape[1]),
         "date_range": [str(close.index[0].date()), str(close.index[-1].date())],
-        "close_sample": {
+        "tables": {},
+    }
+    for f in fields[:4]:
+        panel = panels.get(f)
+        if panel is None:
+            continue
+        tail = panel.tail(5).iloc[:, :8]
+        out["tables"][f] = {
             str(d.date()): {c: round(float(v), 3) for c, v in row.items() if v == v}
             for d, row in tail.iterrows()
-        },
-    }
+        }
+    return out
 
 
-async def _tool_run_backtest(args: dict) -> dict:
-    """执行信号代码回测（复用 /api/backtest/run-strategy 核心），返回绩效摘要"""
-    from fastapi import HTTPException
-
-    from backend.routes.backtest import RunStrategyRequest, run_strategy
-
-    req = RunStrategyRequest(
-        signal_code=str(args.get("signal_code") or ""),
-        stock_pool=list(args.get("stock_pool") or []),
-        start_date=str(args.get("start_date") or ""),
-        end_date=str(args.get("end_date") or ""),
-        initial_capital=float(args.get("initial_capital") or 1_000_000),
-        commission_rate=float(args.get("commission_rate") or 0.001),
-        slippage=float(args.get("slippage") or 0.001),
-    )
-    try:
-        result = await run_strategy(req)
-    except HTTPException as e:
-        return {"error": e.detail}
-    # 只回传指标摘要与首尾净值，避免大曲线撑爆上下文
-    eq = result.get("equity_curve", {})
-    keys = sorted(eq)
-    return {
-        "tear_sheet": result.get("tear_sheet", {}),
-        "equity_start": {keys[0]: eq[keys[0]]} if keys else {},
-        "equity_end": {keys[-1]: eq[keys[-1]]} if keys else {},
-        "n_days": len(keys),
-    }
-
-
-async def _tool_save_strategy(args: dict) -> dict:
-    """把策略存入策略库（status=working；只有用户能手动设为已保存）"""
+async def _tool_generate_strategy_code(args: dict, session_id: str) -> dict:
+    """生成/修改 A 股策略代码并写入画板：新建或更新会话绑定策略 + 记版本"""
     from backend.database import get_db
 
     name = str(args.get("name") or "").strip()
-    if not name:
-        return {"error": "策略名称不能为空"}
+    code = str(args.get("code") or "")
+    summary = str(args.get("summary") or "")
+    if not name or not code.strip():
+        return {"error": "name 与 code 不能为空"}
     now = int(time.time())
-    sid = str(uuid.uuid4())
+    strategy_id = str(args.get("strategy_id") or "").strip()
     db = await get_db()
     try:
-        await db.execute(
-            "INSERT INTO strategies (id, name, description, status, source, content, "
-            "code, workflow_id, session_id, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'working', 'chat', ?, ?, '', ?, ?, ?)",
-            (
-                sid,
-                name,
-                str(args.get("description") or ""),
-                str(args.get("content") or ""),
-                str(args.get("code") or ""),
-                str(args.get("session_id") or ""),
-                now,
-                now,
-            ),
-        )
+        existing = None
+        if strategy_id:
+            cursor = await db.execute(
+                "SELECT id FROM strategies WHERE id = ?", (strategy_id,)
+            )
+            existing = await cursor.fetchone()
+        if existing:
+            await db.execute(
+                "UPDATE strategies SET name = ?, description = ?, code = ?, "
+                "updated_at = ? WHERE id = ?",
+                (name, summary, code, now, strategy_id),
+            )
+            note = f"AI 改：{summary[:60]}" if summary else "AI 改"
+        else:
+            strategy_id = str(uuid.uuid4())
+            await db.execute(
+                "INSERT INTO strategies (id, name, description, status, source, "
+                "content, code, workflow_id, session_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'working', 'chat', ?, ?, '', ?, ?, ?)",
+                (strategy_id, name, summary, summary, code, session_id, now, now),
+            )
+            note = f"初始版本（QUBE 生成）：{summary[:60]}"
         await db.execute(
             "INSERT INTO strategy_versions (strategy_id, code, content, note, created_at) "
-            "VALUES (?, ?, ?, '初始版本（QUBE 生成）', ?)",
-            (sid, str(args.get("code") or ""), str(args.get("content") or ""), now),
+            "VALUES (?, ?, ?, ?, ?)",
+            (strategy_id, code, summary, note, now),
         )
         await db.commit()
     finally:
         await db.close()
-    return {"ok": True, "strategy_id": sid, "status": "working"}
+    await _bind_session(session_id, "strategy", strategy_id)
+    return {"ok": True, "strategy_id": strategy_id, "name": name, "status": "working"}
+
+
+async def _tool_list_strategies(_args: dict) -> dict:
+    """列出全部策略 + 最近一次成功回测的核心指标"""
+    from backend.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, name, description, status, updated_at FROM strategies "
+            "ORDER BY updated_at DESC LIMIT 50"
+        )
+        items = []
+        for r in await cursor.fetchall():
+            c2 = await db.execute(
+                "SELECT metrics_json FROM backtest_runs WHERE strategy_id = ? "
+                "AND status = 'done' ORDER BY created_at DESC LIMIT 1",
+                (r["id"],),
+            )
+            bt = await c2.fetchone()
+            metrics = json.loads(bt["metrics_json"]) if bt else {}
+            items.append(
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "description": r["description"],
+                    "status": r["status"],
+                    "last_backtest": {
+                        "total_return": metrics.get("total_return"),
+                        "sharpe_ratio": metrics.get("sharpe_ratio"),
+                        "max_drawdown": metrics.get("max_drawdown"),
+                    }
+                    if metrics
+                    else None,
+                }
+            )
+        return {"strategies": items}
+    finally:
+        await db.close()
+
+
+async def _tool_list_strategy_versions(args: dict) -> dict:
+    from backend.database import get_db
+
+    strategy_id = str(args.get("strategy_id") or "")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, note, created_at FROM strategy_versions "
+            "WHERE strategy_id = ? ORDER BY id DESC LIMIT 50",
+            (strategy_id,),
+        )
+        return {
+            "versions": [
+                {"version": r["id"], "note": r["note"], "created_at": r["created_at"]}
+                for r in await cursor.fetchall()
+            ]
+        }
+    finally:
+        await db.close()
+
+
+async def _tool_get_strategy_version(args: dict) -> dict:
+    from backend.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, code, content, note, created_at FROM strategy_versions "
+            "WHERE strategy_id = ? AND id = ?",
+            (str(args.get("strategy_id") or ""), int(args.get("version_number") or 0)),
+        )
+        r = await cursor.fetchone()
+        if not r:
+            return {"error": "版本不存在"}
+        return {
+            "version": r["id"],
+            "note": r["note"],
+            "code": r["code"],
+            "created_at": r["created_at"],
+        }
+    finally:
+        await db.close()
+
+
+async def _tool_revert_strategy(args: dict) -> dict:
+    """回滚到指定版本（复用策略库回滚逻辑，产生新版本记录）"""
+    from fastapi import HTTPException
+
+    from backend.routes.strategy import rollback_version
+
+    try:
+        result = await rollback_version(
+            str(args.get("strategy_id") or ""), int(args.get("version_number") or 0)
+        )
+    except HTTPException as e:
+        return {"error": e.detail}
+    return {"ok": True, "code": result["code"][:1200]}
+
+
+async def _tool_set_backtest_params(args: dict, session_id: str) -> dict:
+    """把回测参数推给右侧画板（不立刻开跑）；同时存会话级参数供 run_backtest 合并"""
+    keys = [
+        "period_start",
+        "period_end",
+        "init_balance",
+        "commission_rate",
+        "slippage",
+        "stamp_tax",
+        "frequency",
+        "stock_pool",
+    ]
+    params = {k: args[k] for k in keys if args.get(k) not in (None, "")}
+    stored = _SESSION_BT_PARAMS.setdefault(session_id, {})
+    stored.update(params)
+    return {"ok": True, "params": stored}
+
+
+async def _tool_run_backtest(args: dict, session_id: str) -> dict:
+    """对策略提交真实回测（落库 backtest_runs，8 阶段进度），返回指标摘要"""
+    from backend.database import get_db
+    from backend.services.qube_research import (
+        create_backtest_run,
+        execute_backtest_run,
+    )
+
+    strategy_id = str(args.get("strategy_id") or "").strip()
+    code = str(args.get("signal_code") or "")
+    name = ""
+    if strategy_id:
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT name, code FROM strategies WHERE id = ?", (strategy_id,)
+            )
+            r = await cursor.fetchone()
+        finally:
+            await db.close()
+        if not r:
+            return {"error": f"策略不存在: {strategy_id}"}
+        name = r["name"]
+        code = code or r["code"]
+    if not code.strip():
+        return {"error": "策略代码为空：请先用 generate_stock_strategy_code 写入策略"}
+    params = {**_SESSION_BT_PARAMS.get(session_id, {})}
+    for k in (
+        "period_start",
+        "period_end",
+        "init_balance",
+        "commission_rate",
+        "slippage",
+        "stock_pool",
+    ):
+        if args.get(k) not in (None, ""):
+            params[k] = args[k]
+    run_id = await create_backtest_run(strategy_id, name, session_id, code, params)
+    try:
+        result = await execute_backtest_run(run_id)
+    except Exception as e:
+        return {"error": f"回测失败: {str(e)[:400]}", "backtest_run_id": run_id}
+    m = result["metrics"]
+    return {
+        "ok": True,
+        "backtest_run_id": run_id,
+        "strategy_id": strategy_id,
+        "metrics": {
+            "total_return": m.get("total_return"),
+            "annual_return": m.get("annual_return"),
+            "sharpe_ratio": m.get("sharpe_ratio"),
+            "max_drawdown": m.get("max_drawdown"),
+            "trade_count": m.get("trade_count"),
+        },
+    }
+
+
+async def _tool_get_backtest_result(args: dict) -> dict:
+    """只读获取一次回测结果（诊断用：指标 + 尾部日志）"""
+    from backend.database import get_db
+
+    run_id = str(args.get("backtest_run_id") or "")
+    db = await get_db()
+    try:
+        if run_id:
+            cursor = await db.execute(
+                "SELECT * FROM backtest_runs WHERE id = ?", (run_id,)
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM backtest_runs WHERE strategy_id = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (str(args.get("strategy_id") or ""),),
+            )
+        r = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not r:
+        return {"error": "回测记录不存在"}
+    return {
+        "backtest_run_id": r["id"],
+        "status": r["status"],
+        "metrics": json.loads(r["metrics_json"] or "{}"),
+        "error": r["error"],
+        "log_tail": (r["log_text"] or "")[-1500:],
+    }
+
+
+async def _tool_generate_factor_code(args: dict, session_id: str) -> dict:
+    """生成/修改 A 股因子并写入画板（qube_factors）"""
+    from backend.database import get_db
+
+    name = str(args.get("name") or "").strip()
+    code = str(args.get("code") or "")
+    if not name or not code.strip():
+        return {"error": "name 与 code 不能为空"}
+    code_type = str(args.get("code_type") or "formula")
+    if code_type not in ("formula", "python"):
+        code_type = "formula"
+    now = int(time.time())
+    factor_id = str(args.get("factor_id") or "").strip()
+    db = await get_db()
+    try:
+        existing = None
+        if factor_id:
+            cursor = await db.execute(
+                "SELECT id FROM qube_factors WHERE id = ?", (factor_id,)
+            )
+            existing = await cursor.fetchone()
+        if existing:
+            await db.execute(
+                "UPDATE qube_factors SET name = ?, description = ?, code_type = ?, "
+                "code = ?, updated_at = ? WHERE id = ?",
+                (
+                    name,
+                    str(args.get("description") or ""),
+                    code_type,
+                    code,
+                    now,
+                    factor_id,
+                ),
+            )
+        else:
+            factor_id = str(uuid.uuid4())
+            await db.execute(
+                "INSERT INTO qube_factors (id, session_id, name, description, "
+                "code_type, code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    factor_id,
+                    session_id,
+                    name,
+                    str(args.get("description") or ""),
+                    code_type,
+                    code,
+                    now,
+                    now,
+                ),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+    await _bind_session(session_id, "factor", factor_id)
+    return {"ok": True, "factor_id": factor_id, "name": name, "code_type": code_type}
+
+
+async def _tool_run_factor_analysis(args: dict, session_id: str) -> dict:
+    """对因子做 IC 分析与分组回测（落库 factor_analyses，9 阶段进度），返回指标摘要"""
+    from backend.database import get_db
+    from backend.services.qube_research import (
+        create_factor_analysis,
+        execute_factor_analysis,
+    )
+
+    factor_id = str(args.get("factor_id") or "").strip()
+    if not factor_id:
+        # 默认用会话绑定的因子
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT bound_type, bound_id FROM qube_sessions WHERE id = ?",
+                (session_id,),
+            )
+            r = await cursor.fetchone()
+        finally:
+            await db.close()
+        if r and r["bound_type"] == "factor":
+            factor_id = r["bound_id"]
+    if not factor_id:
+        return {"error": "未指定因子：请先用 generate_stock_factor_code 创建因子"}
+    params = {
+        k: args[k]
+        for k in (
+            "period_start",
+            "period_end",
+            "adjustment_cycle",
+            "group_number",
+            "factor_direction",
+            "stock_pool",
+        )
+        if args.get(k) not in (None, "")
+    }
+    analysis_id = await create_factor_analysis(factor_id, session_id, params)
+    try:
+        result = await execute_factor_analysis(analysis_id)
+    except Exception as e:
+        return {
+            "error": f"因子分析失败: {str(e)[:400]}",
+            "factor_analysis_id": analysis_id,
+        }
+    s = result["summary"]
+    return {
+        "ok": True,
+        "factor_id": factor_id,
+        "factor_analysis_id": analysis_id,
+        "summary": {
+            "ic_mean": s.get("ic_mean"),
+            "rank_ic": s.get("rank_ic"),
+            "ic_ir": s.get("ic_ir"),
+            "annual_return": s.get("annual_return"),
+            "sharpe_ratio": s.get("sharpe_ratio"),
+            "max_drawdown": s.get("max_drawdown"),
+            "monotonicity": s.get("monotonicity"),
+        },
+    }
+
+
+async def _tool_list_factors(_args: dict) -> dict:
+    """列出对话产出的因子 + 最近一次分析的核心指标"""
+    from backend.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, name, code_type, code, updated_at FROM qube_factors "
+            "ORDER BY updated_at DESC LIMIT 50"
+        )
+        items = []
+        for r in await cursor.fetchall():
+            c2 = await db.execute(
+                "SELECT metrics_json FROM factor_analyses WHERE factor_id = ? "
+                "AND status = 'done' ORDER BY created_at DESC LIMIT 1",
+                (r["id"],),
+            )
+            a = await c2.fetchone()
+            summary = (
+                json.loads(a["metrics_json"] or "{}").get("summary", {}) if a else {}
+            )
+            items.append(
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "code_type": r["code_type"],
+                    "code": r["code"][:200],
+                    "last_analysis": {
+                        "ic_mean": summary.get("ic_mean"),
+                        "ic_ir": summary.get("ic_ir"),
+                        "monotonicity": summary.get("monotonicity"),
+                    }
+                    if summary
+                    else None,
+                }
+            )
+        return {"factors": items}
+    finally:
+        await db.close()
+
+
+async def _tool_bind_chat_target(args: dict, session_id: str) -> dict:
+    """切换当前对话绑定的画板工件（factor/strategy）"""
+    kind = str(args.get("kind") or "")
+    target = str(args.get("id") or "")
+    if kind not in ("factor", "strategy") or not target:
+        return {"error": "kind 需为 factor/strategy 且 id 不能为空"}
+    await _bind_session(session_id, kind, target)
+    return {"ok": True, "kind": kind, "id": target}
+
+
+async def _tool_remember(args: dict) -> dict:
+    """把长期偏好/事实追加到可编辑的系统提示词文件（侧栏可查看/编辑）"""
+    import pathlib
+
+    content = str(args.get("content") or "").strip()
+    kind = str(args.get("kind") or "preference")
+    if not content:
+        return {"error": "content 不能为空"}
+    path = pathlib.Path("data/qube_system_prompt.md")
+    from backend.routes.qube import QUBE_SYSTEM  # 避免循环导入：延迟到调用时
+
+    text = path.read_text(encoding="utf-8") if path.exists() else QUBE_SYSTEM
+    if content in text:
+        return {"ok": True, "note": "已存在相同记忆，未重复保存"}
+    label = "偏好" if kind == "preference" else "事实"
+    if "## 长期记忆" not in text:
+        text += "\n\n## 长期记忆\n"
+    text += f"- [{label}] {content}\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return {"ok": True, "kind": kind}
 
 
 def build_qube_tools(session_id: str) -> list[Tool]:
-    """QUBE 的平台工具集（save_strategy 自动带上会话归属）"""
+    """QUBE 平台工具集（与技能库 enabled 项对应；会话相关工具自动带上归属）"""
 
-    async def save_with_session(args: dict) -> Any:
-        return await _tool_save_strategy({**args, "session_id": session_id})
+    def with_session(fn):
+        async def _wrapped(args: dict) -> Any:
+            return await fn(args, session_id)
 
+        return _wrapped
+
+    _date = {"type": "string", "description": "YYYY-MM-DD，可空=自动"}
+    _pool = {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "股票代码列表，空=全部本地缓存",
+    }
     return [
         Tool(
             name="get_data_status",
@@ -377,67 +797,251 @@ def build_qube_tools(session_id: str) -> list[Tool]:
             handler=_tool_read_doc,
         ),
         Tool(
-            name="preview_data",
-            description="读取真实行情样本（收盘价面板尾部几行 + 可用字段 + 日期区间），写代码前用它核对字段名与数值量级，避免臆测。",
+            name="query_market_data",
+            description="查询本地 A 股行情表格（只读）：指定标的/区间/字段（open/high/low/close/volume/amount），返回尾部样本。写代码前用它核对字段名与数值量级，避免臆测。",
             parameters={
                 "type": "object",
                 "properties": {
-                    "stock_pool": {
+                    "symbols": _pool,
+                    "start_date": _date,
+                    "end_date": _date,
+                    "fields": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "股票代码列表，空=全部本地缓存",
+                        "description": "字段列表，默认 [close]",
                     },
-                    "start_date": {"type": "string"},
-                    "end_date": {"type": "string"},
                 },
                 "required": [],
             },
-            handler=_tool_preview_data,
+            handler=_tool_query_market_data,
+        ),
+        Tool(
+            name="generate_stock_strategy_code",
+            description=(
+                "生成或修改完整的 A 股策略代码并写入右侧画板（策略库状态=工作中，自动记版本）。"
+                "code 必须定义 generate_signals(prices, **kwargs)，prices 为收盘价面板 "
+                "DataFrame(index=交易日, columns=股票代码)，返回同形状持仓权重/信号 DataFrame。"
+                "修改已有策略时传 strategy_id。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "generate_signals 完整 python 代码",
+                    },
+                    "name": {"type": "string", "description": "策略名"},
+                    "summary": {
+                        "type": "string",
+                        "description": "一句话核心逻辑/本次改动说明",
+                    },
+                    "strategy_id": {
+                        "type": "string",
+                        "description": "修改已有策略时传",
+                    },
+                },
+                "required": ["code", "name", "summary"],
+            },
+            handler=with_session(_tool_generate_strategy_code),
+        ),
+        Tool(
+            name="list_strategies",
+            description="列出当前用户所有策略，以及每条策略最近一次成功回测的总收益、夏普与回撤。",
+            parameters={"type": "object", "properties": {}, "required": []},
+            handler=_tool_list_strategies,
+        ),
+        Tool(
+            name="list_strategy_versions",
+            description="列出策略的历史版本：版本号、改动说明、时间。",
+            parameters={
+                "type": "object",
+                "properties": {"strategy_id": {"type": "string"}},
+                "required": ["strategy_id"],
+            },
+            handler=_tool_list_strategy_versions,
+        ),
+        Tool(
+            name="get_strategy_version",
+            description="读取某个历史版本的源码与说明（只读，不改画板）。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "strategy_id": {"type": "string"},
+                    "version_number": {
+                        "type": "integer",
+                        "description": "版本号（list_strategy_versions 返回的 version）",
+                    },
+                },
+                "required": ["strategy_id", "version_number"],
+            },
+            handler=_tool_get_strategy_version,
+        ),
+        Tool(
+            name="revert_strategy_to_version",
+            description="把策略回滚到某个历史版本：将该版代码复制成新版本并写回画板，历史不会丢。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "strategy_id": {"type": "string"},
+                    "version_number": {"type": "integer"},
+                },
+                "required": ["strategy_id", "version_number"],
+            },
+            handler=_tool_revert_strategy,
+        ),
+        Tool(
+            name="set_backtest_params",
+            description="调整右侧画板的回测参数（起止日期、初始资金、成本等），不立刻开跑。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "period_start": _date,
+                    "period_end": _date,
+                    "init_balance": {
+                        "type": "number",
+                        "description": "初始资金，默认 1000000",
+                    },
+                    "commission_rate": {
+                        "type": "number",
+                        "description": "手续费率，默认 0.001",
+                    },
+                    "slippage": {"type": "number", "description": "滑点，默认 0.001"},
+                    "frequency": {
+                        "type": "string",
+                        "description": "频率，本地仅支持 1d",
+                    },
+                    "stock_pool": _pool,
+                },
+                "required": [],
+            },
+            handler=with_session(_tool_set_backtest_params),
         ),
         Tool(
             name="run_backtest",
             description=(
-                "对信号代码执行真实回测并返回绩效指标（年化/夏普/最大回撤等）。"
-                "signal_code 必须定义 generate_signals(prices, **kwargs) 函数，"
-                "prices 为收盘价面板 DataFrame(index=交易日, columns=股票代码)，"
-                "返回同形状的持仓权重/信号 DataFrame。"
+                "对策略提交真实回测（落库可在回测记录中查看），返回总收益/年化/夏普/最大回撤等指标。"
+                "优先传 strategy_id（用已写入画板的策略）；也可直传 signal_code 即时验证。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "signal_code": {"type": "string", "description": "python 信号代码"},
-                    "stock_pool": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "股票代码列表，空=全部本地缓存",
+                    "strategy_id": {"type": "string"},
+                    "signal_code": {
+                        "type": "string",
+                        "description": "不传 strategy_id 时必填",
                     },
-                    "start_date": {"type": "string", "description": "YYYY-MM-DD，可空"},
-                    "end_date": {"type": "string", "description": "YYYY-MM-DD，可空"},
-                    "initial_capital": {"type": "number"},
+                    "period_start": _date,
+                    "period_end": _date,
+                    "init_balance": {"type": "number"},
                     "commission_rate": {"type": "number"},
                     "slippage": {"type": "number"},
+                    "stock_pool": _pool,
                 },
-                "required": ["signal_code"],
+                "required": [],
             },
-            handler=_tool_run_backtest,
+            handler=with_session(_tool_run_backtest),
         ),
         Tool(
-            name="save_strategy",
+            name="get_backtest_result",
+            description="只读获取一次真实回测结果，用于诊断无成交、失败原因或异常指标。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "backtest_run_id": {"type": "string"},
+                    "strategy_id": {
+                        "type": "string",
+                        "description": "不传 run_id 时取该策略最近一次",
+                    },
+                },
+                "required": [],
+            },
+            handler=_tool_get_backtest_result,
+        ),
+        Tool(
+            name="generate_stock_factor_code",
             description=(
-                "把设计好的策略保存到平台策略库（状态=工作中）。"
-                "content 为策略完整说明（名称/思路/因子/规则/风控/参数），"
-                "code 为可回测的 generate_signals python 代码。"
+                "生成或修改 A 股因子并写入右侧画板。code_type=formula 时 code 为公式表达式"
+                "（如 close/DELAY(close,20)-1，可用 RANK/DELAY/STD 等算子，见因子编写指南）；"
+                "code_type=python 时 code 需定义 compute_factor(close, volume) 或 factor_data 变量。"
+                "修改已有因子时传 factor_id。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string"},
-                    "description": {"type": "string", "description": "一句话概述"},
-                    "content": {"type": "string"},
                     "code": {"type": "string"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "code_type": {"type": "string", "enum": ["formula", "python"]},
+                    "factor_id": {"type": "string", "description": "修改已有因子时传"},
                 },
-                "required": ["name", "content", "code"],
+                "required": ["code", "name"],
             },
-            handler=save_with_session,
+            handler=with_session(_tool_generate_factor_code),
+        ),
+        Tool(
+            name="run_factor_analysis",
+            description=(
+                "对因子做 IC 分析与分组回测（落库，画板展示 9 阶段进度与完整图表），"
+                "返回 IC_mean/Rank_IC/IC_IR/年化/夏普/回撤/单调性摘要。不传 factor_id 时用会话绑定因子。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "factor_id": {"type": "string"},
+                    "period_start": _date,
+                    "period_end": _date,
+                    "adjustment_cycle": {
+                        "type": "integer",
+                        "description": "调仓周期（天），默认 5",
+                    },
+                    "group_number": {
+                        "type": "integer",
+                        "description": "分组数，默认 5",
+                    },
+                    "factor_direction": {
+                        "type": "integer",
+                        "description": "因子方向 1/-1",
+                    },
+                    "stock_pool": _pool,
+                },
+                "required": [],
+            },
+            handler=with_session(_tool_run_factor_analysis),
+        ),
+        Tool(
+            name="list_factors",
+            description="列出用户所有因子，附带最近一次分析的 IC_mean / IC_IR / 分组单调性。",
+            parameters={"type": "object", "properties": {}, "required": []},
+            handler=_tool_list_factors,
+        ),
+        Tool(
+            name="bind_chat_target",
+            description="切换当前对话绑定的画板工件（kind=factor/strategy，id 为对应工件 id）。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["factor", "strategy"]},
+                    "id": {"type": "string"},
+                },
+                "required": ["kind", "id"],
+            },
+            handler=with_session(_tool_bind_chat_target),
+        ),
+        Tool(
+            name="remember",
+            description=(
+                "把用户的一条长期、稳定偏好或事实保存为跨会话记忆（写入可编辑的系统提示词）。"
+                "适合记录投资风格、可接受回撤、资金规模、经验水平；不要记录本次回测区间、"
+                "临时参数或中间步骤；已有相同文本不要重复保存。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["preference", "fact"]},
+                },
+                "required": ["content"],
+            },
+            handler=_tool_remember,
         ),
     ]

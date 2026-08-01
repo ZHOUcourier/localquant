@@ -1,76 +1,82 @@
 <script setup lang="ts">
 /**
- * QUBE — 策略研究 AI Agent
+ * QUBE — 策略研究 AI Agent（复刻 pandaaiquant，opencode 视觉）
  *
- * - 左侧会话列表（持久化于后端 qube_sessions）
- * - 中间对话区：pi 风格 agent 事件流（delta / tool_call / tool_result / done），
- *   工具调用在流中实时呈现；```strategy 块渲染为策略卡片一键入库
- * - 右侧策略工作台分屏（StrategyWorkbench）：对话产出的策略在此
- *   回测 / AI 优化 / 版本管理；可折叠
- * - 右上「配置」：QUBE 专属 AI 配置（与设置页 AI 完全独立）——
- *   API 供应商（预置免 Base URL，模型下拉选择，仅 BYOK 自填）或本机 CLI 工具
+ * 三栏：QUBE 次级侧边栏（会话/系统提示词/技能库/引擎设置）｜对话区
+ * （空态模板卡 + timeline 消息 + 输入区+模型下拉）｜右侧画板（可拖拽调宽，
+ * 按会话绑定 factor/strategy 自动切换 FactorBoard / StrategyWorkbench）。
  */
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   BookMarked,
-  Loader2,
+  BrainCircuit,
   MessageSquarePlus,
+  PanelLeftOpen,
+  PanelLeftClose,
   PanelRightClose,
   PanelRightOpen,
+  RefreshCw,
   Send,
   Settings2,
   Sparkles,
+  Square,
   Trash2,
-  X,
+  WifiOff,
 } from 'lucide-vue-next'
-import { Select } from '@/components/ui'
-import type { SelectOption } from '@/components/ui'
+import ChatMessage from '@/components/qube/ChatMessage.vue'
+import EmptyState from '@/components/qube/EmptyState.vue'
+import ModelBar from '@/components/qube/ModelBar.vue'
+import FactorBoard from '@/components/qube/FactorBoard.vue'
 import StrategyWorkbench from '@/components/qube/StrategyWorkbench.vue'
+import SystemPromptDialog from '@/components/qube/SystemPromptDialog.vue'
+import EngineConfigDrawer from '@/components/qube/EngineConfigDrawer.vue'
+import { ResizeHandle } from '@/components/ui'
+import type { ChatMsg, ToolCall } from '@/components/qube/types'
+import { jsonFetch } from '@/components/qube/types'
+import {
+  CANVAS_EXPAND,
+  SIDEBAR_MAX,
+  SIDEBAR_MIN,
+  clampCanvasWidth,
+  useQubeWorkspace,
+} from '@/composables/useQubeWorkspace'
 
 interface Session {
   id: string
   title: string
   updated_at: number
-}
-interface Msg {
-  role: 'user' | 'assistant'
-  content: string
-}
-interface ProviderInfo {
-  id: string
-  label: string
-  base_url: string
-  model: string
-  models: string[]
-  byok: boolean
-}
-interface CliInfo {
-  id: string
-  label: string
-  bin: string
-  available: boolean
-  models: string[]
-  supports_model: boolean
-  supports_effort: boolean
+  bound_type?: string
+  bound_id?: string
 }
 
 const route = useRoute()
+const { state: wsState, session: sessionWs } = useQubeWorkspace()
 
 const sessions = ref<Session[]>([])
 const activeId = ref('')
-const messages = ref<Msg[]>([])
+const messages = ref<ChatMsg[]>([])
 const input = ref('')
 const streaming = ref(false)
 const chatError = ref<string | null>(null)
+const chatOffline = ref(false)
+const lastText = ref('')
+const abortRef = ref<AbortController | null>(null)
 const listEl = ref<HTMLDivElement | null>(null)
+const rootEl = ref<HTMLDivElement | null>(null)
+const inputEl = ref<HTMLTextAreaElement | null>(null)
+const renamingId = ref('')
+const renameDraft = ref('')
 
-async function jsonFetch(url: string, options?: RequestInit) {
-  const res = await fetch(url, options)
-  const body = await res.json().catch(() => null)
-  if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`)
-  return body
-}
+const promptOpen = ref(false)
+const configOpen = ref(false)
+const clearConfirm = ref(false)
+
+// 当前会话工作区状态（画板宽度/绑定/参数持久化）
+const ws = computed(() => sessionWs(activeId.value || '__none__'))
+
+const factorBoardRef = ref<InstanceType<typeof FactorBoard> | null>(null)
+const strategyRef = ref<InstanceType<typeof StrategyWorkbench> | null>(null)
 
 function scrollToBottom() {
   nextTick(() => {
@@ -78,7 +84,7 @@ function scrollToBottom() {
   })
 }
 
-// —— 会话 ————————————————————————————————————————————————————————
+// —— 会话 ————————————————————————————————————————————————
 async function loadSessions() {
   const d = await jsonFetch('/api/qube/sessions')
   sessions.value = d.sessions
@@ -89,45 +95,98 @@ async function openSession(id: string) {
   chatError.value = null
   const d = await jsonFetch(`/api/qube/sessions/${id}/messages`)
   messages.value = d.messages
+  // 画板焦点恢复：优先 workspace 持久化，其次后端 resume
+  const cur = sessionWs(id)
+  if (!cur.active && d.workspace_resume) {
+    cur.active = { kind: d.workspace_resume.kind, id: d.workspace_resume.id }
+  }
   scrollToBottom()
 }
 
 async function newSession() {
+  chatError.value = null
+  chatOffline.value = false
   const s = await jsonFetch('/api/qube/sessions', { method: 'POST' })
   sessions.value.unshift(s)
   activeId.value = s.id
   messages.value = []
+  nextTick(() => inputEl.value?.focus())
 }
 
 async function removeSession(id: string) {
   await jsonFetch(`/api/qube/sessions/${id}`, { method: 'DELETE' })
   sessions.value = sessions.value.filter((s) => s.id !== id)
+  delete wsState.perSession[id]
   if (activeId.value === id) {
     activeId.value = ''
     messages.value = []
   }
 }
 
-// —— 对话（SSE 流式） ————————————————————————————————————————————
-async function send() {
-  const text = input.value.trim()
-  if (!text || streaming.value) return
+async function clearAll() {
+  await jsonFetch('/api/qube/sessions', { method: 'DELETE' })
+  sessions.value = []
+  wsState.perSession = {}
+  activeId.value = ''
+  messages.value = []
+  clearConfirm.value = false
+}
+
+function startRename(s: Session) {
+  renamingId.value = s.id
+  renameDraft.value = s.title
+}
+
+async function commitRename() {
+  const id = renamingId.value
+  const title = renameDraft.value.trim()
+  renamingId.value = ''
+  if (!id || !title) return
+  const s = sessions.value.find((x) => x.id === id)
+  if (s && title !== s.title) {
+    s.title = title
+    await jsonFetch(`/api/qube/sessions/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    })
+  }
+}
+
+// —— 对话（SSE 流式，支持中止 / 断网判定 / 重试） ———————————————————————
+async function sendText(text: string) {
+  if (!text.trim() || streaming.value) return
   if (!activeId.value) await newSession()
   input.value = ''
   chatError.value = null
+  chatOffline.value = false
+  lastText.value = text
   messages.value.push({ role: 'user', content: text })
-  messages.value.push({ role: 'assistant', content: '' })
+  messages.value.push({
+    role: 'assistant',
+    content: '',
+    tool_calls: { calls: [], display_timeline: [], thinking: '' },
+  })
+  // 关键：取数组内的 reactive 代理引用（写原始对象不会触发视图更新）
+  const am = messages.value[messages.value.length - 1]
+  const tc = am.tool_calls!
   streaming.value = true
+  const controller = new AbortController()
+  abortRef.value = controller
   scrollToBottom()
-  const append = (s: string) => {
-    messages.value[messages.value.length - 1].content += s
-    scrollToBottom()
+
+  let curText = ''
+  const flushText = () => {
+    if (curText.trim()) tc.display_timeline.push({ type: 'text', content: curText })
+    curText = ''
   }
+
   try {
     const res = await fetch('/api/qube/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: activeId.value, message: text }),
+      signal: controller.signal,
     })
     if (!res.ok || !res.body) {
       const e = await res.json().catch(() => null)
@@ -144,513 +203,493 @@ async function send() {
       buf = lines.pop() || ''
       for (const line of lines) {
         if (!line.startsWith('data:')) continue
-        let evt: {
-          type?: string
-          text?: string
-          delta?: string
-          name?: string
-          result?: string
-          error?: string
-          message?: string
-          done?: boolean
-        }
+        let evt: Record<string, unknown>
         try {
           evt = JSON.parse(line.slice(5))
         } catch {
           continue
         }
-        // 兼容 pi 风格事件（type 字段）与旧格式（裸 delta/error/done）
-        const kind = evt.type || (evt.error ? 'error' : evt.done ? 'done' : 'delta')
-        if (kind === 'error') throw new Error(evt.message || evt.error || 'AI 服务错误')
-        if (kind === 'delta') append(evt.text ?? evt.delta ?? '')
-        else if (kind === 'tool_call') append(`\n🔧 调用工具 ${evt.name}\n`)
-        else if (kind === 'tool_result') {
-          append(`✓ ${evt.name} 完成\n`)
-          // agent 自己存了策略 → 刷新右侧工作台并展开
-          if (evt.name === 'save_strategy') {
-            workbenchOpen.value = true
-            let preferId: string | undefined
-            try {
-              preferId = JSON.parse(evt.result || '{}').strategy_id
-            } catch {
-              preferId = undefined
-            }
-            workbenchRef.value?.refresh(preferId)
-          }
+        const kind = (evt.type as string) || (evt.error ? 'error' : evt.done ? 'done' : 'delta')
+        if (kind === 'error') throw new Error((evt.message as string) || (evt.error as string) || 'AI 服务错误')
+        else if (kind === 'delta') {
+          curText += (evt.text as string) ?? (evt.delta as string) ?? ''
+          am.content = curText
+          scrollToBottom()
+        } else if (kind === 'thinking') {
+          tc.thinking += (evt.text as string) || ''
+        } else if (kind === 'tool_start') {
+          flushText()
+          am.content = ''
+        } else if (kind === 'tool') {
+          const call = evt.call as ToolCall
+          tc.calls.push(call)
+          tc.display_timeline.push({ type: 'tool', call_index: tc.calls.length - 1 })
+          applyToolSideEffect(call)
+          scrollToBottom()
+        } else if (kind === 'done') {
+          flushText()
+          am.content = ''
         }
       }
     }
-    // 刷新会话标题（首条消息生成标题）
     loadSessions()
   } catch (e) {
-    chatError.value = e instanceof Error ? e.message : String(e)
-    if (!messages.value[messages.value.length - 1]?.content) messages.value.pop()
+    // 用户主动中止：不算错误，保留已生成内容
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      flushText()
+      am.content = ''
+    } else if (e instanceof TypeError) {
+      // fetch 抛 TypeError = 网络层失败（断网 / 后端没起 / DNS）
+      chatOffline.value = true
+      chatError.value = '网络连接中断，未能完成本轮对话。请检查后端是否在运行，或点「重试」重新发送。'
+      if (!am.content && !tc.calls.length && !tc.thinking) messages.value.pop()
+      // 把用户那条也回退，便于重试时重新整体发送
+      messages.value.pop()
+      messages.value.pop()
+    } else {
+      chatError.value = e instanceof Error ? e.message : String(e)
+      if (!am.content && !tc.calls.length && !tc.thinking) messages.value.pop()
+    }
   } finally {
     streaming.value = false
+    abortRef.value = null
     scrollToBottom()
   }
 }
 
-// 右侧策略工作台分屏
-const workbenchOpen = ref(true)
-const workbenchRef = ref<InstanceType<typeof StrategyWorkbench> | null>(null)
-
-// —— 策略块识别：```strategy ... ``` → 卡片 + 保存 ————————————————————
-interface Segment {
-  type: 'text' | 'strategy'
-  content: string
+// 中止当前流式响应
+function stopStreaming() {
+  abortRef.value?.abort()
 }
-function splitSegments(content: string): Segment[] {
-  const segs: Segment[] = []
-  const re = /```strategy\n([\s\S]*?)(?:```|$)/g
-  let last = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(content))) {
-    if (m.index > last) segs.push({ type: 'text', content: content.slice(last, m.index) })
-    segs.push({ type: 'strategy', content: m[1].trim() })
-    last = m.index + m[0].length
+
+// 断网/出错后重发上一条
+function retry() {
+  if (lastText.value) sendText(lastText.value)
+}
+
+// 工具产出 → 画板联动（打开对应工件并展开画板）
+function applyToolSideEffect(call: ToolCall) {
+  if (call.factor_id && (call.name === 'generate_stock_factor_code' || call.name === 'run_factor_analysis')) {
+    openFactor(call.factor_id, call.name === 'run_factor_analysis' ? 'analysis' : 'code')
+    if (call.factor_analysis_id) ws.value.selectedAnalysisId = call.factor_analysis_id
   }
-  if (last < content.length) segs.push({ type: 'text', content: content.slice(last) })
-  return segs
-}
-
-const savedKeys = ref(new Set<string>())
-async function saveStrategy(content: string) {
-  const nameMatch = content.match(/名称[:：]\s*(.+)/)
-  const name = (nameMatch?.[1] || `QUBE 策略 ${new Date().toLocaleString()}`).trim()
-  await jsonFetch('/api/strategy/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name,
-      description: 'QUBE 对话产出',
-      content,
-      source: 'chat',
-      session_id: activeId.value,
-    }),
-  })
-  savedKeys.value = new Set([...savedKeys.value, content])
-  // 刷新右侧工作台并展开，新策略直接可回测/优化
-  workbenchOpen.value = true
-  workbenchRef.value?.refresh()
-}
-
-// —— QUBE 配置（独立于设置页 AI） ————————————————————————————————
-const configOpen = ref(false)
-const providers = ref<ProviderInfo[]>([])
-const cliTools = ref<CliInfo[]>([])
-const cfg = ref({
-  qube_engine: 'api',
-  qube_provider: 'opencode-zen',
-  qube_model: '',
-  qube_effort: 'medium',
-  qube_api_key: '',
-  qube_base_url: '',
-  qube_cli: 'claude',
-  qube_cli_model: '',
-  qube_cli_effort: 'default',
-})
-const cfgKeyMasked = ref('')
-const cfgSaving = ref(false)
-const cfgMsg = ref('')
-
-const EFFORT_LEVELS = [
-  { k: 'minimal', label: '极简' },
-  { k: 'low', label: '低' },
-  { k: 'medium', label: '中' },
-  { k: 'high', label: '高' },
-]
-
-// CLI 强度：多一个“CLI 默认”（不传 flag，用工具自身默认）
-const CLI_EFFORT_LEVELS = [
-  { k: 'default', label: 'CLI 默认' },
-  { k: 'minimal', label: '极简' },
-  { k: 'low', label: '低' },
-  { k: 'medium', label: '中' },
-  { k: 'high', label: '高' },
-]
-
-const selectedProvider = computed(() => providers.value.find((p) => p.id === cfg.value.qube_provider))
-const selectedCli = computed(() => cliTools.value.find((t) => t.id === cfg.value.qube_cli))
-
-async function loadConfig() {
-  const d = await jsonFetch('/api/qube/config')
-  providers.value = d.providers
-  cliTools.value = d.cli_tools
-  cfg.value.qube_engine = d.qube_engine
-  cfg.value.qube_provider = d.qube_provider
-  cfg.value.qube_model = d.qube_model
-  cfg.value.qube_effort = d.qube_effort || 'medium'
-  cfg.value.qube_base_url = d.qube_base_url
-  cfg.value.qube_cli = d.qube_cli
-  cfg.value.qube_cli_model = d.qube_cli_model || ''
-  cfg.value.qube_cli_effort = d.qube_cli_effort || 'default'
-  cfgKeyMasked.value = d.qube_api_key_masked
-}
-
-function pickProvider(p: ProviderInfo) {
-  cfg.value.qube_provider = p.id
-  if (!p.byok) cfg.value.qube_base_url = ''
-  cfg.value.qube_model = p.model
-}
-
-// 当前供应商的模型下拉选项（BYOK 无清单，降级为手输）
-const modelOptions = computed<SelectOption[]>(() =>
-  (selectedProvider.value?.models ?? []).map((m) => ({ value: m, label: m })),
-)
-
-async function saveConfig() {
-  cfgSaving.value = true
-  cfgMsg.value = ''
-  try {
-    const body: Record<string, string> = {
-      qube_engine: cfg.value.qube_engine,
-      qube_provider: cfg.value.qube_provider,
-      qube_model: cfg.value.qube_model,
-      qube_effort: cfg.value.qube_effort,
-      qube_base_url: cfg.value.qube_base_url,
-      qube_cli: cfg.value.qube_cli,
-      qube_cli_model: cfg.value.qube_cli_model,
-      qube_cli_effort: cfg.value.qube_cli_effort,
-    }
-    if (cfg.value.qube_api_key) body.qube_api_key = cfg.value.qube_api_key
-    await jsonFetch('/api/qube/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    cfg.value.qube_api_key = ''
-    cfgMsg.value = '已保存'
-    loadConfig()
-  } catch (e) {
-    cfgMsg.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    cfgSaving.value = false
+  if (call.strategy_id && (call.name === 'generate_stock_strategy_code' || call.name === 'run_backtest')) {
+    openStrategy(call.strategy_id, call.name === 'run_backtest' ? 'backtest' : 'code')
+    if (call.backtest_run_id) ws.value.selectedBacktestRunId = call.backtest_run_id
   }
 }
+
+function send() {
+  sendText(input.value)
+}
+
+function onPick(prompt: string) {
+  sendText(prompt)
+}
+
+// —— 画板联动（工具卡按钮 / 工具副作用） ————————————————————
+function openFactor(id: string, tab: string) {
+  ws.value.active = { kind: 'factor', id }
+  ws.value.canvasTab = tab === 'analysis' ? 'analysis' : 'code'
+  wsState.canvasCollapsed = false
+  nextTick(() => factorBoardRef.value?.refresh())
+}
+
+function openStrategy(id: string, tab: string) {
+  ws.value.active = { kind: 'strategy', id }
+  ws.value.canvasTab = ['code', 'backtest', 'logs', 'versions'].includes(tab) ? tab : 'code'
+  wsState.canvasCollapsed = false
+  nextTick(() => strategyRef.value?.refresh())
+}
+
+function viewAnalysis(factorId: string, analysisId: string) {
+  openFactor(factorId, 'analysis')
+  ws.value.selectedAnalysisId = analysisId
+  nextTick(() => factorBoardRef.value?.openAnalysis(analysisId))
+}
+
+function viewBacktest(strategyId: string, runId: string) {
+  openStrategy(strategyId, 'backtest')
+  ws.value.selectedBacktestRunId = runId
+  nextTick(() => strategyRef.value?.openRun(runId))
+}
+
+function optimize(strategyId: string, runId: string) {
+  openStrategy(strategyId, 'code')
+  void runId
+}
+
+// —— 画板拖拽调宽（严格按参考站：clamp / 双击 900 / 折叠 width 0） ————
+const dragging = ref(false)
+const sidebarDragging = ref(false)
+
+function clampSidebarWidth(w: number) {
+  return Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w))
+}
+
+function onSidebarDragStart(e: MouseEvent) {
+  e.preventDefault()
+  sidebarDragging.value = true
+  const startX = e.clientX
+  const startWidth = wsState.sidebarWidthPx
+  document.body.style.cursor = 'ew-resize'
+  document.body.style.userSelect = 'none'
+  const move = (ev: MouseEvent) => {
+    wsState.sidebarWidthPx = clampSidebarWidth(startWidth + (ev.clientX - startX))
+  }
+  const up = () => {
+    sidebarDragging.value = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('mousemove', move)
+    window.removeEventListener('mouseup', up)
+  }
+  window.addEventListener('mousemove', move)
+  window.addEventListener('mouseup', up)
+}
+
+function toggleSidebar() {
+  wsState.sidebarCollapsed = !wsState.sidebarCollapsed
+}
+
+function onDragStart(e: MouseEvent) {
+  e.preventDefault()
+  dragging.value = true
+  const startX = e.clientX
+  const startWidth = wsState.canvasWidthPx
+  document.body.style.cursor = 'ew-resize'
+  document.body.style.userSelect = 'none'
+  const move = (ev: MouseEvent) => {
+    const containerWidth = rootEl.value?.clientWidth ?? window.innerWidth
+    wsState.canvasWidthPx = clampCanvasWidth(startWidth + (startX - ev.clientX), containerWidth)
+  }
+  const up = () => {
+    dragging.value = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('mousemove', move)
+    window.removeEventListener('mouseup', up)
+  }
+  window.addEventListener('mousemove', move)
+  window.addEventListener('mouseup', up)
+}
+
+function onDragDouble() {
+  const containerWidth = rootEl.value?.clientWidth ?? window.innerWidth
+  wsState.canvasWidthPx = clampCanvasWidth(CANVAS_EXPAND, containerWidth)
+}
+
+function toggleCanvas() {
+  wsState.canvasCollapsed = !wsState.canvasCollapsed
+}
+
+const canvasVisible = computed(() => !wsState.canvasCollapsed && !!ws.value.active)
 
 onMounted(async () => {
-  await Promise.all([loadSessions(), loadConfig()])
+  await Promise.all([loadSessions()])
   const sid = String(route.query.session || '')
-  if (sid) openSession(sid)
-  else if (sessions.value.length) openSession(sessions.value[0].id)
+  const prompt = String(route.query.prompt || '')
+  if (sid) {
+    await openSession(sid)
+  } else if (sessions.value.length) {
+    await openSession(sessions.value[0].id)
+  }
+  // 从技能库「在 QUBE 中使用」带过来的 prompt 模板，预填进输入框并聚焦
+  if (prompt) {
+    input.value = prompt
+    nextTick(() => inputEl.value?.focus())
+  }
+})
+
+// 页面卸载时清理可能残留的拖拽样式
+onBeforeUnmount(() => {
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+})
+
+watch(activeId, () => {
+  chatError.value = null
 })
 </script>
 
 <template>
-  <div class="flex h-full">
-    <!-- 会话列表 -->
-    <div class="flex w-[220px] shrink-0 flex-col border-r border-[rgba(15,0,0,0.08)] bg-[#f8f7f7]">
-      <div class="flex items-center justify-between px-3 py-3">
-        <span class="flex items-center gap-1.5 text-[13px] font-semibold text-[#201d1d]">
-          <Sparkles :size="14" class="text-[#7c3aed]" /> QUBE
-        </span>
+  <div ref="rootEl" class="flex h-full">
+    <!-- QUBE 次级侧边栏（可收起 + 可拖宽，VSCode 风格拖杆） -->
+    <div
+      v-show="!wsState.sidebarCollapsed"
+      class="relative flex shrink-0 flex-col border-r border-[rgba(15,0,0,0.08)] bg-[#f8f7f7]"
+      :class="sidebarDragging ? '' : 'transition-[width] duration-200 ease-out'"
+      :style="{ width: `${wsState.sidebarWidthPx}px` }"
+    >
+      <div class="flex items-center gap-1.5 px-3 py-3">
+        <Sparkles :size="14" class="text-[#201d1d]" />
+        <span class="text-[13px] font-semibold text-[#201d1d]">QUBE</span>
+        <span class="text-[10px] text-[#9a9898]">对话投研工作台</span>
         <button
-          class="flex items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-[11px] text-[#424245] hover:text-[#201d1d]"
-          @click="newSession"
+          class="ml-auto flex items-center gap-1 text-[10px] text-[#9a9898] hover:text-[#201d1d]"
+          title="收起侧边栏"
+          @click="toggleSidebar"
         >
-          <MessageSquarePlus :size="12" /> 新对话
+          <PanelLeftClose :size="13" />
         </button>
       </div>
-      <div class="flex-1 overflow-y-auto px-2 pb-2">
+
+      <div class="px-2">
+        <button
+          class="flex w-full items-center justify-center gap-1.5 rounded-[4px] bg-[#201d1d] px-2 py-1.5 text-[12px] text-[#fdfcfc] hover:opacity-85"
+          @click="newSession"
+        >
+          <MessageSquarePlus :size="13" /> 新建对话
+        </button>
+      </div>
+
+      <!-- 会话列表 -->
+      <div class="mt-2 min-h-0 flex-1 overflow-y-auto px-2">
+        <div class="mb-1 px-1 text-[10px] font-medium uppercase text-[#9a9898]">对话</div>
         <div
           v-for="s in sessions"
           :key="s.id"
-          class="group mb-0.5 flex cursor-pointer items-center justify-between rounded-[4px] px-2.5 py-2 text-xs"
-          :class="s.id === activeId ? 'bg-[#e8e5e5] text-[#201d1d] font-medium' : 'text-[#646262] hover:bg-[#f1eeee] hover:text-[#201d1d]'"
+          class="group relative mb-0.5 flex cursor-pointer items-center gap-1 px-2 py-1.5 text-xs"
+          :class="s.id === activeId ? 'font-medium text-[#201d1d]' : 'rounded-[4px] text-[#646262] hover:bg-[#f1eeee] hover:text-[#201d1d]'"
           @click="openSession(s.id)"
         >
-          <span class="truncate">{{ s.title }}</span>
+          <!-- 选中态左侧竖黑线（OpenCode 风格） -->
+          <span
+            v-if="s.id === activeId"
+            class="absolute left-0 top-1/2 h-[14px] w-[2px] -translate-y-1/2 bg-[#201d1d]"
+          />
+          <input
+            v-if="renamingId === s.id"
+            v-model="renameDraft"
+            class="min-w-0 flex-1 rounded-[3px] border border-[rgba(15,0,0,0.2)] bg-[#fdfcfc] px-1 py-0.5 text-xs outline-none"
+            @click.stop
+            @keydown.enter="commitRename"
+            @blur="commitRename"
+          />
+          <span v-else class="min-w-0 flex-1 truncate">{{ s.title }}</span>
           <button
-            class="hidden shrink-0 border-0 bg-transparent text-[#9a9898] hover:text-[#ff3b30] group-hover:block"
+            v-if="renamingId !== s.id"
+            class="hidden shrink-0 text-[#9a9898] hover:text-[#201d1d] group-hover:block"
+            title="重命名"
+            @click.stop="startRename(s)"
+          >
+            ✎
+          </button>
+          <button
+            v-if="renamingId !== s.id"
+            class="hidden shrink-0 text-[#9a9898] hover:text-[#ff3b30] group-hover:block"
+            title="删除"
             @click.stop="removeSession(s.id)"
           >
             <Trash2 :size="12" />
           </button>
         </div>
         <div v-if="!sessions.length" class="px-2 py-6 text-center text-[11px] text-[#9a9898]">
-          暂无对话 — 点击「新对话」开始
+          暂无对话 — 点「新建对话」开始
         </div>
       </div>
+
+      <!-- 底部：功能入口 -->
+      <div class="shrink-0 space-y-0.5 border-t border-[rgba(15,0,0,0.08)] p-2">
+        <button
+          class="flex w-full items-center gap-2 rounded-[4px] px-2 py-1.5 text-xs text-[#646262] hover:bg-[#f1eeee] hover:text-[#201d1d]"
+          @click="promptOpen = true"
+        >
+          <BrainCircuit :size="13" /> 系统提示词
+        </button>
+        <RouterLink
+          to="/skills"
+          class="flex w-full items-center gap-2 rounded-[4px] px-2 py-1.5 text-xs text-[#646262] hover:bg-[#f1eeee] hover:text-[#201d1d]"
+        >
+          <BookMarked :size="13" /> 技能库
+        </RouterLink>
+        <button
+          class="flex w-full items-center gap-2 rounded-[4px] px-2 py-1.5 text-xs text-[#646262] hover:bg-[#f1eeee] hover:text-[#201d1d]"
+          @click="configOpen = true"
+        >
+          <Settings2 :size="13" /> 引擎设置
+        </button>
+        <button
+          v-if="sessions.length"
+          class="flex w-full items-center gap-2 rounded-[4px] px-2 py-1.5 text-xs text-[#9a9898] hover:bg-[#ff3b30]/8 hover:text-[#ff3b30]"
+          @click="clearConfirm = true"
+        >
+          <Trash2 :size="13" /> 清空全部对话
+        </button>
+      </div>
+
+      <!-- 拖宽手柄（VSCode 风格：贴右缘） -->
+      <ResizeHandle
+        side="right"
+        :dragging="sidebarDragging"
+        @drag-start="onSidebarDragStart"
+        @dblclick="wsState.sidebarWidthPx = 240"
+      />
     </div>
 
+    <!-- 次侧栏收起态：窄条展开按钮 -->
+    <button
+      v-if="wsState.sidebarCollapsed"
+      class="flex w-[26px] shrink-0 items-start justify-center border-r border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] pt-4 text-[#646262] hover:bg-[#f1eeee] hover:text-[#201d1d]"
+      title="展开侧边栏"
+      @click="toggleSidebar"
+    >
+      <PanelLeftOpen :size="15" />
+    </button>
+
     <!-- 对话区 -->
-    <div class="flex min-w-0 flex-1 flex-col bg-[#fdfcfc]">
-      <div class="flex shrink-0 items-center justify-between border-b border-[rgba(15,0,0,0.08)] px-4 py-2.5">
-        <span class="text-xs text-[#646262]">
-          通过对话设计量化策略；产出的策略默认进入策略库「工作中」，只有你能手动设为「已保存」。
-        </span>
-        <div class="flex items-center gap-1.5">
+    <div class="flex min-w-0 flex-1 flex-col bg-[#fdfcfc]" style="min-width: 420px">
+      <div class="flex shrink-0 items-center justify-between gap-2 border-b border-[rgba(15,0,0,0.08)] px-4 py-2">
+        <div class="flex min-w-0 items-center gap-2">
           <button
-            class="flex items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2.5 py-1 text-[11px] text-[#424245] hover:text-[#201d1d]"
-            :title="workbenchOpen ? '收起策略工作台' : '展开策略工作台'"
-            @click="workbenchOpen = !workbenchOpen"
+            v-if="wsState.sidebarCollapsed"
+            class="flex shrink-0 items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-[11px] text-[#424245] hover:text-[#201d1d]"
+            title="展开侧边栏"
+            @click="toggleSidebar"
           >
-            <component :is="workbenchOpen ? PanelRightClose : PanelRightOpen" :size="12" />
-            工作台
+            <PanelLeftOpen :size="12" /> 会话
           </button>
-          <button
-            class="flex items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2.5 py-1 text-[11px] text-[#424245] hover:text-[#201d1d]"
-            @click="configOpen = true"
-          >
-            <Settings2 :size="12" /> 配置
-          </button>
+          <span class="truncate text-xs font-medium text-[#201d1d]">
+            {{ activeId ? sessions.find((s) => s.id === activeId)?.title || '当前对话' : 'QUBE 对话投研' }}
+          </span>
         </div>
+        <button
+          v-if="ws.active"
+          class="flex shrink-0 items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-[11px] text-[#424245] hover:text-[#201d1d]"
+          @click="toggleCanvas"
+        >
+          <component :is="wsState.canvasCollapsed ? PanelRightOpen : PanelRightClose" :size="12" />
+          画板
+        </button>
       </div>
 
-      <div ref="listEl" class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <div v-if="!messages.length" class="flex h-full flex-col items-center justify-center gap-2 text-[#9a9898]">
-          <Sparkles :size="28" class="text-[#7c3aed]/50" />
-          <div class="text-sm font-medium text-[#646262]">QUBE 策略研究 Agent</div>
-          <div class="text-xs">例：“帮我设计一个 20 日动量 + 低波动的双因子选股策略”</div>
-        </div>
-
-        <div v-for="(m, i) in messages" :key="i" class="mb-4">
-          <!-- 用户消息 -->
-          <div v-if="m.role === 'user'" class="flex justify-end">
-            <div class="max-w-[78%] whitespace-pre-wrap rounded-[6px] bg-[#201d1d] px-3 py-2 text-xs leading-relaxed text-[#fdfcfc]">
-              {{ m.content }}
-            </div>
-          </div>
-          <!-- 助手消息：文本 + 策略卡片 -->
-          <div v-else class="flex justify-start">
-            <div class="max-w-[88%] space-y-2">
-              <template v-for="(seg, si) in splitSegments(m.content)" :key="si">
-                <div
-                  v-if="seg.type === 'text' && seg.content.trim()"
-                  class="whitespace-pre-wrap rounded-[6px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-3 py-2 text-xs leading-relaxed text-[#201d1d]"
-                >
-                  {{ seg.content.trim() }}
-                </div>
-                <div
-                  v-else-if="seg.type === 'strategy'"
-                  class="overflow-hidden rounded-[6px] border border-[#7c3aed]/30"
-                >
-                  <div class="flex items-center justify-between bg-[#7c3aed]/10 px-3 py-1.5">
-                    <span class="flex items-center gap-1 text-[11px] font-semibold text-[#7c3aed]">
-                      <BookMarked :size="12" /> 策略
-                    </span>
-                    <button
-                      class="rounded-[4px] border border-[#7c3aed]/40 bg-transparent px-2 py-0.5 text-[11px] text-[#7c3aed] hover:bg-[#7c3aed]/10 disabled:opacity-50"
-                      :disabled="savedKeys.has(seg.content)"
-                      @click="saveStrategy(seg.content)"
-                    >
-                      {{ savedKeys.has(seg.content) ? '已存入策略库（工作中）' : '保存到策略库' }}
-                    </button>
-                  </div>
-                  <pre class="max-h-[320px] overflow-auto whitespace-pre-wrap bg-[#fdfcfc] px-3 py-2 font-mono text-[11px] leading-relaxed text-[#201d1d]">{{ seg.content }}</pre>
-                </div>
-              </template>
-              <div v-if="streaming && i === messages.length - 1 && !m.content" class="flex items-center gap-1.5 px-1 text-xs text-[#9a9898]">
-                <Loader2 :size="12" class="animate-spin" /> QUBE 思考中...
+      <div ref="listEl" class="min-h-0 flex-1 overflow-y-auto">
+        <EmptyState v-if="!messages.length" @pick="onPick" />
+        <div v-else class="space-y-4 px-4 py-4">
+          <ChatMessage
+            v-for="(m, i) in messages"
+            :key="i"
+            :msg="m"
+            :streaming="streaming && i === messages.length - 1"
+            @open-factor="openFactor"
+            @open-strategy="openStrategy"
+            @view-analysis="viewAnalysis"
+            @view-backtest="viewBacktest"
+            @optimize="optimize"
+          >
+            <template v-if="streaming && i === messages.length - 1 && !m.content && !m.tool_calls?.calls.length" #tail>
+              <div class="flex items-center gap-1.5 px-1 text-xs text-[#9a9898]">
+                <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-[#007aff]" />
+                QUBE 思考中…
               </div>
-            </div>
-          </div>
-        </div>
+            </template>
+          </ChatMessage>
 
-        <div v-if="chatError" class="rounded-[4px] border border-[#ff3b30]/40 bg-[#ff3b30]/8 px-3 py-2 text-xs text-[#ff3b30]">
-          {{ chatError }}
+          <div
+            v-if="chatError"
+            class="flex items-start gap-2 rounded-[4px] border px-3 py-2 text-xs"
+            :class="chatOffline ? 'border-[#ff9f0a]/40 bg-[#ff9f0a]/8 text-[#9a6200]' : 'border-[#ff3b30]/40 bg-[#ff3b30]/8 text-[#ff3b30]'"
+          >
+            <WifiOff v-if="chatOffline" :size="14" class="mt-0.5 shrink-0" />
+            <span class="min-w-0 flex-1">{{ chatError }}</span>
+            <button
+              class="flex shrink-0 items-center gap-1 rounded-[3px] border border-current/30 px-2 py-0.5 text-[11px] hover:opacity-80"
+              @click="retry"
+            >
+              <RefreshCw :size="11" /> 重试
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- 输入区 -->
       <div class="shrink-0 border-t border-[rgba(15,0,0,0.08)] p-3">
-        <div class="flex items-end gap-2">
+        <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] p-2 focus-within:border-[#201d1d]">
           <textarea
+            ref="inputEl"
             v-model="input"
             rows="2"
-            placeholder="描述你想要的策略，Enter 发送，Shift+Enter 换行"
-            class="flex-1 resize-none rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2 text-xs leading-relaxed text-[#201d1d] outline-none focus:border-[#7c3aed]"
+            placeholder="请在这里输入提问… (Enter 发送, Shift+Enter 换行)"
+            class="w-full resize-none bg-transparent px-1 text-xs leading-relaxed text-[#201d1d] outline-none"
             @keydown.enter.exact.prevent="send"
           />
-          <button
-            :disabled="streaming || !input.trim()"
-            class="flex h-[34px] items-center gap-1 rounded-[4px] border-0 bg-[#7c3aed] px-4 text-xs text-white hover:opacity-90 disabled:opacity-40"
-            @click="send"
-          >
-            <Send :size="13" /> 发送
-          </button>
+          <div class="mt-1 flex items-end justify-between gap-2">
+            <ModelBar />
+            <!-- 流式中显示「停止」按钮，否则显示「发送」 -->
+            <button
+              v-if="streaming"
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[rgba(15,0,0,0.2)] bg-[#fdfcfc] text-[#201d1d] hover:bg-[#f1eeee]"
+              title="停止生成"
+              @click="stopStreaming"
+            >
+              <Square :size="12" />
+            </button>
+            <button
+              v-else
+              :disabled="!input.trim()"
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#201d1d] text-[#fdfcfc] hover:opacity-85 disabled:opacity-40"
+              @click="send"
+            >
+              <Send :size="13" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- 右侧：策略工作台分屏（对话产出的策略在此回测/优化/管理版本） -->
+    <!-- 右侧画板（可拖拽调宽；折叠 = width 0 隐藏） -->
     <div
-      v-show="workbenchOpen"
-      class="min-w-0 shrink-0 border-l border-[rgba(15,0,0,0.08)]"
-      style="width: 44%"
+      v-show="canvasVisible"
+      class="relative shrink-0 border-l border-[rgba(15,0,0,0.08)] bg-[#fdfcfc]"
+      :class="dragging ? '' : 'transition-[width] duration-300 ease-out'"
+      :style="{ width: `${wsState.canvasWidthPx}px` }"
     >
-      <StrategyWorkbench ref="workbenchRef" :session-id="activeId" />
+      <!-- 拖拽手柄（VSCode 风格：贴左缘） -->
+      <ResizeHandle
+        side="left"
+        :dragging="dragging"
+        @drag-start="onDragStart"
+        @dblclick="onDragDouble"
+      />
+      <button
+        class="absolute -left-3.5 top-1/2 z-20 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] text-[#646262] hover:text-[#201d1d]"
+        title="收起画板"
+        @click="toggleCanvas"
+      >
+        <PanelRightClose :size="13" />
+      </button>
+
+      <FactorBoard
+        v-if="ws.active?.kind === 'factor'"
+        ref="factorBoardRef"
+        :factor-id="ws.active.id"
+        :session-id="activeId"
+        :ws="ws"
+      />
+      <StrategyWorkbench
+        v-else-if="ws.active?.kind === 'strategy'"
+        ref="strategyRef"
+        :strategy-id="ws.active.id"
+        :session-id="activeId"
+        :ws="ws"
+      />
     </div>
 
-    <!-- 配置抽屉 -->
-    <div v-if="configOpen" class="fixed inset-0 z-[80] flex justify-end bg-black/30" @click.self="configOpen = false">
-      <div class="flex h-full w-[400px] flex-col overflow-y-auto border-l border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-4">
-        <div class="mb-3 flex items-center justify-between">
-          <span class="text-[13px] font-semibold text-[#201d1d]">QUBE Agent 配置</span>
-          <button class="border-0 bg-transparent text-[#646262] hover:text-[#201d1d]" @click="configOpen = false">
-            <X :size="15" />
+    <!-- 弹窗 / 抽屉 -->
+    <SystemPromptDialog v-if="promptOpen" :open="promptOpen" @close="promptOpen = false" />
+    <EngineConfigDrawer :open="configOpen" @close="configOpen = false" />
+
+    <div v-if="clearConfirm" class="fixed inset-0 z-[90] flex items-center justify-center bg-black/40" @click.self="clearConfirm = false">
+      <div class="w-[320px] rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-4">
+        <div class="text-sm font-medium text-[#201d1d]">清空全部对话</div>
+        <div class="mt-2 text-xs text-[#646262]">将删除所有会话与消息，且不可恢复。确定继续？</div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button class="rounded-[4px] border border-[rgba(15,0,0,0.15)] px-3 py-1 text-xs text-[#646262]" @click="clearConfirm = false">
+            取消
           </button>
-        </div>
-        <div class="mb-3 text-[11px] leading-relaxed text-[#9a9898]">
-          与「设置 → AI 配置」完全独立；引擎可选 API 供应商或本机 CLI 工具。
-        </div>
-
-        <!-- 引擎 -->
-        <div class="mb-3">
-          <label class="mb-1 block text-xs text-[#646262]">引擎</label>
-          <div class="flex gap-1.5">
-            <button
-              v-for="e in [{ k: 'api', l: 'API 供应商' }, { k: 'cli', l: '本机 CLI 工具' }]"
-              :key="e.k"
-              class="rounded-[4px] px-3 py-1 text-xs"
-              :class="cfg.qube_engine === e.k ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
-              @click="cfg.qube_engine = e.k"
-            >
-              {{ e.l }}
-            </button>
-          </div>
-        </div>
-
-        <!-- API 供应商 -->
-        <template v-if="cfg.qube_engine === 'api'">
-          <div class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">供应商（预置免 Base URL，仅自定义 BYOK 需自填）</label>
-            <div class="flex flex-wrap gap-1.5">
-              <button
-                v-for="p in providers"
-                :key="p.id"
-                class="rounded-[4px] px-2.5 py-1 text-[11px]"
-                :class="cfg.qube_provider === p.id ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
-                @click="pickProvider(p)"
-              >
-                {{ p.label }}
-              </button>
-            </div>
-          </div>
-          <div v-if="selectedProvider?.byok" class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">Base URL（BYOK）</label>
-            <input
-              v-model="cfg.qube_base_url"
-              placeholder="https://your-endpoint/v1"
-              class="w-full rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-2.5 py-1.5 text-xs outline-none focus:border-[#007aff]"
-            />
-          </div>
-          <div class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">模型</label>
-            <!-- 预置供应商：从清单下拉选择；BYOK 无清单手输 -->
-            <Select
-              v-if="modelOptions.length"
-              v-model="cfg.qube_model"
-              :options="modelOptions"
-              placeholder="选择模型"
-            />
-            <input
-              v-else
-              v-model="cfg.qube_model"
-              placeholder="模型名称"
-              class="w-full rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-2.5 py-1.5 text-xs outline-none focus:border-[#007aff]"
-            />
-          </div>
-          <div class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">推理强度</label>
-            <div class="flex gap-1.5">
-              <button
-                v-for="lv in EFFORT_LEVELS"
-                :key="lv.k"
-                class="rounded-[4px] px-3 py-1 text-xs"
-                :class="cfg.qube_effort === lv.k ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
-                @click="cfg.qube_effort = lv.k"
-              >
-                {{ lv.label }}
-              </button>
-            </div>
-            <div class="mt-1 text-[10px] text-[#9a9898]">仅支持 reasoning_effort 的推理模型生效；越高越强但越慢。</div>
-          </div>
-          <div class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">
-              API Key {{ cfgKeyMasked ? `（已设置 ${cfgKeyMasked}，留空不修改）` : '' }}
-            </label>
-            <input
-              v-model="cfg.qube_api_key"
-              type="password"
-              placeholder="sk-..."
-              class="w-full rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-2.5 py-1.5 text-xs outline-none focus:border-[#007aff]"
-            />
-          </div>
-        </template>
-
-        <!-- CLI 工具 -->
-        <template v-else>
-          <div class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">CLI 工具（灰色表示本机未检测到）</label>
-            <div class="flex flex-col gap-1">
-              <button
-                v-for="t in cliTools"
-                :key="t.id"
-                class="flex items-center justify-between rounded-[4px] px-2.5 py-1.5 text-left text-xs"
-                :class="cfg.qube_cli === t.id ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
-                @click="cfg.qube_cli = t.id"
-              >
-                <span :class="!t.available && cfg.qube_cli !== t.id ? 'opacity-45' : ''">{{ t.label }}</span>
-                <span class="font-mono text-[10px]" :class="t.available ? 'text-[#30d158]' : 'text-[#9a9898]'">
-                  {{ t.available ? '可用' : '未安装' }}
-                </span>
-              </button>
-            </div>
-          </div>
-          <div class="mb-3 text-[11px] leading-relaxed text-[#9a9898]">
-            使用你本机已登录的 CLI 工具作为 Agent 引擎（无需 API Key）。
-          </div>
-
-          <!-- CLI 模型（建议芯片 + 自由输入；留空=CLI 默认） -->
-          <div v-if="selectedCli?.supports_model" class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">模型（留空 = 用 CLI 自身默认）</label>
-            <div v-if="selectedCli?.models?.length" class="mb-1.5 flex flex-wrap gap-1.5">
-              <button
-                v-for="m in selectedCli.models"
-                :key="m"
-                class="rounded-[4px] px-2 py-0.5 text-[11px]"
-                :class="cfg.qube_cli_model === m ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
-                @click="cfg.qube_cli_model = m"
-              >
-                {{ m }}
-              </button>
-            </div>
-            <input
-              v-model="cfg.qube_cli_model"
-              placeholder="模型名（可自由输入，留空用默认）"
-              class="w-full rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-2.5 py-1.5 text-xs outline-none focus:border-[#007aff]"
-            />
-          </div>
-
-          <!-- CLI 推理强度（仅支持的工具显示） -->
-          <div v-if="selectedCli?.supports_effort" class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">推理强度</label>
-            <div class="flex flex-wrap gap-1.5">
-              <button
-                v-for="lv in CLI_EFFORT_LEVELS"
-                :key="lv.k"
-                class="rounded-[4px] px-3 py-1 text-xs"
-                :class="cfg.qube_cli_effort === lv.k ? 'bg-[#201d1d] text-[#fdfcfc]' : 'bg-[#f1eeee] text-[#646262] hover:text-[#201d1d]'"
-                @click="cfg.qube_cli_effort = lv.k"
-              >
-                {{ lv.label }}
-              </button>
-            </div>
-            <div class="mt-1 text-[10px] text-[#9a9898]">选“CLI 默认”则不传强度参数；具体档位是否生效取决于所选模型/供应商。</div>
-          </div>
-        </template>
-
-        <div class="mt-1 flex items-center gap-2">
-          <button
-            :disabled="cfgSaving"
-            class="rounded-[4px] border-0 bg-[#201d1d] px-4 py-1.5 text-xs text-[#fdfcfc] hover:opacity-85 disabled:opacity-50"
-            @click="saveConfig"
-          >
-            {{ cfgSaving ? '保存中...' : '保存配置' }}
+          <button class="rounded-[4px] bg-[#ff3b30] px-3 py-1 text-xs text-white hover:opacity-85" @click="clearAll">
+            清空
           </button>
-          <span class="text-[11px] text-[#646262]">{{ cfgMsg }}</span>
         </div>
       </div>
     </div>

@@ -11,6 +11,7 @@ export { default as Tooltip } from './Tooltip.vue'
 export { default as ScrollArea } from './ScrollArea.vue'
 export { default as CodeEditor } from './CodeEditor.vue'
 export { default as VChart } from './VChart.vue'
+export { default as ResizeHandle } from './ResizeHandle.vue'
 
 export type {
   ButtonVariant,

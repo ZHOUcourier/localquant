@@ -266,6 +266,65 @@ async def optimize_strategy(strategy_id: str, body: OptimizeRequest):
     return {"code": new_code, "note": note or "AI 优化"}
 
 
+# ── QMT 转写（导出方向：本平台 generate_signals → 迅投 QMT 实盘代码）──
+
+
+EXPORT_QMT_SYSTEM = """你是量化策略转写专家，把 LocalQuant 平台的策略转写为
+迅投 QMT（国金/国盛等券商 miniQMT，xtquant 库）可用的实盘/模拟盘策略代码。
+
+源格式：generate_signals(prices, **kwargs)，prices 为日线收盘价面板
+(index=交易日, columns=股票代码)，返回同形状持仓权重/信号 DataFrame。
+
+目标格式：QMT 策略文件（python），结构要求：
+- init(ContextInfo)：设股票池（ContextInfo.set_universe）、参数初始化
+- handlebar(ContextInfo)：每根 K 线触发；用 ContextInfo.get_market_data_ex 取行情，
+  复现原策略的信号逻辑，用 passorder 下单（注释标注买卖参数含义）
+- 日线级别调仓；资金分配按目标权重折算股数（100 股整倍）
+- 代码可直接粘进 QMT 编辑器运行，不依赖 QMT 之外的三方库（pandas/numpy 除外）
+
+硬性要求：
+1. 先用不超过 5 行说明转写思路；若两边能力差异导致无法等价实现（如截面排名
+   需全市场数据、停牌处理、T+1 约束），明确列出：哪里不行、为什么、怎么降级。
+2. 然后给出完整 QMT 代码，包在 ```python 代码块中，关键逻辑逐段中文注释。
+3. 风控/参数保留原策略语义；不确定处用保守默认并注释说明。"""
+
+
+@router.post("/{strategy_id}/export-qmt")
+async def export_qmt(strategy_id: str):
+    """策略转写为迅投 QMT 实盘代码（AI 转写，返回代码 + 说明/降级清单）"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT name, description, content, code FROM strategies WHERE id = ?",
+            (strategy_id,),
+        )
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="策略不存在")
+    if not (row["code"] or "").strip():
+        raise HTTPException(status_code=400, detail="策略无可转写代码")
+    user = (
+        f"## 策略名称\n{row['name']}\n\n"
+        + (
+            f"## 策略说明\n{row['description'] or row['content']}\n\n"
+            if (row["description"] or row["content"])
+            else ""
+        )
+        + f"## 平台策略代码\n```python\n{row['code']}\n```\n\n请转写为 QMT 策略。"
+    )
+    from backend.routes.qube import qube_complete
+
+    text = await qube_complete(EXPORT_QMT_SYSTEM, user)
+    fence = re.search(r"```(?:python)?\n([\s\S]*?)\n?```", text)
+    qmt_code = fence.group(1).strip() if fence else ""
+    note = re.sub(r"```[\s\S]*?```", "", text).strip()[:2000]
+    if not qmt_code:
+        raise HTTPException(status_code=502, detail=f"AI 未返回代码块: {text[:200]}")
+    return {"code": qmt_code, "note": note, "filename": f"{row['name']}_qmt.py"}
+
+
 @router.put("/{strategy_id}")
 async def update_strategy(strategy_id: str, body: StrategyUpdate):
     """更新策略；status=saved 即用户手动「设为已保存」

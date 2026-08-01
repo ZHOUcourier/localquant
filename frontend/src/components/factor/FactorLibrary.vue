@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { Input } from '@/components/ui'
+import { Input, Select } from '@/components/ui'
+import type { SelectOption } from '@/components/ui'
 import { Sparkles, BookOpen } from 'lucide-vue-next'
 import {
   usePresetFactors,
@@ -30,6 +31,19 @@ const SORT_OPTIONS: { field: SortField; label: string }[] = [
   { field: 'ic_ir', label: 'IC_IR' },
   { field: 'annualized_return', label: '年化收益' },
 ]
+
+// 排序下拉选项（首项空值 = 不排序）
+const sortSelectOptions: SelectOption[] = [
+  { value: '', label: '排序' },
+  ...SORT_OPTIONS.map((o) => ({ value: o.field, label: o.label })),
+]
+const sortModel = computed<string>({
+  get: () => sortField.value ?? '',
+  set: (v: string) => {
+    sortField.value = (v as SortField) || undefined
+    page.value = 1
+  },
+})
 
 const viewMode = ref<ViewMode>('card')
 const search = ref('')
@@ -160,20 +174,9 @@ function cardPerfMetrics(f: PresetFactor) {
           变量参考
         </button>
         <!-- 排序选择 -->
-        <select
-          class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1.5 text-xs text-[#646262] cursor-pointer"
-          :value="sortField ?? ''"
-          @change="
-            (e) => {
-              const v = (e.target as HTMLSelectElement).value as SortField | ''
-              sortField = v || undefined
-              page = 1
-            }
-          "
-        >
-          <option value="">排序</option>
-          <option v-for="o in SORT_OPTIONS" :key="o.field" :value="o.field">{{ o.label }}</option>
-        </select>
+        <div class="w-[120px]">
+          <Select v-model="sortModel" :options="sortSelectOptions" placeholder="排序" />
+        </div>
         <button
           v-if="sortField"
           type="button"

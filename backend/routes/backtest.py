@@ -1,11 +1,13 @@
-"""回测路由"""
+"""回测路由（含回测记录 backtest_runs：8 阶段进度落库，画板/回测中心共用）"""
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel
 
+from backend.database import get_db
 from backend.services import market_data
 from backend.services.backtest_analysis import backtest_analysis
 
@@ -251,3 +253,105 @@ async def monte_carlo(req: MonteCarloRequest):
     except Exception as e:
         logger.error(f"蒙特卡洛模拟失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── 回测记录（backtest_runs：落库 + 8 阶段进度，QUBE 画板与回测中心共用）──
+
+
+class CreateRunRequest(BaseModel):
+    strategy_id: str = ""
+    strategy_name: str = ""
+    session_id: str = ""
+    signal_code: str = ""  # 空则从 strategy_id 读策略代码
+    period_start: str = ""
+    period_end: str = ""
+    init_balance: float = 1_000_000
+    commission_rate: float = 0.001
+    slippage: float = 0.001
+    stock_pool: list[str] = []
+
+
+@router.post("/runs")
+async def create_run(req: CreateRunRequest):
+    """创建并后台执行一次回测；前端轮询 GET /runs/{id} 直至 done/error"""
+    from backend.services.qube_research import (
+        create_backtest_run,
+        execute_backtest_run,
+    )
+
+    code = req.signal_code
+    name = req.strategy_name
+    if req.strategy_id and not code.strip():
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT name, code FROM strategies WHERE id = ?", (req.strategy_id,)
+            )
+            row = await cursor.fetchone()
+        finally:
+            await db.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="策略不存在")
+        code = row["code"]
+        name = name or row["name"]
+    if not code.strip():
+        raise HTTPException(status_code=400, detail="策略代码为空，无法回测")
+
+    run_id = await create_backtest_run(
+        req.strategy_id,
+        name,
+        req.session_id,
+        code,
+        req.model_dump(
+            exclude={"strategy_id", "strategy_name", "session_id", "signal_code"}
+        ),
+    )
+
+    async def _run():
+        try:
+            await execute_backtest_run(run_id)
+        except Exception:
+            pass  # 错误已落库（status=error）
+
+    asyncio.create_task(_run())
+    return {"id": run_id, "status": "running"}
+
+
+@router.get("/runs")
+async def list_runs(strategy_id: str = "", session_id: str = "", limit: int = 50):
+    """回测记录列表（不含大字段；画板历史下拉与回测中心列表共用）"""
+    from backend.services.qube_research import run_row_to_dict
+
+    db = await get_db()
+    try:
+        where, args = [], []
+        if strategy_id:
+            where.append("strategy_id = ?")
+            args.append(strategy_id)
+        if session_id:
+            where.append("session_id = ?")
+            args.append(session_id)
+        sql = "SELECT * FROM backtest_runs"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        cursor = await db.execute(sql, (*args, limit))  # noqa: S608
+        return {"runs": [run_row_to_dict(r) for r in await cursor.fetchall()]}
+    finally:
+        await db.close()
+
+
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str):
+    """回测详情（含净值曲线/交易明细/日志）"""
+    from backend.services.qube_research import run_row_to_dict
+
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM backtest_runs WHERE id = ?", (run_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="回测记录不存在")
+        return run_row_to_dict(row, with_detail=True)
+    finally:
+        await db.close()

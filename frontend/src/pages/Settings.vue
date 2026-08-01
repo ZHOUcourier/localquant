@@ -197,11 +197,11 @@ function selectProvider(p: ProviderInfo) {
       <Card title="QMT 配置">
         <div class="space-y-3">
           <div>
-            <label class="block text-xs text-[#646262] mb-1">MiniQMT 路径</label>
+            <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">MiniQMT 路径</label>
             <Input v-model="form.qmt_path" placeholder="如: D:/国金QMT/userdata_mini" />
           </div>
           <div>
-            <label class="block text-xs text-[#646262] mb-1">数据目录</label>
+            <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">数据目录</label>
             <Input v-model="form.qmt_data_dir" placeholder="如: D:/国金QMT/userdata_mini" />
           </div>
           <div class="flex items-center gap-2 pt-1">
@@ -220,7 +220,7 @@ function selectProvider(p: ProviderInfo) {
       <Card title="AI 配置">
         <div class="space-y-3">
           <div>
-            <label class="block text-xs text-[#646262] mb-1">接入方式</label>
+            <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">接入方式</label>
             <div class="flex gap-1.5">
               <button
                 v-for="e in [{ k: 'api', l: 'API 供应商' }, { k: 'cli', l: '本机 CLI 工具' }]"
@@ -242,7 +242,7 @@ function selectProvider(p: ProviderInfo) {
           <!-- API 供应商模式 -->
           <template v-if="form.ai_engine === 'api'">
             <div>
-              <label class="block text-xs text-[#646262] mb-1">
+              <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">
                 供应商（预置免填 Base URL，仅自定义 BYOK 需自填）
               </label>
               <div class="flex flex-wrap gap-1.5">
@@ -263,7 +263,7 @@ function selectProvider(p: ProviderInfo) {
               </div>
             </div>
             <div>
-              <label class="block text-xs text-[#646262] mb-1">
+              <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">
                 API Key
                 <span v-if="config?.openai_api_key_set" class="ml-2 font-mono text-[#30d158]">
                   已配置 ({{ config.openai_api_key_masked }})
@@ -277,11 +277,11 @@ function selectProvider(p: ProviderInfo) {
             </div>
             <div class="grid gap-3" :class="selectedProvider?.byok ? 'grid-cols-2' : 'grid-cols-1'">
               <div v-if="selectedProvider?.byok">
-                <label class="block text-xs text-[#646262] mb-1">Base URL（BYOK）</label>
+                <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">Base URL（BYOK）</label>
                 <Input v-model="form.openai_base_url" placeholder="如: https://your-endpoint/v1" />
               </div>
               <div>
-                <label class="block text-xs text-[#646262] mb-1">模型</label>
+                <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">模型</label>
                 <!-- 预置供应商：清单下拉选择；BYOK 手输 -->
                 <Select
                   v-if="modelOptions.length"
@@ -293,7 +293,7 @@ function selectProvider(p: ProviderInfo) {
               </div>
             </div>
             <div>
-              <label class="block text-xs text-[#646262] mb-1">推理强度</label>
+              <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">推理强度</label>
               <div class="flex gap-1.5">
                 <button
                   v-for="lv in EFFORT_LEVELS"
@@ -314,7 +314,7 @@ function selectProvider(p: ProviderInfo) {
           <!-- 本机 CLI 模式 -->
           <template v-else>
             <div>
-              <label class="block text-xs text-[#646262] mb-1">CLI 工具（使用你本机已登录的 CLI，无需 API Key）</label>
+              <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">CLI 工具（使用你本机已登录的 CLI，无需 API Key）</label>
               <div class="flex flex-wrap gap-1.5">
                 <button
                   v-for="t in cliTools"
@@ -340,7 +340,7 @@ function selectProvider(p: ProviderInfo) {
 
             <!-- CLI 模型（建议芯片 + 自由输入；留空=CLI 默认） -->
             <div v-if="selectedCli?.supports_model">
-              <label class="block text-xs text-[#646262] mb-1">CLI 模型（留空 = 用 CLI 自身默认）</label>
+              <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">CLI 模型（留空 = 用 CLI 自身默认）</label>
               <div v-if="selectedCli?.models?.length" class="mb-1.5 flex flex-wrap gap-1.5">
                 <button
                   v-for="m in selectedCli.models"
@@ -358,7 +358,7 @@ function selectProvider(p: ProviderInfo) {
 
             <!-- CLI 推理强度（仅支持的工具显示） -->
             <div v-if="selectedCli?.supports_effort">
-              <label class="block text-xs text-[#646262] mb-1">推理强度</label>
+              <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">推理强度</label>
               <div class="flex flex-wrap gap-1.5">
                 <button
                   v-for="lv in CLI_EFFORT_LEVELS"
@@ -389,16 +389,16 @@ function selectProvider(p: ProviderInfo) {
         <div class="space-y-3">
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-[#646262] mb-1">后端端口</label>
+              <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">后端端口</label>
               <Input :model-value="String(form.backend_port)" type="number" @update:model-value="(v: string) => (form.backend_port = Number(v))" />
             </div>
             <div>
-              <label class="block text-xs text-[#646262] mb-1">前端端口</label>
+              <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">前端端口</label>
               <Input :model-value="String(form.frontend_port)" type="number" @update:model-value="(v: string) => (form.frontend_port = Number(v))" />
             </div>
           </div>
           <div>
-            <label class="block text-xs text-[#646262] mb-1">因子研究服务地址</label>
+            <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">因子研究服务地址</label>
             <Input v-model="form.factor_service_url" placeholder="如: http://localhost:8001" />
           </div>
           <div class="flex items-start gap-1.5 pt-1">

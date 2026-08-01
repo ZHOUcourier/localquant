@@ -302,30 +302,80 @@ CLI_TOOL_META: dict[str, dict] = {
     "claude": {
         "model_flag": ["--model"],
         "effort": "flag",
-        "models": ["sonnet", "opus", "haiku"],
+        # claude 支持别名（fable/opus/sonnet/haiku）或全名
+        "models": ["sonnet", "opus", "haiku", "sonnet[1m]", "opusplan"],
     },
     "codex": {
         "model_flag": ["-m"],
         "effort": "config",
-        "models": ["gpt-5-codex", "gpt-5", "o4-mini"],
+        "models": ["gpt-5-codex", "gpt-5", "gpt-5-mini", "o4-mini", "o3"],
     },
     "opencode": {
         "model_flag": ["-m"],
         "effort": "variant",
+        # opencode 模型清单在运行时由 `opencode models` 动态拉取（见 _opencode_models）；
+        # 这里留少量免费模型作为拉取失败时的兜底，避免下拉为空。
         "models": [
-            "anthropic/claude-sonnet-4-5",
-            "openai/gpt-5",
-            "google/gemini-2.5-pro",
+            "opencode/deepseek-v4-flash-free",
+            "opencode/north-mini-code-free",
+            "opencode/mimo-v2.5-free",
         ],
+        "dynamic": True,  # list_cli_tools 会用真实清单覆盖上面的兜底
+    },
+    "qoder": {
+        "model_flag": ["--model"],
+        "effort": None,
+        "models": ["claude-sonnet-4.5", "claude-opus-4.5", "gpt-5", "auto"],
     },
     "pi": {
         "model_flag": ["--model"],
         "effort": "suffix",
-        "models": ["sonnet", "opus"],
+        "models": ["sonnet", "opus", "haiku"],
     },
+    "kimi": {
+        "model_flag": ["--model"],
+        "effort": None,
+        "models": ["kimi-k2", "kimi-k2-turbo", "kimi-latest"],
+    },
+    "codebuddy": {"model_flag": ["--model"], "effort": None, "models": []},
+    "coder": {"model_flag": ["--model"], "effort": None, "models": []},
+    "hermes": {"model_flag": ["--model"], "effort": None, "models": []},
     "cursor-agent": {"model_flag": ["--model"], "effort": None, "models": []},
-    "gemini": {"model_flag": ["-m"], "effort": None, "models": []},
+    "gemini": {
+        "model_flag": ["-m"],
+        "effort": None,
+        "models": ["gemini-2.5-pro", "gemini-2.5-flash"],
+    },
 }
+
+
+# opencode 真实模型清单缓存（`opencode models` 输出，进程内缓存避免每次调用都起子进程）
+_OPENCODE_MODELS_CACHE: list[str] = []
+
+
+def _opencode_models() -> list[str]:
+    """运行 `opencode models` 拉取本机 opencode 全部可用模型（带进程内缓存）"""
+    global _OPENCODE_MODELS_CACHE
+    if _OPENCODE_MODELS_CACHE:
+        return _OPENCODE_MODELS_CACHE
+    binary = shutil.which("opencode")
+    if not binary:
+        return []
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            [binary, "models"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        models = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+        if models:
+            _OPENCODE_MODELS_CACHE = models
+        return models
+    except Exception:
+        return []
 
 
 def _cli_meta(cli_id: str) -> dict:
@@ -399,13 +449,20 @@ def list_cli_tools() -> list[dict]:
     tools = []
     for cid, t in CLI_TOOLS.items():
         meta = _cli_meta(cid)
+        available = shutil.which(t["bin"]) is not None
+        models = meta.get("models", [])
+        # opencode：已安装时用 `opencode models` 的真实全量清单覆盖兜底
+        if available and meta.get("dynamic") and cid == "opencode":
+            real = _opencode_models()
+            if real:
+                models = real
         tools.append(
             {
                 "id": cid,
                 "label": t["label"],
                 "bin": t["bin"],
-                "available": shutil.which(t["bin"]) is not None,
-                "models": meta.get("models", []),
+                "available": available,
+                "models": models,
                 "supports_model": meta.get("model_flag") is not None,
                 "supports_effort": meta.get("effort") is not None,
             }
@@ -465,7 +522,10 @@ async def run_cli(
 
 
 async def stream_cli(cli_id: str, prompt: str, model: str = "", effort: str = ""):
-    """流式运行 CLI：逐段 yield stdout 文本（QUBE 对话使用）"""
+    """流式运行 CLI：逐段 yield stdout 文本（QUBE 对话使用），剔除 ANSI 转义码"""
+    import re
+
+    ansi_re = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
     cmd = build_cli_command(cli_id, prompt, model, effort)
     if not cmd:
         raise RuntimeError(f"CLI 工具不可用: {cli_id}（请确认已安装并在 PATH 中）")
@@ -476,16 +536,27 @@ async def stream_cli(cli_id: str, prompt: str, model: str = "", effort: str = ""
         stderr=asyncio.subprocess.PIPE,
     )
     assert proc.stdout is not None
+    # 增量解码器：多字节 UTF-8 字符跨 read 分块时不会被 replace 成乱码
+    import codecs
+
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     try:
         while True:
             chunk = await proc.stdout.read(256)
             if not chunk:
                 break
-            yield chunk.decode(errors="replace")
+            text = ansi_re.sub("", decoder.decode(chunk))
+            if text:
+                yield text
+        tail = ansi_re.sub("", decoder.decode(b"", final=True))
+        if tail:
+            yield tail
         await proc.wait()
         if proc.returncode != 0:
             err = (
-                (await proc.stderr.read()).decode(errors="replace")[:300]
+                ansi_re.sub("", (await proc.stderr.read()).decode(errors="replace"))[
+                    :300
+                ]
                 if proc.stderr
                 else ""
             )
