@@ -13,6 +13,7 @@ import { Select } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
 import type { Skill } from '@/components/qube/types'
 import { jsonFetch } from '@/components/qube/types'
+import SkillDetailDialog from '@/components/skills/SkillDetailDialog.vue'
 
 const router = useRouter()
 const builtin = ref<Skill[]>([])
@@ -26,6 +27,23 @@ const creating = ref(false)
 const form = ref({ display_name: '', description: '', category: '对话', prompt: '' })
 const CATEGORIES = ['记忆', '策略', '回测', '调优', '仿真交易', '对话', '因子']
 const categoryOptions: SelectOption[] = CATEGORIES.map((c) => ({ value: c, label: c }))
+
+// 技能详情弹窗：记录卡片位置，App Store 展开动画从卡片出发
+const cardEls = new Map<number, HTMLElement>()
+function setCardRef(id: number, el: unknown) {
+  if (el instanceof HTMLElement) cardEls.set(id, el)
+  else cardEls.delete(id)
+}
+function cardOrigin(id: number): { x: number; y: number; width: number; height: number } | undefined {
+  const el = cardEls.get(id)
+  if (!el) return undefined
+  const r = el.getBoundingClientRect()
+  return { x: r.left, y: r.top, width: r.width, height: r.height }
+}
+const detail = ref<{ id: number; origin?: { x: number; y: number; width: number; height: number } } | null>(null)
+function openDetail(id: number) {
+  detail.value = { id, origin: cardOrigin(id) }
+}
 
 // 参考来源（用户要求展示 quant-wiki / quantpaper / quantskills 等社区）
 const REFERENCES = [
@@ -226,8 +244,16 @@ function sourceLabel(src: string): string {
         <div
           v-for="s in filtered"
           :key="s.id"
-          class="group flex flex-col rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3"
+          :ref="(el) => setCardRef(s.id, el)"
+          v-motion
+          :initial="{ opacity: 0, y: 14 }"
+          :enter="{ opacity: 1, y: 0, transition: { delay: Math.min(Number(s.id) % 8, 8) * 25 } }"
+          :hovered="{ y: -2, transition: { duration: 120 } }"
+          :tapped="{ scale: 0.98, transition: { duration: 90 } }"
+          class="group flex cursor-pointer flex-col rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3"
           :class="s.builtin && !s.enabled ? 'opacity-60' : 'card-hover'"
+          title="点击查看技能手册与 GitHub 仓库信息"
+          @click="openDetail(s.id)"
         >
           <div class="flex items-start gap-1.5">
             <span class="min-w-0 flex-1 truncate text-[13px] font-medium text-[#201d1d]">
@@ -237,7 +263,7 @@ function sourceLabel(src: string): string {
               v-if="!s.builtin"
               class="shrink-0 text-[10px] text-[#9a9898] opacity-0 hover:text-[#ff3b30] group-hover:opacity-100"
               title="删除"
-              @click="removeSkill(s)"
+              @click.stop="removeSkill(s)"
             >
               ✕
             </button>
@@ -277,7 +303,7 @@ function sourceLabel(src: string): string {
             <button
               class="rounded-[4px] bg-[#201d1d] px-2 py-1 text-[11px] text-[#fdfcfc] hover:opacity-85 disabled:opacity-50"
               :disabled="s.builtin && !s.enabled"
-              @click="useSkill(s)"
+              @click.stop="useSkill(s)"
             >
               在 QUBE 中使用
             </button>
@@ -285,5 +311,8 @@ function sourceLabel(src: string): string {
         </div>
       </div>
     </div>
+
+    <!-- 技能详情弹窗（v-if 控制挂载：每次打开全新实例，App Store 动画从本次点击的卡片出发） -->
+    <SkillDetailDialog v-if="detail" :skill-id="detail.id" :origin="detail.origin" @close="detail = null" />
   </div>
 </template>

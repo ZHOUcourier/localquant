@@ -46,7 +46,12 @@ QUBE_SYSTEM = """职责：通过多轮对话帮助用户设计、验证、迭代
         list_strategy_versions · get_strategy_version · revert_strategy_to_version 版本管理
 【回测】set_backtest_params 推参数给画板 / run_backtest 真实回测 / get_backtest_result 诊断
 【因子】generate_stock_factor_code 写因子进画板 / run_factor_analysis IC+分组分析
-【其它】bind_chat_target 切换画板绑定 / remember 记录用户长期偏好
+【其它】bind_chat_target 切换画板绑定 / remember 记录用户长期偏好 /
+        list_skills 查看技能库 / use_skill 加载指定技能的操作手册
+
+技能库：内置大量来自开源社区的量化技能（因子衰减分析、A股个股尽调、主力资金画像、
+因子挖掘、LLMQuant 各类研究框架等）。当用户请求契合某个技能时，先 list_skills 确认技能名，
+再 use_skill 加载其操作手册并严格按手册流程执行（手册会指引你调用上述平台工具取真实数据）。
 
 推荐工作流：
 - 策略：read_doc/get_data_status 对齐约定 → generate_stock_strategy_code 写入画板 →
@@ -98,6 +103,8 @@ TOOL_DISPLAY_NAMES = {
     "list_factors": "查看因子列表",
     "bind_chat_target": "绑定对话目标",
     "remember": "记录长期记忆",
+    "list_skills": "查看技能库",
+    "use_skill": "加载技能手册",
 }
 
 
@@ -629,6 +636,7 @@ def _skill_row(r) -> dict:
         "enabled": bool(r["enabled"]),
         "source": r["source"],
         "url": r["url"],
+        "repo_url": r["repo_url"],
         "stars": r["stars"],
     }
 
@@ -643,6 +651,27 @@ async def list_builtin_skills():
         return {"skills": [_skill_row(r) for r in await cursor.fetchall()]}
     finally:
         await db.close()
+
+
+@router.get("/skills/{skill_id}/detail")
+async def get_skill_detail(skill_id: int, refresh: bool = False):
+    """技能详情：基础信息 + 关联 GitHub 仓库的 README / SKILL.md / 元数据"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM qube_skills WHERE id = ?", (skill_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="技能不存在")
+        skill = _skill_row(row)
+    finally:
+        await db.close()
+
+    from backend.services.qube_skill_repo import get_skill_repo
+
+    repo = await get_skill_repo(skill["name"], skill["repo_url"], force=refresh)
+    return {"skill": skill, "repo": repo}
 
 
 @router.get("/skills/user")

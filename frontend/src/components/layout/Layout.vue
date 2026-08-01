@@ -116,7 +116,11 @@ function onSidebarDrag(e: MouseEvent) {
 
         <!-- 内容区留白对齐 opencode 官网（content-panel padding: 2rem 3rem）；满幅页（画布/QUBE）不加内边距 -->
         <main class="flex-1 min-h-0 overflow-auto" :class="isFullBleedPage ? '' : 'px-12 py-8'">
-          <RouterView />
+          <RouterView v-slot="{ Component }">
+            <Transition name="page" mode="out-in">
+              <component :is="Component" :key="route.path" />
+            </Transition>
+          </RouterView>
         </main>
       </div>
     </div>

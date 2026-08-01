@@ -34,7 +34,7 @@ const sizeStyles: Record<ButtonSize, string> = {
 
 const classes = computed(() =>
   cn(
-    'inline-flex items-center justify-center rounded-[4px] font-medium transition-colors duration-150 cursor-pointer',
+    'press inline-flex items-center justify-center rounded-[4px] font-medium transition-colors duration-150 cursor-pointer',
     variantStyles[props.variant],
     sizeStyles[props.size],
     (props.disabled || props.loading) && 'cursor-not-allowed opacity-70',

@@ -106,11 +106,92 @@ html, body, #app {
 }
 /* 卡片/行类 hover：灰背景 + 边框加深（Dashboard 状态卡、列表行等） */
 .card-hover {
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
 }
 .card-hover:hover {
   background: #e8e5e5 !important;
   border-color: rgba(15, 0, 0, 0.22) !important;
+}
+
+/* 点击 press 反馈：可点击的卡片/按钮按下的轻微缩放 + 提亮 */
+.press {
+  cursor: pointer;
+  transition: transform 0.1s ease, filter 0.1s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.press:active {
+  transform: scale(0.975);
+  filter: brightness(0.97);
+}
+
+/* ── 路由切换过渡（App 内 RouterView）── */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ── 弹窗过渡：遮罩淡入淡出 + 面板缩放上移 ── */
+.dialog-overlay-enter-active,
+.dialog-overlay-leave-active {
+  transition: opacity 0.15s ease;
+}
+.dialog-overlay-enter-from,
+.dialog-overlay-leave-to {
+  opacity: 0;
+}
+.dialog-panel-enter-active,
+.dialog-panel-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.dialog-panel-enter-from {
+  opacity: 0;
+  transform: translateY(10px) scale(0.97);
+}
+.dialog-panel-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+}
+
+/* ── 列表/网格进出场过渡（TransitionGroup）── */
+.list-move,
+.list-enter-active,
+.list-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.list-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.list-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+}
+.list-leave-active {
+  position: absolute;
+  width: 100%;
+}
+
+/* 简化版列表过渡（无绝对定位，适合行内移除的场景） */
+.list-fade-move,
+.list-fade-enter-active,
+.list-fade-leave-active {
+  transition: all 0.22s ease;
+}
+.list-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.list-fade-leave-to {
+  opacity: 0;
+  transform: translateX(8px);
 }
 
 /* ── QUBE 空态动画（对齐参考站 split-char / anim-reveal-up 实现）── */

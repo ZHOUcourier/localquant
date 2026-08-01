@@ -13,7 +13,7 @@ import time
 
 from backend.database import get_db
 
-# (name, display_name, category, category_id, description, prompt(详细内容 markdown), source, url, stars)
+# (name, display_name, category, category_id, description, prompt(详细内容 markdown), source, url, stars, repo_url)
 QUANTSKILLS_SKILLS: list[tuple] = [
     (
         "qs-factor-decay",
@@ -56,6 +56,7 @@ IC = 0.05 的因子，在 1 天、5 天、20 天持有期上预测力如何变�
         "QuantSkills",
         "https://www.quantskills.ai/skills/skill-factor-decay",
         1,
+        "https://github.com/quantskills/skill-factor-decay",
     ),
     (
         "qs-directional-alpha",
@@ -94,6 +95,7 @@ QuantSkills 组织的方向类因子库，收录刻画价格方向、趋势延�
         "QuantSkills",
         "https://www.quantskills.ai/skills/skill-quant-factor-directional-alpha",
         1,
+        "https://github.com/quantskills/skill-quant-factor-directional-alpha",
     ),
     (
         "qs-factor-mining",
@@ -129,6 +131,7 @@ QuantSkills 组织的方向类因子库，收录刻画价格方向、趋势延�
         "QuantSkills",
         "https://www.quantskills.ai/skills/skill-factor-mining-pandaai",
         0,
+        "https://github.com/quantskills/skill-factor-mining-pandaai",
     ),
     (
         "qs-serenity-model",
@@ -166,6 +169,7 @@ report    画像 · 逻辑树 · 证据图 · 风险图 → serenity_model_repor
         "QuantSkills",
         "https://www.quantskills.ai/skills/skill-serenity-research-model",
         4,
+        "https://github.com/quantskills/skill-serenity-research-model",
     ),
     (
         "qs-stock-dossier",
@@ -206,6 +210,7 @@ report    画像 · 逻辑树 · 证据图 · 风险图 → serenity_model_repor
         "QuantSkills",
         "https://www.quantskills.ai/skills/skill-a-share-stock-dossier",
         3,
+        "https://github.com/quantskills/skill-a-share-stock-dossier",
     ),
     (
         "qs-smart-money",
@@ -239,6 +244,7 @@ report    画像 · 逻辑树 · 证据图 · 风险图 → serenity_model_repor
         "QuantSkills",
         "https://www.quantskills.ai/skills/skill-smart-money-profiler",
         1,
+        "https://github.com/quantskills/skill-smart-money-profiler",
     ),
 ]
 
@@ -392,18 +398,31 @@ async def seed_builtin_skills() -> None:
             source,
             url,
             stars,
+            repo_url,
         ) in QUANTSKILLS_SKILLS:
             await db.execute(
                 "INSERT INTO qube_skills (name, display_name, description, category, "
-                "category_id, params_json, prompt, builtin, enabled, created_at, source, url, stars) "
-                "VALUES (?, ?, ?, ?, ?, '[]', ?, 1, 1, ?, ?, ?, ?)",
-                (name, display, desc, cat, cat_id, prompt, now, source, url, stars),
+                "category_id, params_json, prompt, builtin, enabled, created_at, source, url, stars, repo_url) "
+                "VALUES (?, ?, ?, ?, ?, '[]', ?, 1, 1, ?, ?, ?, ?, ?)",
+                (
+                    name,
+                    display,
+                    desc,
+                    cat,
+                    cat_id,
+                    prompt,
+                    now,
+                    source,
+                    url,
+                    stars,
+                    repo_url,
+                ),
             )
         for suffix, display, desc, workflows in LLMQUANT_CATEGORIES:
             await db.execute(
                 "INSERT INTO qube_skills (name, display_name, description, category, "
-                "category_id, params_json, prompt, builtin, enabled, created_at, source, url, stars) "
-                "VALUES (?, ?, ?, '综合', 'llmquant', ?, ?, 1, 1, ?, 'LLMQuant', ?, 0)",
+                "category_id, params_json, prompt, builtin, enabled, created_at, source, url, stars, repo_url) "
+                "VALUES (?, ?, ?, '综合', 'llmquant', ?, ?, 1, 1, ?, 'LLMQuant', ?, 0, ?)",
                 (
                     f"llmquant-{suffix}",
                     f"llmquant-{suffix} · {display}",
@@ -411,6 +430,7 @@ async def seed_builtin_skills() -> None:
                     json.dumps([], ensure_ascii=False),
                     _llmquant_prompt(display, desc, workflows),
                     now,
+                    f"https://github.com/LLMQuant/skills/tree/master/skills/llmquant-{suffix}",
                     f"https://github.com/LLMQuant/skills/tree/master/skills/llmquant-{suffix}",
                 ),
             )

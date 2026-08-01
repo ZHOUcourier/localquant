@@ -131,7 +131,36 @@ export interface Skill {
   enabled: boolean
   source: string
   url: string
+  repo_url: string
   stars: number
+}
+
+export interface SkillRepo {
+  ok: boolean
+  error?: string
+  repo_url: string
+  owner?: string
+  repo?: string
+  branch?: string
+  subpath?: string
+  readme?: string | null
+  skill_md?: string | null
+  meta?: {
+    stars?: number | null
+    forks?: number | null
+    license?: string
+    description?: string
+    language?: string
+    updated_at?: string
+    html_url?: string
+    default_branch?: string
+  }
+  fetched_at?: number
+}
+
+export interface SkillDetail {
+  skill: Skill
+  repo: SkillRepo
 }
 
 export async function jsonFetch(url: string, options?: RequestInit) {

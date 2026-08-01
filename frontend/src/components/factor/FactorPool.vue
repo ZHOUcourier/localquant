@@ -99,11 +99,12 @@ async function handleRecalculate(id: number) {
 
     <!-- 因子列表 -->
     <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-3">
-      <div
-        v-for="f in factors"
-        :key="f.id"
-        class="flex items-center justify-between gap-3 border-b border-[rgba(15,0,0,0.12)] py-3 last:border-b-0"
-      >
+      <TransitionGroup name="list-fade" tag="div">
+        <div
+          v-for="f in factors"
+          :key="f.id"
+          class="flex items-center justify-between gap-3 border-b border-[rgba(15,0,0,0.12)] py-3 last:border-b-0"
+        >
         <!-- 左侧：名称 + 分类 + IC 指标 -->
         <div class="flex min-w-0 flex-1 items-center gap-4">
           <span class="shrink-0 text-sm font-medium text-[#201d1d]">{{ f.factor_name }}</span>
@@ -143,6 +144,7 @@ async function handleRecalculate(id: number) {
           </button>
         </div>
       </div>
+      </TransitionGroup>
     </div>
 
     <!-- 对比分析表格 -->

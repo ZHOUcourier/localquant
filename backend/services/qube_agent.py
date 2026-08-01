@@ -751,6 +751,79 @@ async def _tool_remember(args: dict) -> dict:
     return {"ok": True, "kind": kind}
 
 
+async def _tool_list_skills(_args: dict) -> dict:
+    """列出技能库中已启用的技能（名称、一句话说明、分类、来源）"""
+    from backend.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT name, display_name, description, category, source, repo_url "
+            "FROM qube_skills WHERE enabled = 1 ORDER BY category_id, id"
+        )
+        rows = await cursor.fetchall()
+        return {
+            "skills": [
+                {
+                    "name": r["name"],
+                    "display_name": r["display_name"],
+                    "description": r["description"],
+                    "category": r["category"],
+                    "source": r["source"],
+                    "repo_url": r["repo_url"],
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        await db.close()
+
+
+async def _tool_use_skill(args: dict) -> dict:
+    """加载技能库中某个技能，返回其完整操作手册 + GitHub README 供 agent 遵循执行"""
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return {"error": "name 不能为空（技能名，见 list_skills）"}
+    from backend.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT name, display_name, description, prompt, url, repo_url "
+            "FROM qube_skills WHERE enabled = 1 AND (name = ? OR display_name = ?)",
+            (name, name),
+        )
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not row:
+        return {"error": f"技能不存在: {name}（可用 list_skills 查看全部技能）"}
+
+    payload: dict = {
+        "ok": True,
+        "name": row["name"],
+        "display_name": row["display_name"],
+        "description": row["description"],
+        "url": row["url"],
+        "manual": row["prompt"],
+    }
+    # 附带 GitHub README（若可获取），让 agent 掌握技能原文细节
+    if row["repo_url"]:
+        try:
+            from backend.services.qube_skill_repo import get_skill_repo
+
+            repo = await get_skill_repo(row["name"], row["repo_url"])
+            if repo.get("ok"):
+                payload["repo_url"] = repo.get("repo_url")
+                payload["readme"] = (repo.get("readme") or "")[:6000]
+                payload["skill_md"] = (repo.get("skill_md") or "")[:4000]
+        except Exception as e:  # 仓库抓取失败不阻断技能使用
+            from loguru import logger
+
+            logger.warning(f"技能 {row['name']} 仓库抓取失败: {e}")
+    return payload
+
+
 def build_qube_tools(session_id: str) -> list[Tool]:
     """QUBE 平台工具集（与技能库 enabled 项对应；会话相关工具自动带上归属）"""
 
@@ -1043,5 +1116,30 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                 "required": ["content"],
             },
             handler=_tool_remember,
+        ),
+        Tool(
+            name="list_skills",
+            description="列出技能库中所有已启用的技能（名称、一句话说明、分类、来源仓库）。当用户需求契合某个技能时（如因子挖掘、个股尽调、主力资金画像、特定分析框架），先用它确认可用技能名。",
+            parameters={"type": "object", "properties": {}, "required": []},
+            handler=_tool_list_skills,
+        ),
+        Tool(
+            name="use_skill",
+            description=(
+                "加载技能库中指定技能，返回该技能的完整操作手册（方法论、步骤、约束）"
+                "以及其 GitHub 仓库 README/SKILL.md。随后严格按手册流程执行："
+                "先读手册→按步骤调用平台工具取真实数据→完成产出。name 取 list_skills 中的技能名。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "技能名（list_skills 返回的 name，如 qs-stock-dossier）",
+                    }
+                },
+                "required": ["name"],
+            },
+            handler=_tool_use_skill,
         ),
     ]

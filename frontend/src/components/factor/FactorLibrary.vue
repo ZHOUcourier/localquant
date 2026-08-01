@@ -83,15 +83,33 @@ const { data, isLoading, isFetching } = usePresetFactors(queryParams)
 const { data: categories } = usePresetFactorCategories()
 const addToPoolMutation = useAddToFactorPool()
 const addingId = ref<number | null>(null)
+
+// 记录每个因子的卡片/行元素，用于 App Store 卡片展开动画的起点坐标
+const cardEls = new Map<number, HTMLElement>()
+function setCardRef(id: number, el: unknown) {
+  if (el instanceof HTMLElement) cardEls.set(id, el)
+  else cardEls.delete(id)
+}
+function cardOrigin(id: number): { x: number; y: number; width: number; height: number } | undefined {
+  const el = cardEls.get(id)
+  if (!el) return undefined
+  const r = el.getBoundingClientRect()
+  return { x: r.left, y: r.top, width: r.width, height: r.height }
+}
+
 // 因子详情弹窗（点击因子打开；可直接定位到 AI 分析）
-const detail = ref<{ id: number; tab: 'formula' | 'ai' } | null>(null)
+const detail = ref<{
+  id: number
+  tab: 'formula' | 'ai'
+  origin?: { x: number; y: number; width: number; height: number }
+} | null>(null)
 const showReference = ref(false)
 
 function openDetail(id: number) {
-  detail.value = { id, tab: 'formula' }
+  detail.value = { id, tab: 'formula', origin: cardOrigin(id) }
 }
 function openAI(id: number) {
-  detail.value = { id, tab: 'ai' }
+  detail.value = { id, tab: 'ai', origin: cardOrigin(id) }
 }
 
 function handleCategoryClick(code: string) {
@@ -252,8 +270,14 @@ function cardPerfMetrics(f: PresetFactor) {
       <!-- 卡片视图 -->
       <div v-else-if="viewMode === 'card'" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <div
-          v-for="f in factors"
+          v-for="(f, i) in factors"
           :key="f.id"
+          :ref="(el) => setCardRef(f.id, el)"
+          v-motion
+          :initial="{ opacity: 0, y: 14 }"
+          :enter="{ opacity: 1, y: 0, transition: { delay: Math.min(i, 8) * 30 } }"
+          :hovered="{ y: -2, transition: { duration: 120 } }"
+          :tapped="{ scale: 0.98, transition: { duration: 90 } }"
           class="flex flex-col rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f1eeee] p-4 cursor-pointer transition-colors hover:border-[#9a9898]"
           title="点击查看公式与具体数据"
           @click="openDetail(f.id)"
@@ -333,6 +357,7 @@ function cardPerfMetrics(f: PresetFactor) {
           <tr
             v-for="f in factors"
             :key="f.id"
+            :ref="(el) => setCardRef(f.id, el)"
             class="border-b border-[rgba(15,0,0,0.12)] transition-colors hover:bg-[#f1eeee] cursor-pointer"
             title="点击查看公式与具体数据"
             @click="openDetail(f.id)"
@@ -409,9 +434,12 @@ function cardPerfMetrics(f: PresetFactor) {
     </div>
 
     <!-- 因子详情弹窗（公式 LaTeX/代码 + 具体数据 + 重算历史 + AI 分析） -->
+    <!-- v-if 控制挂载：每次打开都是全新实例，App Store 开启动画从本次点击的卡片位置开始 -->
     <FactorDetailDialog
-      :factor-id="detail?.id ?? null"
-      :initial-tab="detail?.tab ?? 'formula'"
+      v-if="detail"
+      :factor-id="detail.id"
+      :initial-tab="detail.tab"
+      :origin="detail.origin"
       @close="detail = null"
     />
 

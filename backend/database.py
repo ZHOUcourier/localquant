@@ -289,6 +289,19 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE qube_skills ADD COLUMN stars INTEGER DEFAULT 0"
             )
+        if "repo_url" not in skill_cols:
+            await db.execute(
+                "ALTER TABLE qube_skills ADD COLUMN repo_url TEXT DEFAULT ''"
+            )
+
+        # 技能仓库信息缓存（GitHub README/SKILL.md/元数据；按技能名缓存，seed 重建 ID 不变）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS qube_skill_repos (
+                skill_name TEXT PRIMARY KEY,
+                data_json TEXT DEFAULT '{}',
+                fetched_at INTEGER DEFAULT 0
+            )
+        """)
 
         await db.commit()
 

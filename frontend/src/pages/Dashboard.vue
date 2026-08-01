@@ -162,8 +162,13 @@ const mono =
       </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div
-          v-for="card in statusCards"
+          v-for="(card, i) in statusCards"
           :key="card.label"
+          v-motion
+          :initial="{ opacity: 0, y: 10 }"
+          :enter="{ opacity: 1, y: 0, transition: { delay: i * 45 } }"
+          :hovered="{ y: -2, transition: { duration: 120 } }"
+          :tapped="{ scale: 0.98, transition: { duration: 90 } }"
           class="rounded-[4px] px-4 py-3 card-hover"
           style="background-color: #f1eeee; border: 1px solid rgba(15, 0, 0, 0.12)"
         >
@@ -314,6 +319,10 @@ const mono =
             <template v-else>
               <div v-for="(wf, i) in recentWorkflows" :key="wf.id">
                 <div
+                  v-motion
+                  :initial="{ opacity: 0, x: -8 }"
+                  :enter="{ opacity: 1, x: 0, transition: { delay: i * 30 } }"
+                  :hovered="{ x: 2, transition: { duration: 120 } }"
                   class="flex items-center justify-between py-2 px-2 rounded-[4px] cursor-pointer hover:bg-[#f1eeee] transition-colors"
                   @click="router.push(`/workflow/${wf.id}`)"
                 >
@@ -353,6 +362,10 @@ const mono =
             <template v-else>
               <div v-for="(exp, i) in recentExperiments" :key="exp.id">
                 <div
+                  v-motion
+                  :initial="{ opacity: 0, x: -8 }"
+                  :enter="{ opacity: 1, x: 0, transition: { delay: i * 30 } }"
+                  :hovered="{ x: 2, transition: { duration: 120 } }"
                   class="flex items-center justify-between py-2 px-2 rounded-[4px] cursor-pointer hover:bg-[#f1eeee] transition-colors"
                   @click="router.push('/experiments')"
                 >
