@@ -25,6 +25,9 @@ class RunBacktestRequest(BaseModel):
     slippage: float = 0.001
     stamp_tax: float = 0.0005
     normalize: str = "none"  # none / long_only / dollar_neutral
+    take_profit: float = 0.0  # 单仓止盈比例（0=关闭）
+    stop_loss: float = 0.0  # 单仓止损比例（0=关闭）
+    trailing_stop: float = 0.0  # 移动止损比例（0=关闭）
 
 
 class TearSheetRequest(BaseModel):
@@ -50,6 +53,9 @@ class RunStrategyRequest(BaseModel):
     stamp_tax: float = 0.0005
     normalize: str = "none"  # none / long_only / dollar_neutral
     risk_free_rate: float = 0.03
+    take_profit: float = 0.0
+    stop_loss: float = 0.0
+    trailing_stop: float = 0.0
 
 
 # ── 工具函数 ─────────────────────────────────────────────────
@@ -126,6 +132,9 @@ async def run_strategy(req: RunStrategyRequest):
             down_limit=reference["down_limit"],
             high=panels.get("high"),
             low=panels.get("low"),
+            take_profit=req.take_profit,
+            stop_loss=req.stop_loss,
+            trailing_stop=req.trailing_stop,
         )
         equity_curve = result["equity_curve"]
         strategy_returns = result["strategy_returns"]
@@ -176,6 +185,9 @@ async def run_backtest(req: RunBacktestRequest):
             slippage=req.slippage,
             stamp_tax=req.stamp_tax,
             normalize=req.normalize,
+            take_profit=req.take_profit,
+            stop_loss=req.stop_loss,
+            trailing_stop=req.trailing_stop,
         )
 
         # 序列化

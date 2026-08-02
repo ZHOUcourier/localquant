@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { useMutation, useQuery } from '@tanstack/vue-query'
-import { Wifi, WifiOff, Database, Download, ShieldCheck, Loader2, Layers, RefreshCw } from 'lucide-vue-next'
+import { Wifi, WifiOff, Database, Download, ShieldCheck, Loader2, Layers, RefreshCw, CalendarClock } from 'lucide-vue-next'
 import { Card, Button, Input, Select, Badge, Dialog, Table, ScrollArea } from '@/components/ui'
+import type { Column, BadgeVariant } from '@/components/ui'
 
 interface DataStatus {
   qmt_connected?: boolean
@@ -273,6 +274,112 @@ const referenceLabels: Record<string, string> = {
   capital: '股本记录',
   instrument: '合约详情',
 }
+
+// ── 每日批处理调度 ─────────────────────────────────────
+
+interface DailyJob {
+  job_name: string
+  status: 'running' | 'ok' | 'failed' | 'skipped'
+  trigger: string
+  detail: string
+  started_at: number | null
+  finished_at: number | null
+}
+
+interface SchedulerStatus {
+  enabled?: boolean
+  update_time?: string
+  recalc_time?: string
+  recent?: DailyJob[]
+}
+
+const jobLabels: Record<string, string> = {
+  market_update: '行情增量·参考快照',
+  factor_recalc: '因子池重算',
+}
+
+const jobStatusBadge: Record<string, BadgeVariant> = {
+  running: 'warning',
+  ok: 'success',
+  failed: 'error',
+  skipped: 'default',
+}
+
+const runSteps = ref<string[]>([])
+
+const { data: schedulerStatus, refetch: refetchScheduler } = useQuery<SchedulerStatus>({
+  queryKey: ['scheduler-status'],
+  queryFn: () => fetch('/api/ops/scheduler').then((r) => r.json()),
+})
+
+const schedulerRunMutation = useMutation({
+  mutationFn: async () => {
+    const body = runSteps.value.length
+      ? JSON.stringify({ steps: runSteps.value })
+      : '{}'
+    const res = await fetch('/api/ops/scheduler/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    const resp = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(resp?.detail ?? `调度失败 (HTTP ${res.status})`)
+    return resp as Record<string, string>
+  },
+  onSuccess: () => {
+    refetchScheduler()
+    refetchProvenance()
+  },
+})
+
+function fmtJobTime(ms: number | null | undefined) {
+  if (!ms) return '—'
+  const d = new Date(ms)
+  return d.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function toggleStep(s: string) {
+  if (runSteps.value.includes(s)) {
+    runSteps.value = runSteps.value.filter((x) => x !== s)
+  } else {
+    runSteps.value = [...runSteps.value, s]
+  }
+}
+
+// ── 分析溯源 ─────────────────────────────────────────
+
+interface ProvenanceRow {
+  id: number
+  kind: string
+  entity_id: string
+  entity_name: string
+  params_json?: Record<string, unknown>
+  metrics_json?: Record<string, unknown>
+  notes: string
+  source: string
+  created_at: number | null
+}
+
+const provKind = ref('')
+
+const { data: provenanceData, refetch: refetchProvenance } = useQuery<ProvenanceRow[]>({
+  queryKey: ['provenance', provKind],
+  queryFn: () =>
+    fetch(`/api/ops/provenance?limit=50&kind=${provKind}`).then((r) => r.json()),
+})
+
+const provenanceColumns: Column[] = [
+  { key: 'id', title: 'ID', dataIndex: 'id' },
+  { key: 'kind', title: '类型', dataIndex: 'kind' },
+  { key: 'entity_name', title: '实体', dataIndex: 'entity_name' },
+  { key: 'source', title: '来源', dataIndex: 'source' },
+  { key: 'created_at', title: '时间', dataIndex: 'created_at' },
+]
 </script>
 
 <template>
@@ -539,6 +646,132 @@ const referenceLabels: Record<string, string> = {
             参考数据随批量下载自动快照；指数历史成分从首次快照日起逐日积累，更早区间仍为当前成分（存在幸存者偏差）。
           </p>
         </div>
+      </Card>
+    </div>
+
+    <!-- 每日批处理调度 -->
+    <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-1">
+        <Card title="每日批处理调度">
+          <div class="space-y-3 py-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-[#646262]">调度开关</span>
+              <Badge :variant="schedulerStatus?.enabled ? 'success' : 'default'">
+                {{ schedulerStatus?.enabled ? '已启用' : '已停用' }}
+              </Badge>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-[#646262]">行情增量·快照</span>
+              <span class="text-sm font-mono text-[#007aff]">{{ schedulerStatus?.update_time ?? '—' }}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-[#646262]">因子池重算</span>
+              <span class="text-sm font-mono text-[#007aff]">{{ schedulerStatus?.recalc_time ?? '—' }}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-[#646262]">运行范围</span>
+              <div class="flex flex-wrap gap-1.5 justify-end">
+                <button
+                  v-for="s in ['market', 'recalc'] as const"
+                  :key="s"
+                  class="text-[11px] px-2 py-0.5 rounded-full border"
+                  :class="runSteps.includes(s) ? 'bg-[#007aff] text-white border-[#007aff]' : 'border-[#d5d2d2] text-[#646262]'"
+                  @click="toggleStep(s)"
+                >
+                  {{ s === 'market' ? '行情' : '重算' }}
+                </button>
+              </div>
+            </div>
+            <div class="pt-1 flex gap-2">
+              <Button variant="primary" size="sm" class="flex-1" :loading="schedulerRunMutation.isPending.value" @click="schedulerRunMutation.mutate()">
+                <CalendarClock :size="14" class="mr-1" />
+                手动运行
+              </Button>
+              <Button variant="secondary" size="sm" @click="refetchScheduler()">
+                <RefreshCw :size="14" />
+              </Button>
+            </div>
+            <div v-if="schedulerRunMutation.data.value" class="text-[11px] font-mono text-[#30d158]">
+              {{ Object.entries(schedulerRunMutation.data.value).map(([k, v]) => `${k}=${v}`).join(' · ') }}
+            </div>
+            <div v-if="schedulerRunMutation.isError.value" class="text-[11px] font-mono text-[#ff3b30]">
+              {{ schedulerRunMutation.error.value instanceof Error ? schedulerRunMutation.error.value.message : '运行失败' }}
+            </div>
+            <p class="text-[11px] text-[#646262] leading-relaxed pt-1 border-t border-[#e3e0e0]">
+              QMT 未连接或本地无行情缓存时，对应步骤自动跳过（不伪造），仅在有真实数据时执行。
+            </p>
+          </div>
+        </Card>
+      </div>
+
+      <div class="lg:col-span-2">
+        <Card title="最近任务">
+          <div v-if="!schedulerStatus?.recent?.length" class="py-6 text-center text-xs text-[#646262]">
+            暂无运行记录 — 点击「手动运行」或等待定时调度
+          </div>
+          <ScrollArea v-else class="max-h-[300px]">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-xs text-[#646262]">
+                  <th class="py-1.5 pr-2 font-normal">任务</th>
+                  <th class="py-1.5 pr-2 font-normal">状态</th>
+                  <th class="py-1.5 pr-2 font-normal">触发</th>
+                  <th class="py-1.5 pr-2 font-normal">时间</th>
+                  <th class="py-1.5 font-normal">详情</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(job, i) in schedulerStatus?.recent" :key="i" class="border-t border-[#f1eeee] align-top">
+                  <td class="py-2 pr-2 text-[13px] text-[#201d1d]">{{ jobLabels[job.job_name] ?? job.job_name }}</td>
+                  <td class="py-2 pr-2"><Badge :variant="jobStatusBadge[job.status] ?? 'default'">{{ job.status }}</Badge></td>
+                  <td class="py-2 pr-2 text-xs text-[#646262]">{{ job.trigger === 'schedule' ? '定时' : '手动' }}</td>
+                  <td class="py-2 pr-2 text-xs font-mono text-[#646262]">{{ fmtJobTime(job.started_at) }}</td>
+                  <td class="py-2 text-xs font-mono text-[#646262] max-w-[340px] truncate" :title="job.detail">{{ job.detail || '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </ScrollArea>
+        </Card>
+      </div>
+    </div>
+
+    <!-- 分析溯源 -->
+    <div class="mt-4">
+      <Card title="分析溯源 (Provenance)">
+        <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+          <p class="text-xs text-[#646262]">
+            每次因子/回测/组合计算记录 universe、复权、参数等，保证任何数字可复现
+          </p>
+          <div class="flex items-center gap-2">
+            <Select
+              v-model="provKind"
+              :options="[
+                { value: '', label: '全部类型' },
+                { value: 'factor', label: '因子' },
+                { value: 'backtest', label: '回测' },
+              ]"
+              class="w-[130px]"
+            />
+          </div>
+        </div>
+        <div v-if="!provenanceData?.length" class="py-5 text-center text-xs text-[#646262]">
+          暂无溯源记录 — 因子重算/回测后自动写入
+        </div>
+        <ScrollArea v-else class="max-h-[320px]">
+          <Table :columns="provenanceColumns" :data-source="provenanceData" row-key="id">
+            <template #cell-entity_name="{ value, record }">
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[13px] text-[#201d1d]">{{ value || record?.entity_id || '—' }}</span>
+                <span v-if="record?.params_json && Object.keys(record.params_json).length" class="text-[11px] font-mono text-[#646262] truncate max-w-[240px]" :title="JSON.stringify(record.params_json)">
+                  {{ JSON.stringify(record.params_json) }}
+                </span>
+              </div>
+            </template>
+            <template #cell-created_at="{ value }">
+              <span class="text-xs font-mono text-[#646262]">{{ fmtJobTime(value as number | null) }}</span>
+            </template>
+          </Table>
+        </ScrollArea>
       </Card>
     </div>
 

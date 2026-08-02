@@ -115,6 +115,7 @@ class QMTClient:
         tables: list[str] | None = None,
         start_time: str = "",
         end_time: str = "",
+        report_type: str = "announce_time",
     ) -> dict:
         """获取财务数据
 
@@ -123,9 +124,11 @@ class QMTClient:
             tables: 财务表名列表
             start_time: 开始时间
             end_time: 结束时间
+            report_type: 取值口径。'announce_time'=公告披露日期（用于财务因子，防前视）；
+                        'report_time'=报告截止日期。默认 announce_time，这才是对的。
 
         Returns:
-            {stock_code: DataFrame} 字典
+            {stock_code: {table: DataFrame}} 字典
         """
         self._ensure_connected()
         result: dict = {}
@@ -135,12 +138,51 @@ class QMTClient:
                 table_list=tables or [],
                 start_time=start_time,
                 end_time=end_time,
+                report_type=report_type,
             )
             if isinstance(data, dict):
                 result = data
+        except TypeError:
+            # 老版本 xtquant 可能不支持 report_type 关键字，回退位置参数
+            try:
+                data = self._xtdata.get_financial_data(
+                    codes, tables or [], start_time, end_time, report_type
+                )
+                if isinstance(data, dict):
+                    result = data
+            except Exception as e:
+                logger.warning(f"Failed to get financial data (fallback): {e}")
         except Exception as e:
             logger.warning(f"Failed to get financial data: {e}")
         return result
+
+    def download_financial(
+        self,
+        codes: list[str],
+        tables: list[str] | None = None,
+        start_time: str = "",
+        end_time: str = "",
+        callback=None,
+    ) -> None:
+        """下载财务数据到本地（按公告日 m_anntime 范围筛选）"""
+        self._ensure_connected()
+        try:
+            self._xtdata.download_financial_data2(
+                stock_list=codes,
+                table_list=tables or [],
+                start_time=start_time,
+                end_time=end_time,
+                callback=callback,
+            )
+        except TypeError:
+            try:
+                self._xtdata.download_financial_data(
+                    stock_list=codes, table_list=tables or []
+                )
+            except Exception as e:
+                logger.warning(f"Failed to download financial data (fallback): {e}")
+        except Exception as e:
+            logger.warning(f"Failed to download financial data: {e}")
 
     # ── 板块 ─────────────────────────────────────────────────
 

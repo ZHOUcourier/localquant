@@ -26,6 +26,7 @@ export const router = createRouter({
         { path: 'skills', component: () => import('./pages/Skills.vue') },
         { path: 'runs', component: () => import('./pages/RunCenter.vue') },
         { path: 'experiments', component: () => import('./pages/Experiments.vue') },
+        { path: 'risk', component: () => import('./pages/RiskAnalysis.vue') },
         { path: 'settings', component: () => import('./pages/Settings.vue') },
       ],
     },

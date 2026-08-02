@@ -133,6 +133,72 @@ def panel_to_dict(panel: pd.DataFrame) -> dict:
     return result
 
 
+def build_cross_section_mask(
+    panels: dict,
+    min_list_days: int = 20,
+    exclude_st: bool = True,
+) -> pd.DataFrame | None:
+    """构建每日「可交易」掩码（True=可交易），供因子 IC/分层截面过滤。
+
+    规则组合（任一为 False 即排除）:
+      - 停牌: 成交量=0 / 缺数据
+      - ST: 最新合约名称含 ST（referrence instrument 快照）
+      - 次新股: 上市日距今 < min_list_days（缺 instrument 时不排除）
+
+    Returns:
+        DataFrame(index=date, columns=code)，无可判定信息时返回 None
+    """
+    close = panels.get("close")
+    if close is None or close.empty:
+        return None
+    mask = pd.DataFrame(True, index=close.index, columns=close.columns, dtype=float)
+
+    # 停牌（成交量>0 才可交易）
+    volume = panels.get("volume")
+    if volume is not None and not volume.empty:
+        vol = volume.reindex(index=close.index, columns=close.columns).fillna(0.0)
+        mask = mask & (vol > 0)
+
+    if exclude_st:
+        try:
+            from backend.services import reference_data
+
+            inst = reference_data.load_instrument_frame()
+            if inst is not None and not inst.empty:
+                names = inst["name"].fillna("").str.upper()
+                st_codes = set(names[names.str.contains("ST")].index)
+                for c in st_codes:
+                    if c in mask.columns:
+                        mask[c] = False
+        except Exception:
+            pass
+
+    if min_list_days > 0:
+        try:
+            from backend.services import reference_data
+
+            inst = reference_data.load_instrument_frame()
+            if inst is not None and "list_date" in inst.columns:
+                now = close.index[-1]
+                for code, row in inst.iterrows():
+                    ld = row.get("list_date")
+                    if not ld or code not in mask.columns:
+                        continue
+                    try:
+                        ld = pd.to_datetime(str(ld))
+                        if (now - ld).days < min_list_days:
+                            mask[code] = False
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    if mask.all().all():
+        # 没有任何可判定信息，视为无过滤
+        return mask
+    return mask
+
+
 # ── 缓存覆盖度 ─────────────────────────────────────────────
 
 # {path: (mtime, entry)} — 文件未变时免重复读 parquet

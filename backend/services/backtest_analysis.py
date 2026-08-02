@@ -24,6 +24,9 @@ class BacktestAnalysisService:
         down_limit: pd.DataFrame | None = None,
         high: pd.DataFrame | None = None,
         low: pd.DataFrame | None = None,
+        take_profit: float = 0.0,
+        stop_loss: float = 0.0,
+        trailing_stop: float = 0.0,
     ) -> dict:
         """
         向量化回测（权重空间，T 日信号 → T+1 持仓）。
@@ -44,6 +47,10 @@ class BacktestAnalysisService:
         up_limit / down_limit / high / low : DataFrame | None
             涨跌停近似价与高低价：一字涨停禁买入加仓、一字跌停禁卖出减仓，
             当日调仓意图顺延。缺失时不处理并记入 assumptions。
+        take_profit / stop_loss : float（默认 0=关闭）
+            单仓止盈 / 止损比例（0.08 = +8% 止盈 / -8% 止损）。基于前收盘判定，T 日执行。
+        trailing_stop : float（默认 0=关闭）
+            移动止损比例：单仓从建仓后最高点回撤达该比例即止（仅作用于盈利仓 r_prev>=1）。
 
         Returns
         -------
@@ -84,16 +91,49 @@ class BacktestAnalysisService:
             up_board = np.zeros((len(common_idx), len(common_cols)), dtype=bool)
             down_board = np.zeros_like(up_board)
 
-        # 逐日演进：冻结/顺延规则依赖前一日实际持仓，无法纯 shift 向量化
+        # 逐日演进：冻结/顺延/止盈止损等交易规则依赖前一日实际持仓，无法纯 shift 向量化
         tgt_arr = targets.to_numpy(dtype=float)
+        pr_arr = price_returns.to_numpy(dtype=float)
         n_days, n_assets = tgt_arr.shape
         pos_arr = np.zeros_like(tgt_arr)
         buy_arr = np.zeros_like(tgt_arr)
         sell_arr = np.zeros_like(tgt_arr)
         prev = np.zeros(n_assets)
+        risk_exits = 0
+
+        # 风控开启时，逐仓维护「建仓以来累计收益」r_prev 与「持仓期最高」peak_prev
+        # （基准 1.0；按当日收盘更新 → 于当日收盘判定、次日 T+1 触发卖出，避免用当日盘中价前视）
+        manage = bool(take_profit or stop_loss or trailing_stop)
+        r_prev = np.ones(n_assets)
+        peak_prev = np.ones(n_assets)
+        risk_lock = np.zeros(n_assets, dtype=bool)  # True=风控退出后，信号归零前保持空仓
+
         for t in range(n_days):
-            desired = np.nan_to_num(tgt_arr[t])
+            desired = np.nan_to_num(tgt_arr[t]).copy()
+
+            # 风控锁：退出后保持空仓，直到策略自身信号归零才允许日后重新开仓
+            if manage:
+                risk_lock[np.abs(tgt_arr[t]) <= 1e-12] = False
+                if risk_lock.any():
+                    desired[risk_lock] = 0.0
+
+            # 止盈 / 止损 / 移动止损（用截至 t-1 收盘的持仓收益判定，T 日执行）
+            if manage and t > 0:
+                trig = np.zeros(n_assets, dtype=bool)
+                if stop_loss > 0:
+                    trig |= r_prev - 1 <= -stop_loss
+                if take_profit > 0:
+                    trig |= r_prev - 1 >= take_profit
+                if trailing_stop > 0:
+                    trig |= (peak_prev - r_prev >= trailing_stop) & (r_prev >= 1)
+                exit_now = trig & (prev > 0.0)
+                if exit_now.any():
+                    desired[exit_now] = 0.0
+                    risk_lock[exit_now] = True
+                    risk_exits += int(exit_now.sum())
+
             actual = desired.copy()
+            was_held = prev > 0.0
             frozen = ~tradable_arr[t]
             actual[frozen] = prev[frozen]
             buy_blocked = up_board[t] & (desired > prev)
@@ -105,6 +145,33 @@ class BacktestAnalysisService:
             sell_arr[t] = np.clip(-trade, 0.0, None)
             pos_arr[t] = actual
             prev = actual
+
+            # 收盘后更新持仓收益轨迹（供下一日风控判定）
+            if manage:
+                day_factor = 1.0 + np.nan_to_num(pr_arr[t])
+                hold_after = actual > 0.0
+                r_prev = np.where(
+                    hold_after & was_held,
+                    r_prev * day_factor,
+                    np.where(hold_after, day_factor, r_prev),
+                )
+                peak_prev = np.where(
+                    hold_after, np.maximum(peak_prev, r_prev), peak_prev
+                )
+
+        if manage:
+            notes = []
+            if stop_loss > 0:
+                notes.append(f"止损 {stop_loss:.1%}")
+            if take_profit > 0:
+                notes.append(f"止盈 {take_profit:.1%}")
+            if trailing_stop:
+                notes.append(f"移动止损 {trailing_stop:.1%}")
+            assumptions.append(
+                "逐仓风控(" + "/".join(notes) + ")：按 T-1 收盘判定、T 日执行，共触发 "
+                + str(risk_exits)
+                + " 次卖出；持仓收益按复利近似（连续再平衡下为近似），不影响 T+1 语义"
+            )
 
         positions = pd.DataFrame(pos_arr, index=common_idx, columns=common_cols)
         trades = pd.DataFrame(buy_arr + sell_arr, index=common_idx, columns=common_cols)

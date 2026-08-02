@@ -904,11 +904,17 @@ def BOLLINGERDIFF(a, b):
     return 2 * (a - b)
 
 
-def build_operator_namespace(panels: dict, industry_map: dict | None = None) -> dict:
+def build_operator_namespace(
+    panels: dict,
+    industry_map: dict | None = None,
+    fundamental: dict | None = None,
+) -> dict:
     """构建公式求值命名空间：基础字段 + vwap/returns + 全部算子（大小写别名）
 
     panels: {"open","high","low","close","volume","amount"} 面板 DataFrame
     industry_map: 可选 {code: industry}，供 INDUSTRY_NEUTRALIZE 算子使用
+    fundamental: 可选 {fund_pb/fund_pe/fund_eps/fund_roe/...}: 点位(公告日)面板，
+        使财务/估值因子可直接用 fund_XXX 表达式。
     """
     # 行业映射注入模块全局，供 INDUSTRY_NEUTRALIZE 无参调用时取用
     if industry_map:
@@ -945,6 +951,9 @@ def build_operator_namespace(panels: dict, industry_map: dict | None = None) -> 
         "RETURNS_": close.pct_change() if close is not None else None,
         "adv20": ADV(volume, 20) if volume is not None else None,
         "ADV20": ADV(volume, 20) if volume is not None else None,
+        # 基本面（公告日点位）字段：fund_pe / fund_pb / fund_eps / fund_roe ...
+        **({f: p for f, p in fundamental.items()} if fundamental else {}),
+        **({f.upper(): p for f, p in fundamental.items()} if fundamental else {}),
     }
 
     # 注册全部算子：大写原名 + 小写别名

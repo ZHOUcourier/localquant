@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # 数据库
     database_url: str = "sqlite+aiosqlite:///./data/localquant.db"
 
+    # 每日批处理（自动更新）
+    scheduler_enabled: bool = True
+    scheduler_update_time: str = "15:45"  # 收盘后增量行情 + 快照
+    scheduler_recalc_time: str = "18:30"  # 次日开盘前重算因子池（较晚确保公告数据回补）
+    scheduler_recalc_periods: list[int] = [1, 5, 10, 20]
+    scheduler_max_recalc: int = 500  # 单次批处理最多重算因子数（保护）
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

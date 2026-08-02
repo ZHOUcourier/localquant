@@ -157,6 +157,7 @@ class FactorResearchService:
         factor_data: pd.DataFrame,
         return_data: pd.DataFrame,
         periods: list[int] = None,
+        mask: pd.DataFrame | None = None,
     ) -> dict:
         """IC 分析
 
@@ -165,6 +166,8 @@ class FactorResearchService:
             return_data: 收益率 DataFrame (index=date, columns=stocks)，
                 r[T] 为 T-1→T 日收益（close.pct_change 口径）
             periods: 分析周期列表
+            mask: 可选 每日可交易掩码（True=可交易，index=date, columns=stock）。
+                传则每期截面只统计可交易标的（排除 ST/次新/一字/停牌，防污染 IC）。
 
         Returns:
             IC 时序、IC 均值、IC_IR、RankIC 等
@@ -189,6 +192,10 @@ class FactorResearchService:
                 future_returns = ((1.0 + fwd_rows).prod(min_count=1) - 1.0).dropna()
 
                 common = factor_values.index.intersection(future_returns.index)
+                if mask is not None and date in mask.index:
+                    tradable_types = mask.loc[date]
+                    tradable = tradable_types[tradable_types.fillna(0).astype(float) > 0]
+                    common = common.intersection(tradable.index)
                 if len(common) < 10:
                     continue
 
@@ -251,6 +258,7 @@ class FactorResearchService:
         factor_data: pd.DataFrame,
         return_data: pd.DataFrame,
         n_groups: int = 5,
+        mask: pd.DataFrame | None = None,
     ) -> dict:
         """分层收益分析
 
@@ -270,6 +278,10 @@ class FactorResearchService:
             )
 
             common = factor_values.index.intersection(returns.index)
+            if mask is not None and date in mask.index:
+                mrow = mask.loc[date]
+                tradable = mrow[mrow.fillna(0).astype(float) > 0]
+                common = common.intersection(tradable.index)
             if len(common) < n_groups * 2:
                 continue
 
@@ -347,6 +359,7 @@ class FactorResearchService:
         periods: list[int] = None,
         n_groups: int = 5,
         method: str = "rank_ic",
+        mask: pd.DataFrame | None = None,
     ) -> dict:
         """完整单因子分析报告（对齐官网因子分析节点）
 
@@ -355,7 +368,7 @@ class FactorResearchService:
         为「因子分析」节点与因子研究页共用入口，全部基于 QMT 行情面板做截面计算。
         """
         periods = periods or [1, 5, 10, 20]
-        ic = self.ic_analysis(factor_data, return_data, periods)
+        ic = self.ic_analysis(factor_data, return_data, periods, mask=mask)
 
         # 各周期 IC 汇总表
         use_rank = method == "rank_ic"
@@ -393,7 +406,9 @@ class FactorResearchService:
         ).sort_index()
 
         # 分组日收益 + 基准（全体等权）
-        gd, bench = self._group_daily_returns(factor_data, return_data, n_groups)
+        gd, bench = self._group_daily_returns(
+            factor_data, return_data, n_groups, mask=mask
+        )
         labels = sorted(gd.keys(), key=lambda x: int(x[1:]))
         tov = self._turnover_by_group(factor_data, n_groups)
 
@@ -495,7 +510,8 @@ class FactorResearchService:
     # ── full_factor_analysis 辅助方法 ──────────────────────────
 
     def _group_daily_returns(
-        self, factor_data: pd.DataFrame, return_data: pd.DataFrame, n_groups: int
+        self, factor_data: pd.DataFrame, return_data: pd.DataFrame, n_groups: int,
+        mask: pd.DataFrame | None = None,
     ) -> tuple[dict, pd.Series]:
         """按截面分位数分组，返回 {组标签: 日收益Series} 与 基准(全体等权)日收益
 
@@ -511,6 +527,10 @@ class FactorResearchService:
                 continue
             rv = return_data.loc[nxt].dropna()
             common = fv.index.intersection(rv.index)
+            if mask is not None and date in mask.index:
+                mrow = mask.loc[date]
+                tradable = mrow[mrow.fillna(0).astype(float) > 0]
+                common = common.intersection(tradable.index)
             if len(common) < n_groups * 2:
                 continue
             f = fv[common]
@@ -879,6 +899,43 @@ class FactorResearchService:
             for name, v in ics.items()
         }
 
+    def quantile_analysis_net(
+        self,
+        factor_data: pd.DataFrame,
+        return_data: pd.DataFrame,
+        n_groups: int = 5,
+        cost_rate: float = 0.001,
+    ) -> dict:
+        """分层收益的「扣费后」口径：分组日收益再扣掉因换手产生的双边交易成本。
+
+        换手 = 相邻期成分股集合同侧变化占比，成本 = rspcost_rate × 换手 × 2。
+        解决"换手率高但净收益被成本吃掉"的假象。
+        """
+        gd, _ = self._group_daily_returns(factor_data, return_data, n_groups)
+        tov = self._turnover_by_group(factor_data, n_groups)
+
+        out: dict[str, dict] = {}
+        gross_total = self.quantile_analysis(factor_data, return_data, n_groups)
+        mean_gross = gross_total.get("mean_return_by_group", {})
+        for lab in gd.keys():
+            label = lab[1:]  # G1 → 1
+            turnover = float(tov.get(lab, 0.0))
+            daily = gd[lab].dropna()
+            net_daily = daily - cost_rate * turnover * 2.0
+            net_cum = float(np.prod(1 + net_daily) - 1)
+            gross_cum = float(np.prod(1 + daily) - 1)
+            mean_net = float(net_daily.mean())
+            out[label] = {
+                "gross_cum": gross_cum,
+                "net_cum": net_cum,
+                "net_vs_gross": net_cum - gross_cum,
+                "turnover": turnover,
+                "cost_annual_est": cost_rate * turnover * 2.0 * 252,
+                "mean_gross": float(mean_gross.get(label, 0.0)),
+                "mean_net": mean_net,
+            }
+        return {"by_group": out, "cost_rate": cost_rate, "n_groups": n_groups}
+
     # ── 预置因子相关方法 ─────────────────────────────────────────────
 
     async def list_preset_factors(
@@ -1076,6 +1133,31 @@ class FactorResearchService:
                     "message",
                     "本地行情数据不足，未重算 — 请先在数据管理页下载足够的股票与区间数据。",
                 )
+            # 溯源：把本次重算的参数与指标写进 provenance，保证可复现
+            try:
+                from backend.services.provenance import record_provenance
+
+                await record_provenance(
+                    kind="factor",
+                    entity_id=str(factor_id),
+                    entity_name=factor.get("factor_name", ""),
+                    params={
+                        "factor_code": factor.get("factor_code", ""),
+                        "formula": factor.get("formula", ""),
+                        "universe_n": recalc.get("n_stocks", 0),
+                        "n_dates": recalc.get("n_dates", 0),
+                        "adj": "front",
+                        "periods": [1, 5, 10, 20],
+                        "stock_pool": factor.get("stock_pool", ""),
+                    },
+                    metrics=factor.get("recalc_mode") == "recomputed"
+                    and recalc.get("metrics")
+                    or {},
+                    notes=factor.get("recalc_message", ""),
+                    source="manual" if factor.get("recalc_mode") == "recomputed" else "noop",
+                )
+            except Exception as e:
+                logger.warning(f"记录因子溯源失败: {e}")
             return factor
         finally:
             await db.close()
@@ -1112,14 +1194,32 @@ class FactorResearchService:
             ns = build_operator_namespace(
                 panels, industry_map=reference_data.load_industry_map()
             )
+            # 注入基本面（公告日点位, 可选；无则不注入, 公式引用 fund_xxx 会报错并提示）
+            try:
+                from backend.services.fundamental import build_fundamental_panels
+
+                fund = build_fundamental_panels(codes, panels["close"].index)
+                if fund:
+                    ns.update({f"fund_{f}": p for f, p in fund.items()})
+                    ns.update({f"FUND_{f.upper()}": p for f, p in fund.items()})
+            except Exception:
+                pass
             factor_df = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
             if isinstance(factor_df, pd.Series):
                 factor_df = factor_df.to_frame()
             if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
                 return {"ok": False, "message": "公式未产出有效因子面板"}
             return_data = close.pct_change()
+            mask = None
+            try:
+                from backend.services.market_data import build_cross_section_mask
+
+                mask = build_cross_section_mask(panels)
+            except Exception:
+                mask = None
             report = self.full_factor_analysis(
-                factor_df.dropna(how="all"), return_data, periods=[1, 5, 10, 20]
+                factor_df.dropna(how="all"), return_data, periods=[1, 5, 10, 20],
+                mask=mask,
             )
             s = report["summary"]
             metrics = {

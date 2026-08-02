@@ -29,6 +29,9 @@ class BacktestInput(BaseModel):
     stamp_tax: float = 0.0005  # 卖出印花税
     normalize: str = "long_only"  # 权重归一方式
     frequency: str = "1d"  # 回测频率
+    take_profit: float = 0.0  # 单仓止盈比例（0=关闭）
+    stop_loss: float = 0.0  # 单仓止损比例（0=关闭）
+    trailing_stop: float = 0.0  # 移动止损比例（0=关闭）
 
 
 @ui(
@@ -42,6 +45,9 @@ class BacktestInput(BaseModel):
     commission_rate={"input_type": "number_field"},
     slippage={"input_type": "number_field"},
     stamp_tax={"input_type": "number_field"},
+    take_profit={"input_type": "number_field"},
+    stop_loss={"input_type": "number_field"},
+    trailing_stop={"input_type": "number_field"},
     normalize={
         "input_type": "combobox",
         "options": ["long_only", "dollar_neutral", "none"],
@@ -79,6 +85,8 @@ class BacktestOutput(BaseModel):
         "volume/high/low 为可选连线：提供后启用停牌冻结与一字板不可成交处理，未提供时不处理并在 assumptions 中明示",
         "normalize 默认 long_only（正信号按日归一 Σw=1，避免信号值直接作权重的隐性杠杆），可选 dollar_neutral / none",
         "佣金率默认 0.0008，滑点默认 0，卖出印花税默认 0.0005；T 日信号 T+1 执行；指标按 252 交易日年化",
+        "止盈/止损/移动止损（0 关闭）：单仓逐仓风控，基于 T-1 收盘判定、T 日执行，避免当日盘中前视；命中会覆盖信号目标为平仓",
+        "移动止损 trailing_stop 仅对盈利仓生效：自建仓后最高点回撤达比例即止（锁盈）",
         "提供 benchmark 时额外输出跟踪误差/信息比率等相对基准指标",
     ],
 )
@@ -127,6 +135,9 @@ class BacktestNode(BaseWorkNode):
             down_limit=reference["down_limit"],
             high=high,
             low=low,
+            take_profit=input.take_profit,
+            stop_loss=input.stop_loss,
+            trailing_stop=input.trailing_stop,
         )
         assumptions = result["assumptions"]
         equity_curve = result["equity_curve"]

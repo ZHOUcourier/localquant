@@ -2,6 +2,8 @@
 
 from contextlib import asynccontextmanager
 
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -29,6 +31,13 @@ async def lifespan(app: FastAPI):
 
     comfy_queue.start()
     logger.info("ComfyUI queue worker started")
+
+    # 启动每日批处理调度协程（非阻塞）
+    if getattr(settings, "scheduler_enabled", True):
+        from backend.services.scheduler import scheduler_loop
+
+        _scheduler_task = asyncio.create_task(scheduler_loop())
+        logger.info("Daily scheduler started")
 
     yield
 
@@ -66,6 +75,10 @@ from backend.routes import (
     workflow,
 )
 from backend.routes import (
+    ops,
+    risk,
+)
+from backend.routes import (
     settings as settings_routes,
 )
 
@@ -81,6 +94,8 @@ app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 app.include_router(qube.router, prefix="/api/qube", tags=["qube"])
 app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
+app.include_router(risk.router, prefix="/api/risk", tags=["risk"])
+app.include_router(ops.router, prefix="/api/ops", tags=["ops"])
 
 # ComfyUI 协议适配层 + 官方前端托管（/comfy/api/* + /comfy/ws + /comfy/）
 from backend.comfy.routes import mount_comfy

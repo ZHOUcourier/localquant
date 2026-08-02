@@ -325,6 +325,38 @@ async def init_db():
             )
         """)
 
+        # 分析溯源（provenance）：记录每个因子/回测/组合结果的 universe、区间、
+        # 复权、基准、参数等，保证任何数字可被复现。kind: factor/backtest/workflow
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS provenance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                entity_id TEXT DEFAULT '',
+                entity_name TEXT DEFAULT '',
+                params_json TEXT DEFAULT '{}',
+                metrics_json TEXT DEFAULT '{}',
+                notes TEXT DEFAULT '',
+                source TEXT DEFAULT 'manual',
+                created_at INTEGER
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_provenance_kind ON provenance(kind)"
+        )
+
+        # 每日批处理日志（调度器触发/手动重跑都写一行，状态可见）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_name TEXT NOT NULL,
+                status TEXT DEFAULT 'running',   -- running / ok / failed / skipped
+                trigger TEXT DEFAULT 'schedule', -- schedule | manual
+                detail TEXT DEFAULT '',
+                started_at INTEGER,
+                finished_at INTEGER
+            )
+        """)
+
         await db.commit()
 
     # 内置技能 seed（幂等，按 name 去重）

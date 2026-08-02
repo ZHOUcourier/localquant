@@ -6,6 +6,7 @@ import {
   Play,
   History,
   Database,
+  Radar,
   PanelLeftClose,
   Settings,
   Sparkles,
@@ -23,6 +24,7 @@ const navItems = [
   { to: '/skills', icon: Wrench, label: '技能库', end: false },
   { to: '/runs', icon: Play, label: '回测记录', end: false },
   { to: '/experiments', icon: History, label: '实验管理', end: false },
+  { to: '/risk', icon: Radar, label: '风险分析', end: false },
   { to: '/settings', icon: Settings, label: '设置', end: false },
 ]
 

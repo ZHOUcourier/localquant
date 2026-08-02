@@ -42,7 +42,12 @@ _FACTOR_REFERENCE = {
         {"name": "adv20", "desc": "20 日平均成交量", "available": True},
         {
             "name": "turnover / market_cap",
-            "desc": "换手率 / 市值（需已下载）",
+            "desc": "换手率 / 市值（需已下载股本快照）",
+            "available": False,
+        },
+        {
+            "name": "fund_eps / fund_pb / fund_pe / fund_roe / FUND_*",
+            "desc": "基本面字段（需先下载财务数据；公告时间对齐，无前视）",
             "available": False,
         },
     ],
@@ -122,12 +127,16 @@ async def factor_reference():
     ref_status = reference_data.reference_status()
     cap_ready = ref_status.get("capital", {}).get("rows", 0) > 0
     ind_ready = ref_status.get("industry", {}).get("rows", 0) > 0
+    from backend.services import fundamental
+    fund_ready = fundamental.snapshot_status()["ready"]
 
     result = dict(_FACTOR_REFERENCE)
     fields = [dict(f) for f in _FACTOR_REFERENCE["fields"]]
     for f in fields:
         if f["name"] == "turnover / market_cap":
             f["available"] = cap_ready
+        elif f["name"].startswith("fund_"):
+            f["available"] = fund_ready
         elif f["name"] == "INDUSTRY_NEUTRALIZE":
             f["available"] = ind_ready
     result["fields"] = fields
