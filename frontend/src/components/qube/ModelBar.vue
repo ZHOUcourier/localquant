@@ -51,11 +51,13 @@ const engineOptions: SelectOption[] = [
 
 const sourceOptions = computed<SelectOption[]>(() =>
   isCli.value
-    ? cliTools.value.map((t) => ({
-        value: t.id,
-        label: t.available ? t.label : `${t.label}（未安装）`,
-        disabled: !t.available,
-      }))
+    ? [...cliTools.value]
+        .sort((a, b) => Number(b.available) - Number(a.available))
+        .map((t) => ({
+          value: t.id,
+          label: t.available ? t.label : `${t.label}（未安装）`,
+          disabled: !t.available,
+        }))
     : providers.value.map((p) => ({ value: p.id, label: p.label })),
 )
 
@@ -166,9 +168,10 @@ async function patch(body: Record<string, string>) {
   <!-- 加载完成前不渲染，避免先显示默认 API 再跳到实际配置的闪烁 -->
   <!-- 全部一行显示：引擎/源固定窄宽，模型/强度弹性收缩，模型名过长靠 Select 内 truncate 截断不换行 -->
   <div v-if="loaded" class="flex min-w-0 flex-nowrap items-center gap-1.5">
-    <div class="min-w-0 shrink-[3] basis-[104px]"><Select v-model="engineModel" :options="engineOptions" /></div>
-    <div class="min-w-0 flex-1"><Select v-model="sourceModel" :options="sourceOptions" :placeholder="isCli ? 'CLI 工具' : '供应商'" /></div>
-    <div v-if="showModel" class="min-w-0 flex-[1.4]"><Select v-model="modelModel" :options="modelOptions" placeholder="选择模型" /></div>
-    <div v-if="showEffort" class="min-w-0 shrink-0 basis-[100px]"><Select v-model="effortModel" :options="effortOptions" /></div>
+    <div class="min-w-0 shrink-0 basis-[96px]"><Select v-model="engineModel" :options="engineOptions" /></div>
+    <!-- 源/模型按钮按内容宽度显示完整，页面过窄时才压缩截断 -->
+    <div class="flex-1 min-w-max max-w-[100%]"><Select v-model="sourceModel" :options="sourceOptions" :placeholder="isCli ? 'CLI 工具' : '供应商'" /></div>
+    <div v-if="showModel" class="flex-1 min-w-max max-w-[100%]"><Select v-model="modelModel" :options="modelOptions" placeholder="选择模型" /></div>
+    <div v-if="showEffort" class="shrink-0 basis-[92px]"><Select v-model="effortModel" :options="effortOptions" /></div>
   </div>
 </template>

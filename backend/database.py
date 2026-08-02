@@ -177,12 +177,28 @@ async def init_db():
         # 迁移：早期 qube_sessions 无绑定列则补齐
         cursor = await db.execute("PRAGMA table_info(qube_sessions)")
         session_cols = [row[1] for row in await cursor.fetchall()]
+        if "pinned" not in session_cols:
+            await db.execute(
+                "ALTER TABLE qube_sessions ADD COLUMN pinned INTEGER DEFAULT 0"
+            )
         if "bound_type" not in session_cols:
             await db.execute(
                 "ALTER TABLE qube_sessions ADD COLUMN bound_type TEXT DEFAULT ''"
             )
             await db.execute(
                 "ALTER TABLE qube_sessions ADD COLUMN bound_id TEXT DEFAULT ''"
+            )
+        # 上下文压缩（Claude Code 式 compaction）：context_summary 保存压缩后的
+        # 早期会话摘要，compact_upto 为已被压缩进摘要的最末消息 id（其后的消息仍按原文发送）。
+        if "context_summary" not in session_cols:
+            await db.execute(
+                "ALTER TABLE qube_sessions ADD COLUMN context_summary TEXT DEFAULT ''"
+            )
+            await db.execute(
+                "ALTER TABLE qube_sessions ADD COLUMN compact_upto INTEGER DEFAULT 0"
+            )
+            await db.execute(
+                "ALTER TABLE qube_sessions ADD COLUMN compact_at INTEGER DEFAULT 0"
             )
 
         # QUBE 消息表（tool_calls_json：结构化工具轨迹 {calls, display_timeline, thinking}）
@@ -204,6 +220,12 @@ async def init_db():
         if "tool_calls_json" not in msg_cols:
             await db.execute(
                 "ALTER TABLE qube_messages ADD COLUMN tool_calls_json TEXT DEFAULT ''"
+            )
+        # 迁移：token 用量（usage_json：{prompt_tokens, completion_tokens,
+        # reasoning_tokens, total_tokens, estimated}，API 返回或本地估算）
+        if "usage_json" not in msg_cols:
+            await db.execute(
+                "ALTER TABLE qube_messages ADD COLUMN usage_json TEXT DEFAULT ''"
             )
 
         # QUBE 对话产出的因子（画板工件；与因子库 factors 表独立，存入因子库时落快照）

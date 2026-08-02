@@ -17,7 +17,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
 
@@ -34,6 +34,7 @@ from backend.services.ai_providers import (
     stream_cli,
 )
 from backend.services.qube_agent import AgentConfig, build_qube_tools, run_agent_loop
+from backend.services.tokenize import estimate_tokens, model_context_window
 
 router = APIRouter()
 
@@ -191,7 +192,9 @@ async def list_sessions():
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT * FROM qube_sessions ORDER BY updated_at DESC LIMIT 100"
+            "SELECT s.*, (SELECT COUNT(*) FROM qube_messages m WHERE m.session_id = s.id) "
+            "AS message_count FROM qube_sessions s "
+            "ORDER BY s.pinned DESC, s.updated_at DESC LIMIT 300"
         )
         return {
             "sessions": [
@@ -202,6 +205,8 @@ async def list_sessions():
                     "updated_at": r["updated_at"],
                     "bound_type": r["bound_type"],
                     "bound_id": r["bound_id"],
+                    "pinned": bool(r["pinned"]),
+                    "message_count": r["message_count"] or 0,
                 }
                 for r in await cursor.fetchall()
             ]
@@ -217,7 +222,8 @@ async def create_session():
     db = await get_db()
     try:
         await db.execute(
-            "INSERT INTO qube_sessions (id, title, created_at, updated_at) VALUES (?, '新对话', ?, ?)",
+            "INSERT INTO qube_sessions (id, title, created_at, updated_at, pinned) "
+            "VALUES (?, '新对话', ?, ?, 0)",
             (sid, now, now),
         )
         await db.commit()
@@ -227,27 +233,41 @@ async def create_session():
 
 
 class SessionUpdate(BaseModel):
-    title: str
+    title: Optional[str] = None
+    pinned: Optional[bool] = None
 
 
 @router.patch("/sessions/{session_id}")
 async def rename_session(session_id: str, body: SessionUpdate):
-    """重命名会话"""
-    title = body.title.strip()
-    if not title:
-        raise HTTPException(status_code=400, detail="标题不能为空")
+    """重命名会话 / 切换置顶"""
+    fields: dict[str, object] = {}
+    if body.title is not None:
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="标题不能为空")
+        fields["title"] = title[:120]
+    if body.pinned is not None:
+        fields["pinned"] = 1 if body.pinned else 0
+    if not fields:
+        return {"ok": True}
+    # 仅修改标题时更新时间（置顶/取消置顶不改动会话时间，保证归回原位）
+    if "title" in fields:
+        fields["updated_at"] = int(time.time())
     db = await get_db()
     try:
+        keys = ", ".join(f"{k} = ?" for k in fields)
         cursor = await db.execute(
-            "UPDATE qube_sessions SET title = ?, updated_at = ? WHERE id = ?",
-            (title[:60], int(time.time()), session_id),
+            f"UPDATE qube_sessions SET {keys} WHERE id = ?",  # noqa: S608
+            (*fields.values(), session_id),
         )
         await db.commit()
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="会话不存在")
     finally:
         await db.close()
-    return {"ok": True, "title": title[:60]}
+    if "title" in fields:
+        return {"ok": True, "title": fields["title"]}
+    return {"ok": True}
 
 
 @router.delete("/sessions")
@@ -287,56 +307,74 @@ async def list_messages(session_id: str):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT role, content, created_at, tool_calls_json FROM qube_messages "
+            "SELECT id, role, content, created_at, tool_calls_json, usage_json "
+            "FROM qube_messages "
             "WHERE session_id = ? ORDER BY id ASC",
             (session_id,),
         )
         messages = []
         for r in await cursor.fetchall():
             item = {
+                "id": r["id"],
                 "role": r["role"],
                 "content": r["content"],
                 "created_at": r["created_at"],
                 "tool_calls": None,
+                "usage": None,
             }
             if r["tool_calls_json"]:
                 try:
                     item["tool_calls"] = json.loads(r["tool_calls_json"])
                 except Exception:
                     item["tool_calls"] = None
+            if r["usage_json"]:
+                try:
+                    item["usage"] = json.loads(r["usage_json"])
+                except Exception:
+                    item["usage"] = None
             messages.append(item)
 
         cursor = await db.execute(
-            "SELECT bound_type, bound_id FROM qube_sessions WHERE id = ?",
+            "SELECT bound_type, bound_id, context_summary FROM qube_sessions WHERE id = ?",
             (session_id,),
         )
         sess = await cursor.fetchone()
         resume = None
         if sess and sess["bound_type"]:
             resume = {"kind": sess["bound_type"], "id": sess["bound_id"]}
-        return {"messages": messages, "workspace_resume": resume}
+        return {
+            "messages": messages,
+            "workspace_resume": resume,
+            "context_summary": sess["context_summary"] if sess else "",
+        }
     finally:
         await db.close()
 
 
-async def _save_message(
-    session_id: str, role: str, content: str, tool_calls: Optional[dict] = None
+async def _save_message(  # noqa: PLR0913
+    session_id: str,
+    role: str,
+    content: str,
+    tool_calls: Optional[dict] = None,
+    is_first_user: bool = False,
+    usage: Optional[dict] = None,
 ) -> None:
     now = int(time.time())
     db = await get_db()
     try:
         await db.execute(
-            "INSERT INTO qube_messages (session_id, role, content, created_at, tool_calls_json) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO qube_messages (session_id, role, content, created_at, "
+            "tool_calls_json, usage_json) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 session_id,
                 role,
                 content,
                 now,
                 json.dumps(tool_calls, ensure_ascii=False) if tool_calls else "",
+                json.dumps(usage, ensure_ascii=False) if usage else "",
             ),
         )
-        # 首条用户消息作为会话标题
+        # 首条用户消息作为会话标题（若 AI 自动标题可用会稍后覆盖）
         await db.execute(
             "UPDATE qube_sessions SET updated_at = ?, "
             "title = CASE WHEN title = '新对话' AND ? = 'user' THEN ? ELSE title END "
@@ -346,6 +384,48 @@ async def _save_message(
         await db.commit()
     finally:
         await db.close()
+    # 首次用户消息：后台尝试 AI 生成更贴切的短标题（best-effort，失败保留截断标题）
+    if is_first_user and role == "user":
+        _TITLE_TASKS.add(asyncio.create_task(_auto_title(session_id, content)))
+
+
+# 后台标题生成任务引用（避免 task 被 GC + FastAPI 关停时警告）
+_TITLE_TASKS: set[asyncio.Task] = set()
+
+
+async def _auto_title(session_id: str, content: str) -> None:
+    """用 QUBE 引擎把首条用户消息压缩成一个 ≤12 字标题，若已手动改名则不覆盖"""
+    try:
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT title FROM qube_sessions WHERE id = ?", (session_id,)
+            )
+            row = await cursor.fetchone()
+            if not row or row["title"] != content[:40]:
+                return  # 已被手动重命名/标题不是默认截断值，跳过
+        finally:
+            await db.close()
+        title = await qube_complete(
+            "你是对话标题生成器。请把下面这条量化投研对话的首条用户消息，"
+            "压缩成不超过 12 个汉字的简洁标题。只输出标题本身，"
+            "不要引号、冒号，不要任何解释。",
+            content,
+        )
+        title = title.strip().strip('"“” ').splitlines()[0].strip()[:40]
+        if not title or title.lower() in ("好的", "是", "标题"):
+            return
+        db = await get_db()
+        try:
+            await db.execute(
+                "UPDATE qube_sessions SET title = ? WHERE id = ? AND title = ?",
+                (title, session_id, content[:40]),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception as e:
+        logger.debug(f"QUBE 自动标题失败（保留默认标题）: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -377,22 +457,279 @@ def _resolve_qube_api() -> tuple[str, str, str]:
     return base_url, settings.qube_api_key, model
 
 
-async def _load_history(session_id: str, limit: int = 30) -> list[dict]:
+async def _count_messages(session_id: str) -> int:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT role, content FROM qube_messages WHERE session_id = ? "
+            "SELECT COUNT(*) AS n FROM qube_messages WHERE session_id = ?",
+            (session_id,),
+        )
+        row = await cursor.fetchone()
+        return row["n"] if row else 0
+    finally:
+        await db.close()
+
+
+async def _load_history(session_id: str, limit: int = 40) -> list[dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, role, content FROM qube_messages WHERE session_id = ? "
             "ORDER BY id DESC LIMIT ?",
             (session_id, limit),
         )
         rows = list(await cursor.fetchall())[::-1]
-        return [{"role": r["role"], "content": r["content"]} for r in rows]
+        return [
+            {"id": r["id"], "role": r["role"], "content": r["content"]} for r in rows
+        ]
     finally:
         await db.close()
 
 
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def _get_compaction(session_id: str) -> dict:
+    """读取会话的上下文压缩状态（摘要 + 压缩边界消息 id）"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT context_summary, compact_upto, compact_at FROM qube_sessions "
+            "WHERE id = ?",
+            (session_id,),
+        )
+        r = await cursor.fetchone()
+        if not r:
+            return {"summary": "", "compact_upto": 0, "compact_at": 0}
+        return {
+            "summary": r["context_summary"] or "",
+            "compact_upto": r["compact_upto"] or 0,
+            "compact_at": r["compact_at"] or 0,
+        }
+    finally:
+        await db.close()
+
+
+def _system_with_summary(summary: str) -> str:
+    """把压缩得到的早期会话摘要注入系统提示词（Claude Code 式 compaction）"""
+    base = get_system_prompt()
+    if not summary:
+        return base
+    return f"{base}\n\n[早期会话摘要（已压缩）— 仅作背景，勿重复追问]\n{summary}"
+
+
+async def _load_compacted_history(session_id: str, limit: int = 40) -> list[dict]:
+    """加载压缩边界之后的近期消息（压缩前的早前消息已并入 context_summary）"""
+    compact = await _get_compaction(session_id)
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, role, content FROM qube_messages WHERE session_id = ? "
+            "AND id > ? ORDER BY id DESC LIMIT ?",
+            (session_id, compact["compact_upto"], limit),
+        )
+        rows = list(await cursor.fetchall())[::-1]
+        return [
+            {"id": r["id"], "role": r["role"], "content": r["content"]}
+            for r in rows
+        ]
+    finally:
+        await db.close()
+
+
+async def _truncate_after(session_id: str, message_id: int) -> None:
+    """删除某条消息之后的所有消息（编辑/删除/重新生成的共用以截断）"""
+    db = await get_db()
+    try:
+        await db.execute(
+            "DELETE FROM qube_messages WHERE session_id = ? AND id > ?",
+            (session_id, message_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+@router.post("/messages/{message_id}/regenerate")
+async def regenerate_chat(session_id: str, message_id: int):
+    """重新生成：定位会话最后一条用户消息 → 截断其后 → 对其重新流式应答"""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="缺少 session_id")
+    history = await _load_compacted_history(session_id)  # (id, role, content) 升序
+    # 只允许针对"倒二"的消息（紧邻最后一条 AI 回复的用户消息）重新生成
+    user_idx = max(
+        (i for i, m in enumerate(history) if m["role"] == "user"), default=-1
+    )
+    if user_idx < 0:
+        raise HTTPException(status_code=400, detail="没有可重新生成的消息")
+    last_user = history[user_idx]
+    await _truncate_after(session_id, last_user["id"])
+    prior = [{"role": m["role"], "content": m["content"]} for m in history[:user_idx]]
+    engine = settings.qube_engine
+    api_cfg = _resolve_qube_api() if engine != "cli" else None
+    return StreamingResponse(
+        _stream_reply(session_id, prior, last_user["content"], api_cfg),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+async def _load_history_before(session_id: str, before_id: int) -> list[dict]:
+    """取 id < before_id 的消息（编辑场景：更新该条并截断后，作为重跑前史）"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT role, content FROM qube_messages WHERE session_id = ? AND id < ? "
+            "ORDER BY id ASC",
+            (session_id, before_id),
+        )
+        return [
+            {"role": r["role"], "content": r["content"]} for r in await cursor.fetchall()
+        ]
+    finally:
+        await db.close()
+
+
+class MessageEdit(BaseModel):
+    session_id: str
+    message_id: int
+    content: str
+
+
+@router.post("/chat/edit")
+async def edit_chat_message(body: MessageEdit):
+    """编辑某条用户消息：更新内容 → 截断其后 → 对其重新流式应答"""
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="消息不能为空")
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT role FROM qube_messages WHERE id = ? AND session_id = ?",
+            (body.message_id, body.session_id),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="消息不存在")
+        if row["role"] != "user":
+            raise HTTPException(status_code=400, detail="只能编辑用户消息")
+    finally:
+        await db.close()
+    await _truncate_after(body.session_id, body.message_id)
+    db = await get_db()
+    try:
+        now = int(time.time())
+        await db.execute(
+            "UPDATE qube_messages SET content = ?, created_at = ? "
+            "WHERE id = ? AND session_id = ?",
+            (content, now, body.message_id, body.session_id),
+        )
+        await db.execute(
+            "UPDATE qube_sessions SET updated_at = ? WHERE id = ?",
+            (now, body.session_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    history = await _load_history_before(body.session_id, body.message_id)
+    engine = settings.qube_engine
+    api_cfg = _resolve_qube_api() if engine != "cli" else None
+    return StreamingResponse(
+        _stream_reply(body.session_id, history, content, api_cfg),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+@router.delete("/messages/{message_id}")
+async def delete_message(session_id: str, message_id: int):
+    """删除某条消息及其之后的所有消息（截断会话）"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT COUNT(*) AS n FROM qube_messages WHERE id = ? AND session_id = ?",
+            (message_id, session_id),
+        )
+        row = await cursor.fetchone()
+        if not row or row["n"] == 0:
+            raise HTTPException(status_code=404, detail="消息不存在")
+        before = await db.execute(
+            "SELECT COUNT(*) AS n FROM qube_messages WHERE session_id = ? AND id < ?",
+            (session_id, message_id),
+        )
+        cnt = await before.fetchone()
+        await db.execute(
+            "DELETE FROM qube_messages WHERE session_id = ? AND id >= ?",
+            (session_id, message_id),
+        )
+        now = int(time.time())
+        if cnt and cnt["n"] > 0:
+            await db.execute(
+                "UPDATE qube_sessions SET updated_at = ? WHERE id = ?",
+                (now, session_id),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"ok": True}
+
+
+@router.get("/sessions/{session_id}/export")
+async def export_session(session_id: str):
+    """导出会话为 Markdown（投研记录归档）"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT title FROM qube_sessions WHERE id = ?", (session_id,)
+        )
+        sess = await cursor.fetchone()
+        if not sess:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        title = sess["title"]
+        cursor = await db.execute(
+            "SELECT id, role, content, created_at, tool_calls_json FROM qube_messages "
+            "WHERE session_id = ? ORDER BY id ASC",
+            (session_id,),
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    lines = [
+        f"# {title}",
+        "",
+        f"- 会话 ID：`{session_id}`",
+        f"- 导出时间：{time.strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "---",
+        "",
+    ]
+    for r in rows:
+        ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["created_at"]))
+        if r["role"] == "user":
+            lines.append(f"## 用户 · {ts}\n\n{r['content']}\n\n---\n")
+        else:
+            lines.append(f"## QUBE · {ts}\n\n{r['content'] or '*（无文本回复）*'}")
+            if r["tool_calls_json"]:
+                try:
+                    tc = json.loads(r["tool_calls_json"])
+                    names = [
+                        c.get("display_name") or c.get("name")
+                        for c in (tc.get("calls") or [])
+                    ]
+                    if names:
+                        lines.append(f"\n> 工具调用：{' → '.join(names)}")
+                except Exception:
+                    pass
+            lines.append("\n\n---\n")
+    body = "\n".join(lines)
+    filename = f"qube-{session_id[:8]}.md"
+    return Response(
+        content=body,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 async def qube_complete(system: str, user: str) -> str:
@@ -440,121 +777,49 @@ async def qube_complete(system: str, user: str) -> str:
         )
 
 
-@router.post("/chat")
-async def qube_chat(body: ChatRequest):
-    """QUBE 多轮对话（SSE），事件集对齐参考站协议：
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
-    api 引擎：{type: delta|thinking|tool_start|tool|done|error}
-      tool 事件携带结构化 call（name/args/result/display_name/各类 id）
-    cli 引擎：{delta} 增量 + {done}（CLI 自身即 agent，无工具事件）
+
+async def _stream_reply(
+    session_id: str,
+    history: list[dict],
+    user_content: str,
+    api_cfg: Optional[tuple[str, str, str]],
+):
+    """共享流式应答生成器（chat / edit / regenerate 复用）。
+
+    history 为不含本次 user 消息的前史（[{role, content}, ...]），
+    user_content 为本次要应答的用户内容（已由调用方落库/截断）。
+    api_cfg: (base_url, api_key, model)；cli 引擎传 None。
     """
-    if not body.message.strip():
-        raise HTTPException(status_code=400, detail="消息不能为空")
-
-    history = await _load_history(body.session_id)
-    await _save_message(body.session_id, "user", body.message)
-
     engine = settings.qube_engine
-    # api 引擎的配置错误要在响应开始前抛 400（SSE 开始后无法再改状态码）
-    api_cfg = _resolve_qube_api() if engine != "cli" else None
+    compact = await _get_compaction(session_id)
+    usage: dict[str, int] | None = None  # API usage；None 时在完成时本地估算
 
-    async def api_stream():
-        base_url, api_key, model = api_cfg
-        cfg = AgentConfig(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            system=get_system_prompt(),
-            tools=build_qube_tools(body.session_id),
-            effort=settings.qube_effort,
-        )
-        messages = [*history, {"role": "user", "content": body.message}]
-        # 结构化轨迹：text/tool 交替时间线 + 工具调用列表 + 思考文本
-        calls: list[dict] = []
-        timeline: list[dict] = []
-        text_buf: list[str] = []
-        thinking_buf: list[str] = []
-        pending_args: dict[str, dict] = {}
+    def _finalize_usage(
+        prompt: str, completion: str, reasoning: str = ""
+    ) -> dict[str, int]:
+        """拿到 usage 则原样补 estimated=False；缺失时用本地估算兜底"""
+        if usage:
+            return {**usage, "estimated": False}
+        return {
+            "prompt_tokens": estimate_tokens(prompt),
+            "completion_tokens": estimate_tokens(completion),
+            "reasoning_tokens": estimate_tokens(reasoning),
+            "total_tokens": estimate_tokens(prompt + completion),
+            "estimated": True,
+        }
 
-        def flush_text():
-            text = "".join(text_buf).strip()
-            if text:
-                timeline.append({"type": "text", "content": text})
-            text_buf.clear()
-
-        async for event in run_agent_loop(cfg, messages):
-            kind = event["type"]
-            if kind == "delta":
-                text_buf.append(event["text"])
-                yield _sse(event)
-            elif kind == "thinking":
-                thinking_buf.append(event["text"])
-                yield _sse(event)
-            elif kind == "tool_call":
-                flush_text()
-                pending_args[event["name"]] = event.get("args") or {}
-                yield _sse(
-                    {
-                        "type": "tool_start",
-                        "name": event["name"],
-                        "display_name": TOOL_DISPLAY_NAMES.get(
-                            event["name"], event["name"]
-                        ),
-                        "args": event.get("args") or {},
-                    }
-                )
-            elif kind == "tool_result":
-                try:
-                    result = json.loads(event.get("result") or "{}")
-                except Exception:
-                    result = {"raw": event.get("result")}
-                call = {
-                    "name": event["name"],
-                    "display_name": TOOL_DISPLAY_NAMES.get(
-                        event["name"], event["name"]
-                    ),
-                    "args": pending_args.pop(event["name"], {}),
-                    "result": result,
-                }
-                # 结构化 id 提升到顶层，供前端工具卡直接取用
-                for key in (
-                    "strategy_id",
-                    "factor_id",
-                    "backtest_run_id",
-                    "factor_analysis_id",
-                ):
-                    if isinstance(result, dict) and result.get(key):
-                        call[key] = result[key]
-                calls.append(call)
-                timeline.append({"type": "tool", "call_index": len(calls) - 1})
-                yield _sse({"type": "tool", "call": call})
-            elif kind == "done":
-                flush_text()
-                final = event.get("content", "")
-                tool_calls = None
-                if calls or thinking_buf:
-                    tool_calls = {
-                        "calls": calls,
-                        "display_timeline": timeline,
-                        "thinking": "".join(thinking_buf),
-                    }
-                if final.strip() or tool_calls:
-                    await _save_message(
-                        body.session_id, "assistant", final.strip(), tool_calls
-                    )
-                yield _sse(event)
-            elif kind == "error":
-                yield _sse(event)
-                return
-            else:
-                yield _sse(event)
-
-    async def cli_stream():
-        # CLI 无会话记忆：把系统提示 + 近几轮对话拼进一次性提示词
-        parts = [get_system_prompt(), ""]
+    if engine == "cli":
+        # CLI 无会话记忆：把系统提示 + 压缩摘要 + 近几轮对话拼进一次性提示词
+        parts = [_system_with_summary(compact["summary"]), ""]
         for m in history[-10:]:
             parts.append(f"{'用户' if m['role'] == 'user' else 'QUBE'}：{m['content']}")
-        parts.append(f"用户：{body.message}")
+        parts.append(f"用户：{user_content}")
         prompt = "\n".join(parts)
         full: list[str] = []
         try:
@@ -571,18 +836,319 @@ async def qube_chat(body: ChatRequest):
             return
         content = "".join(full).strip()
         if content:
-            await _save_message(body.session_id, "assistant", content)
+            await _save_message(
+                session_id,
+                "assistant",
+                content,
+                usage={
+                    "prompt_tokens": estimate_tokens(prompt),
+                    "completion_tokens": estimate_tokens(content),
+                    "reasoning_tokens": 0,
+                    "total_tokens": estimate_tokens(prompt + content),
+                    "estimated": True,  # CLI 无 usage 字段，本地估算
+                },
+            )
         yield _sse({"type": "done", "done": True, "content": content})
+        return
 
-    generator = cli_stream() if engine == "cli" else api_stream()
-    return StreamingResponse(
-        generator,
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
+    base_url, api_key, model = api_cfg
+    cfg = AgentConfig(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        system=_system_with_summary(compact["summary"]),
+        tools=build_qube_tools(session_id),
+        effort=settings.qube_effort,
+    )
+    messages = [
+        {"role": m["role"], "content": m["content"]} for m in history
+    ] + [{"role": "user", "content": user_content}]
+    # 结构化轨迹：text/tool 交替时间线 + 工具调用列表 + 思考文本
+    calls: list[dict] = []
+    timeline: list[dict] = []
+    text_buf: list[str] = []
+    thinking_buf: list[str] = []
+    pending_args: dict[str, dict] = {}
+
+    def flush_text():
+        text = "".join(text_buf).strip()
+        if text:
+            timeline.append({"type": "text", "content": text})
+        text_buf.clear()
+
+    async for event in run_agent_loop(cfg, messages):
+        kind = event["type"]
+        if kind == "usage":
+            usage = event.get("usage")
+        elif kind == "delta":
+            text_buf.append(event["text"])
+            yield _sse(event)
+        elif kind == "thinking":
+            thinking_buf.append(event["text"])
+            yield _sse(event)
+        elif kind == "tool_call":
+            flush_text()
+            pending_args[event["name"]] = event.get("args") or {}
+            yield _sse(
+                {
+                    "type": "tool_start",
+                    "name": event["name"],
+                    "display_name": TOOL_DISPLAY_NAMES.get(event["name"], event["name"]),
+                    "args": event.get("args") or {},
+                }
+            )
+        elif kind == "tool_result":
+            try:
+                result = json.loads(event.get("result") or "{}")
+            except Exception:
+                result = {"raw": event.get("result")}
+            call = {
+                "name": event["name"],
+                "display_name": TOOL_DISPLAY_NAMES.get(event["name"], event["name"]),
+                "args": pending_args.pop(event["name"], {}),
+                "result": result,
+            }
+            # 结构化 id 提升到顶层，供前端工具卡直接取用
+            for key in (
+                "strategy_id",
+                "factor_id",
+                "backtest_run_id",
+                "factor_analysis_id",
+            ):
+                if isinstance(result, dict) and result.get(key):
+                    call[key] = result[key]
+            calls.append(call)
+            timeline.append({"type": "tool", "call_index": len(calls) - 1})
+            yield _sse({"type": "tool", "call": call})
+        elif kind == "done":
+            flush_text()
+            final = event.get("content", "")
+            tool_calls = None
+            if calls or thinking_buf:
+                tool_calls = {
+                    "calls": calls,
+                    "display_timeline": timeline,
+                    "thinking": "".join(thinking_buf),
+                }
+            if final.strip() or tool_calls:
+                # 兜底估算：API 未返回 usage（如省略 include_usage 的代理）时本地估算
+                prompt_text = "\n".join(
+                    m["role"] + ":" + m["content"] for m in history
+                ) + "\nuser:" + user_content
+                used = _finalize_usage(prompt_text, final)
+                await _save_message(
+                    session_id, "assistant", final.strip(), tool_calls, usage=used
+                )
+            yield _sse(event)
+        elif kind == "error":
+            yield _sse(event)
+            return
+        else:
+            yield _sse(event)
+
+
+@router.get("/sessions/{session_id}/stats")
+async def session_stats(session_id: str):
+    """上下文/用量统计：已用上下文 vs 窗口、输入/输出/思考构成（供前端进度条）
+
+    - context_used：最近一次 LLM 请求的 prompt（系统+摘要+会话），有真实 usage 用真实值
+    - 构成近似拆分：系统/压缩摘要/最近对话（输入），输出、思考(tool 调用外显)
+    """
+    compact = await _get_compaction(session_id)
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT role, content, usage_json FROM qube_messages "
+            "WHERE session_id = ? ORDER BY id ASC",
+            (session_id,),
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    completion = 0
+    reasoning = 0
+    last_prompt: int | None = None
+    history_tokens = 0
+    assistant_text_est = 0
+    for r in rows:
+        history_tokens += estimate_tokens(r["content"])
+        if r["role"] != "assistant":
+            continue
+        assistant_text_est += estimate_tokens(r["content"])
+        u = None
+        if r["usage_json"]:
+            try:
+                u = json.loads(r["usage_json"])
+            except Exception:
+                u = None
+        if u:
+            completion += int(u.get("completion_tokens") or 0)
+            reasoning += int(u.get("reasoning_tokens") or 0)
+            if u.get("prompt_tokens"):
+                last_prompt = int(u["prompt_tokens"])
+
+    sys_tokens = estimate_tokens(get_system_prompt())
+    summary_tokens = estimate_tokens(compact["summary"])
+
+    if last_prompt is not None:
+        context_used = max(int(last_prompt), sys_tokens + summary_tokens)
+    else:
+        # 无真实 usage：用系统+摘要+近段估算（不加历史重复，避免虚高）
+        context_used = sys_tokens + summary_tokens + min(history_tokens, 12_000)
+    context_window = _qube_context_window()
+    conv_prompt = max(0, context_used - sys_tokens - summary_tokens)
+    completion = completion or assistant_text_est
+    total = context_used + completion
+    return {
+        "context_window": context_window,
+        "context_used": context_used,
+        "context_pct": round(context_used / context_window, 4) if context_window else 0,
+        "completion_tokens": completion,
+        "reasoning_tokens": reasoning,
+        "total_tokens": total,
+        "compacted": bool(compact["summary"]),
+        "compacted_at": compact["compact_at"],
+        "breakdown": {
+            "system": sys_tokens,
+            "summary": summary_tokens,
+            "conversation": conv_prompt,
+            "completion": completion,
+            "reasoning": reasoning,
         },
+    }
+
+
+def _qube_context_window() -> int:
+    """当前 QUBE 引擎所用模型的上下文窗口上限"""
+    if settings.qube_engine == "cli":
+        return model_context_window(settings.qube_cli_model or settings.qube_model)
+    return model_context_window(
+        settings.qube_model or resolve_provider(settings.qube_provider) and PROVIDER_PRESETS[
+            resolve_provider(settings.qube_provider)
+        ]["model"]
+    )
+
+
+_COMPACT_TRANSCRIPT_MAX = 1000
+_COMPACT_SYSTEM = (
+    "你是对话压缩器。把下面这段 QUBE 量化投研对话压缩成尽量简短的中文要点摘要。"
+    "仅保留：当前讨论的策略/因子、关键参数、回测与分析指标、重要结论、未完成事项、"
+    "以及用户明确说过的偏好约束。直接输出摘要本体，不要任何开场白或结尾语。"
+)
+
+
+@router.post("/sessions/{session_id}/compress")
+async def compress_session(session_id: str):
+    """Claude Code 式上下文压缩：把较早期对话压缩成摘要并入 context_summary，
+    释放上下文（仅压缩 boundary 之前的消息，之后的仍按原文发送，不丢历史）。"""
+    KEEP = 16
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, role, content FROM qube_messages WHERE session_id = ? "
+            "ORDER BY id ASC",
+            (session_id,),
+        )
+        msgs = await cursor.fetchall()
+    finally:
+        await db.close()
+
+    if len(msgs) <= KEEP:
+        compact = await _get_compaction(session_id)
+        return {
+            "ok": True,
+            "noop": True,
+            "summary": compact["summary"],
+            "kept": len(msgs),
+            "context_window": _qube_context_window(),
+        }
+
+    slice_msgs = msgs[: len(msgs) - KEEP]
+    boundary = slice_msgs[-1]["id"] if slice_msgs else 0
+    existing = await _get_compaction(session_id)
+
+    lines = []
+    if existing["summary"]:
+        lines.append(f"已有摘要：\n{existing['summary']}\n")
+    lines.append("下面为本次要压缩进摘要的早前对话：\n")
+    for m in slice_msgs:
+        text = (m["content"] or "").strip()
+        if not text:
+            continue
+        who = "用户" if m["role"] == "user" else "QUBE 助手"
+        lines.append(f"【{who}】{text[:_COMPACT_TRANSCRIPT_MAX]}")
+    prompt = "\n".join(lines) or "（无实质内容）"
+
+    try:
+        summary = await qube_complete(_COMPACT_SYSTEM, prompt)
+    except HTTPException as e:
+        # 压缩失败（无 Key/服务异常）时保留现状，不破坏会话
+        raise HTTPException(status_code=e.status_code, detail=f"压缩失败：{e.detail}")
+    summary = (summary or "").strip()
+    if not summary:
+        summary = existing["summary"]
+
+    db = await get_db()
+    try:
+        now = int(time.time())
+        await db.execute(
+            "UPDATE qube_sessions SET context_summary = ?, compact_upto = ?, "
+            "compact_at = ? WHERE id = ?",
+            (summary, boundary, now, session_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    return {
+        "ok": True,
+        "summary": summary,
+        "kept": len(msgs) - len(slice_msgs),
+        "dropped": len(slice_msgs),
+        "compact_upto": boundary,
+        "context_window": _qube_context_window(),
+    }
+
+
+def _is_retry(message: str, history: list[dict]) -> bool:
+    """断网重试幂等判断：最后一条正是本次用户文本且尚无回复 → 是真重试。
+
+    此时前端断网后点「重试」重发同一条消息，后端不应重复落库这条用户消息
+    （历史已存该条），直接基于它重新流式应答即可。
+    """
+    return bool(history) and history[-1]["role"] == "user" and history[-1]["content"] == message
+
+
+@router.post("/chat")
+async def qube_chat(body: ChatRequest):
+    """QUBE 多轮对话（SSE），事件集对齐参考站协议：
+
+    api 引擎：{type: delta|thinking|tool_start|tool|done|error}
+      tool 事件携带结构化 call（name/args/result/display_name/各类 id）
+    cli 引擎：{delta} 增量 + {done}（CLI 自身即 agent，无工具事件）
+    """
+    if not body.message.strip():
+        raise HTTPException(status_code=400, detail="消息不能为空")
+
+    is_first = (await _count_messages(body.session_id)) == 0
+    history = await _load_history(body.session_id)
+    # 断网/后端未返回兜底：若最后一条正是本次文本且尚无回复，视为客户端
+    # 重试，不再重复落库（避免重发后同一条用户消息出现在历史里两次）
+    idempotent_retry = _is_retry(body.message, history)
+    if not idempotent_retry:
+        await _save_message(
+            body.session_id, "user", body.message, is_first_user=is_first
+        )
+
+    engine = settings.qube_engine
+    # api 引擎的配置错误要在响应开始前抛 400（SSE 开始后无法再改状态码）
+    api_cfg = _resolve_qube_api() if engine != "cli" else None
+
+    return StreamingResponse(
+        _stream_reply(body.session_id, history, body.message, api_cfg),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
     )
 
 

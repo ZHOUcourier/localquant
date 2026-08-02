@@ -25,10 +25,39 @@ export interface ToolCalls {
   thinking: string
 }
 
+export interface TokenUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  reasoning_tokens?: number
+  estimated?: boolean
+}
+
 export interface ChatMsg {
+  id?: number
   role: 'user' | 'assistant'
   content: string
+  created_at?: number
   tool_calls?: ToolCalls | null
+  usage?: TokenUsage | null
+}
+
+export interface ContextStats {
+  context_window: number
+  context_used: number
+  context_pct: number
+  completion_tokens: number
+  reasoning_tokens: number
+  total_tokens: number
+  compacted: boolean
+  compacted_at: number
+  breakdown: {
+    system: number
+    summary: number
+    conversation: number
+    completion: number
+    reasoning: number
+  }
 }
 
 export interface StageItem {

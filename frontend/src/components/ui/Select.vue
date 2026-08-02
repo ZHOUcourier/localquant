@@ -75,14 +75,19 @@ function handleSelect(val: string, optionDisabled?: boolean) {
     </button>
     <div
       v-if="open"
-      class="absolute z-50 max-h-[264px] w-full overflow-y-auto rounded-[4px] border bg-[#fdfcfc] py-1"
+      class="absolute z-50 max-h-[264px] overflow-y-auto rounded-[4px] border bg-[#fdfcfc] py-1"
       :class="dropUp ? 'bottom-full mb-1' : 'top-full mt-1'"
-      style="border-color: rgba(15, 0, 0, 0.12)"
+      style="
+        min-width: 100%;
+        width: max-content;
+        max-width: min(92vw, 480px);
+        border-color: rgba(15, 0, 0, 0.12);
+      "
     >
       <div
         v-for="option in options"
         :key="option.value"
-        class="cursor-pointer px-3 py-1.5 text-sm transition-colors"
+        class="flex cursor-pointer items-center gap-2 truncate whitespace-nowrap px-3 py-1.5 text-sm transition-colors"
         :class="
           option.disabled
             ? 'text-[#9a9898] cursor-not-allowed'
@@ -90,9 +95,10 @@ function handleSelect(val: string, optionDisabled?: boolean) {
               ? 'bg-[#f1eeee] text-[#201d1d] font-medium'
               : 'text-[#201d1d] hover:bg-[#f1eeee]'
         "
+        :title="option.label"
         @click="handleSelect(option.value, option.disabled)"
       >
-        {{ option.label }}
+        <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
       </div>
     </div>
   </div>

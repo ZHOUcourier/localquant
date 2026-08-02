@@ -20,8 +20,10 @@ const expanded = ref(false)
       class="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] text-[#0056b3] hover:bg-[#007aff]/8"
       @click="expanded = !expanded"
     >
+      <!-- 思考状态：流式中呼吸圆点 / 完成后 ✓ -->
       <span v-if="streaming" class="inline-block h-2 w-2 animate-pulse rounded-full bg-[#007aff]" />
-      <span>深度思考过程 · {{ text.length }} 字</span>
+      <span v-else class="font-mono text-[#30d158]">✓</span>
+      <span>{{ streaming ? '正在思考…' : `思考过程 · ${text.length} 字` }}</span>
       <span class="ml-auto font-mono">{{ expanded ? '−' : '+' }}</span>
     </button>
     <div

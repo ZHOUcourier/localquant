@@ -68,12 +68,27 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
     convo: list[dict] = [{"role": "system", "content": cfg.system}, *messages]
     final_parts: list[str] = []
 
+    # 累计 usage（跨工具轮）：completion/reasoning 相加，prompt 取最后（最新）一次
+    usage: dict[str, int] = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "total_tokens": 0,
+        "estimated": False,
+    }
+
+    def _emit_done(content: str) -> AsyncIterator[dict]:
+        usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        yield {"type": "usage", "usage": {**usage}}
+        yield {"type": "done", "content": content}
+
     for _turn in range(MAX_TURNS):
         payload: dict[str, Any] = {
             "model": cfg.model,
             "messages": convo,
             "stream": True,
             "temperature": cfg.temperature,
+            "stream_options": {"include_usage": True},
         }
         if cfg.tools:
             payload["tools"] = [t.spec() for t in cfg.tools]
@@ -106,7 +121,26 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
                         if not chunk or chunk == "[DONE]":
                             continue
                         try:
-                            delta = json.loads(chunk)["choices"][0]["delta"]
+                            parsed = json.loads(chunk)
+                        except Exception:
+                            continue
+                        # include_usage 时末尾会带 usage（choices 可能为空）
+                        u = parsed.get("usage")
+                        if isinstance(u, dict):
+                            pt = u.get("prompt_tokens") or 0
+                            if pt:
+                                usage["prompt_tokens"] = int(pt)
+                                usage["completion_tokens"] += int(u.get("completion_tokens") or 0)
+                                details = u.get("completion_tokens_details") or {}
+                                if isinstance(details, dict):
+                                    usage["reasoning_tokens"] += int(
+                                        details.get("reasoning_tokens") or 0
+                                    )
+                        choices = parsed.get("choices")
+                        if not choices:
+                            continue
+                        try:
+                            delta = choices[0]["delta"]
                         except Exception:
                             continue
                         text = delta.get("content") or ""
@@ -144,7 +178,8 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
         if not calls:
             # 无工具调用 → 本轮即最终回复
             convo.append({"role": "assistant", "content": content})
-            yield {"type": "done", "content": "\n".join(p for p in final_parts if p)}
+            async for ev in _emit_done("\n".join(p for p in final_parts if p)):
+                yield ev
             return
 
         # 有工具调用：回填 assistant(tool_calls) 消息，逐个执行
@@ -194,11 +229,11 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
                 }
             )
 
-    yield {
-        "type": "done",
-        "content": "\n".join(p for p in final_parts if p)
-        or "（已达到最大工具调用轮数，请继续追问）",
-    }
+    async for ev in _emit_done(
+        "\n".join(p for p in final_parts if p)
+        or "（已达到最大工具调用轮数，请继续追问）"
+    ):
+        yield ev
 
 
 # ---------------------------------------------------------------------------

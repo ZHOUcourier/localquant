@@ -11,12 +11,17 @@ import { useRoute } from 'vue-router'
 import {
   BookMarked,
   BrainCircuit,
+  Minimize2,
+  Download,
   MessageSquarePlus,
   PanelLeftOpen,
   PanelLeftClose,
   PanelRightClose,
   PanelRightOpen,
+  Pencil,
+  Pin,
   RefreshCw,
+  Search,
   Send,
   Settings2,
   Sparkles,
@@ -32,7 +37,7 @@ import StrategyWorkbench from '@/components/qube/StrategyWorkbench.vue'
 import SystemPromptDialog from '@/components/qube/SystemPromptDialog.vue'
 import EngineConfigDrawer from '@/components/qube/EngineConfigDrawer.vue'
 import { ResizeHandle } from '@/components/ui'
-import type { ChatMsg, ToolCall } from '@/components/qube/types'
+import type { ChatMsg, ContextStats, ToolCall, ToolCalls } from '@/components/qube/types'
 import { jsonFetch } from '@/components/qube/types'
 import {
   CANVAS_EXPAND,
@@ -48,6 +53,8 @@ interface Session {
   updated_at: number
   bound_type?: string
   bound_id?: string
+  pinned?: boolean
+  message_count?: number
 }
 
 const route = useRoute()
@@ -67,10 +74,74 @@ const rootEl = ref<HTMLDivElement | null>(null)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
 const renamingId = ref('')
 const renameDraft = ref('')
+const search = ref('')
+const editing = ref<{ id: number; content: string } | null>(null)
+const deletingMsg = ref<ChatMsg | null>(null)
+const copyOk = ref(false)
 
 const promptOpen = ref(false)
 const configOpen = ref(false)
 const clearConfirm = ref(false)
+
+// —— 上下文 / token 用量 ————————————————
+const stats = ref<ContextStats | null>(null)
+const statsKey = ref('')
+const compressBusy = ref(false)
+const compressedAuto = ref(false)
+const showBreakdown = ref(false)
+
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : `${n}`
+}
+
+async function loadStats() {
+  if (!activeId.value) {
+    stats.value = null
+    return
+  }
+  const id = activeId.value
+  try {
+    const d = await jsonFetch(`/api/qube/sessions/${id}/stats`)
+    if (id === activeId.value) {
+      stats.value = d
+      statsKey.value = id
+    }
+  } catch {
+    /* 统计失败不阻断聊天 */
+  }
+}
+
+const contextPct = computed(() =>
+  stats.value && stats.value.context_window ? (stats.value.context_used / stats.value.context_window) * 100 : 0,
+)
+const contextColor = computed(() => {
+  if (contextPct.value >= 85) return '#ff3b30'
+  if (contextPct.value >= 60) return '#ff9f0a'
+  return '#10a37f'
+})
+
+/** Claude Code 式自动压缩：上下文接近窗口上限时，先把早前对话压成摘要再发送 */
+async function maybeAutoCompact() {
+  if (compressedAuto.value || !activeId.value || !stats.value) return
+  if (contextPct.value < 85 || messages.value.length < 16) return
+  compressedAuto.value = true
+  await compressSession(true)
+}
+
+async function compressSession(silent = false) {
+  if (!activeId.value || compressBusy.value) return
+  compressBusy.value = true
+  try {
+    await jsonFetch(`/api/qube/sessions/${activeId.value}/compress`, { method: 'POST' })
+    await Promise.all([loadStats(), reloadMessages()])
+    loadSessions()
+    showBreakdown.value = false
+  } catch (e) {
+    if (!silent) chatError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    compressBusy.value = false
+  }
+}
 
 // 当前会话工作区状态（画板宽度/绑定/参数持久化）
 const ws = computed(() => sessionWs(activeId.value || '__none__'))
@@ -93,14 +164,25 @@ async function loadSessions() {
 async function openSession(id: string) {
   activeId.value = id
   chatError.value = null
+  editing.value = null
   const d = await jsonFetch(`/api/qube/sessions/${id}/messages`)
   messages.value = d.messages
-  // 画板焦点恢复：优先 workspace 持久化，其次后端 resume
+// 画板焦点恢复：优先 workspace 持久化，其次后端 resume
   const cur = sessionWs(id)
   if (!cur.active && d.workspace_resume) {
     cur.active = { kind: d.workspace_resume.kind, id: d.workspace_resume.id }
   }
+  compressedAuto.value = false
+  showBreakdown.value = false
+  loadStats()
   scrollToBottom()
+}
+
+async function reloadMessages() {
+  if (!activeId.value) return
+  const d = await jsonFetch(`/api/qube/sessions/${activeId.value}/messages`)
+  messages.value = d.messages
+  loadStats()
 }
 
 async function newSession() {
@@ -153,22 +235,55 @@ async function commitRename() {
   }
 }
 
-// —— 对话（SSE 流式，支持中止 / 断网判定 / 重试） ———————————————————————
-async function sendText(text: string) {
-  if (!text.trim() || streaming.value) return
-  if (!activeId.value) await newSession()
-  input.value = ''
-  chatError.value = null
-  chatOffline.value = false
-  lastText.value = text
-  messages.value.push({ role: 'user', content: text })
-  messages.value.push({
-    role: 'assistant',
-    content: '',
-    tool_calls: { calls: [], display_timeline: [], thinking: '' },
+// —— 会话置顶 / 导出 ——————————————————————————————————
+async function togglePin(s: Session) {
+  s.pinned = !s.pinned
+  // 不要改动会话时间：取消置顶后用原 updated_at 归回原处
+  sessions.value.sort((a, b) => Number(b.pinned || 0) - Number(a.pinned || 0) || b.updated_at - a.updated_at)
+  await jsonFetch(`/api/qube/sessions/${s.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned: s.pinned }),
   })
-  // 关键：取数组内的 reactive 代理引用（写原始对象不会触发视图更新）
-  const am = messages.value[messages.value.length - 1]
+}
+
+async function exportSession(id: string) {
+  try {
+    const res = await fetch(`/api/qube/sessions/${id}/export`)
+    if (!res.ok) throw new Error('导出失败')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qube-${id.slice(0, 8)}.md`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    chatError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+// —— 对话（SSE 流式，支持中止 / 断网判定 / 重试 / 编辑 / 重新生成） ———————
+function emptyTools() {
+  return { calls: [], display_timeline: [], thinking: '' } as ToolCalls
+}
+
+function newAssistantMsg(): ChatMsg {
+  return { role: 'assistant', content: '', tool_calls: emptyTools() }
+}
+
+/**
+ * 通用流式应答：对已就位的 assistant 消息 am 执行一轮 SSE 消费。
+ * onError 由调用方决定失败时如何回退（普通发送回退用户+助手；编辑/重生成仅回退助手占位）。
+ */
+async function streamReply(
+  am: ChatMsg,
+  url: string,
+  payload: Record<string, unknown>,
+  opts: { popOnError?: boolean } = {},
+) {
   const tc = am.tool_calls!
   streaming.value = true
   const controller = new AbortController()
@@ -180,12 +295,17 @@ async function sendText(text: string) {
     if (curText.trim()) tc.display_timeline.push({ type: 'text', content: curText })
     curText = ''
   }
+  const rollbackHelper = () => {
+    if (opts.popOnError && messages.value[messages.value.length - 1] === am) {
+      messages.value.pop()
+    }
+  }
 
   try {
-    const res = await fetch('/api/qube/chat', {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: activeId.value, message: text }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     })
     if (!res.ok || !res.body) {
@@ -232,6 +352,8 @@ async function sendText(text: string) {
         }
       }
     }
+    // 结束后重新拉取，让每条消息带上稳定的 id / created_at（供编辑/删除/重生成）
+    if (activeId.value) await reloadMessages()
     loadSessions()
   } catch (e) {
     // 用户主动中止：不算错误，保留已生成内容
@@ -242,18 +364,119 @@ async function sendText(text: string) {
       // fetch 抛 TypeError = 网络层失败（断网 / 后端没起 / DNS）
       chatOffline.value = true
       chatError.value = '网络连接中断，未能完成本轮对话。请检查后端是否在运行，或点「重试」重新发送。'
-      if (!am.content && !tc.calls.length && !tc.thinking) messages.value.pop()
-      // 把用户那条也回退，便于重试时重新整体发送
-      messages.value.pop()
-      messages.value.pop()
+      if (!am.content && !tc.calls.length && !tc.thinking) rollbackHelper()
+      if (opts.popOnError) messages.value.pop() // 连用户那条也回退，便于重试整体重发
     } else {
       chatError.value = e instanceof Error ? e.message : String(e)
-      if (!am.content && !tc.calls.length && !tc.thinking) messages.value.pop()
+      if (!am.content && !tc.calls.length && !tc.thinking) rollbackHelper()
     }
   } finally {
     streaming.value = false
     abortRef.value = null
     scrollToBottom()
+  }
+}
+
+/** 普通发送：追加用户消息 + 空助手占位，POST /chat */
+async function sendText(text: string) {
+  if (!text.trim() || streaming.value) return
+  if (!activeId.value) await newSession()
+  input.value = ''
+  chatError.value = null
+  chatOffline.value = false
+  lastText.value = text
+  // Claude Code 式：上下文将满时先压缩早前对话释放空间，再发本轮
+  await maybeAutoCompact()
+  messages.value.push({ role: 'user', content: text })
+  const am = newAssistantMsg()
+  messages.value.push(am)
+  await streamReply(am, '/api/qube/chat', { session_id: activeId.value, message: text }, { popOnError: true })
+}
+
+/** 进入编辑模式：把该用户消息内容放进输入框（带取消/保存条） */
+function startEdit(m: ChatMsg) {
+  if (streaming.value) return
+  if (typeof m.id !== 'number' || m.role !== 'user') return
+  editing.value = { id: m.id, content: m.content }
+  input.value = m.content
+  nextTick(() => inputEl.value?.focus())
+}
+
+function cancelEdit() {
+  editing.value = null
+  input.value = ''
+}
+
+/** 保存编辑并重跑：更新内容 → 截断后续 → POST /chat/edit 流式重答 */
+async function editSend() {
+  if (!editing.value || streaming.value) return
+  const { id, content } = editing.value
+  const text = content.trim()
+  if (!text || !activeId.value) return
+  editing.value = null
+  input.value = ''
+  chatError.value = null
+  chatOffline.value = false
+  lastText.value = text
+  const idx = messages.value.findIndex((m) => m.id === id)
+  if (idx < 0) return
+  const current = messages.value[idx]
+  if (current.role === 'user') {
+    ;(current as { content: string }).content = text
+    messages.value.splice(idx + 1)
+    messages.value.push(newAssistantMsg())
+    const am = messages.value[messages.value.length - 1]
+    await streamReply(am, '/api/qube/chat/edit', {
+      session_id: activeId.value,
+      message_id: id,
+      content: text,
+    })
+  }
+}
+
+/** 重新生成：移除上一条助手回复，POST /chat/regenerate 重跑同一用户消息 */
+async function regenerate(m: ChatMsg) {
+  if (streaming.value) return
+  const last = messages.value[messages.value.length - 1]
+  if (last !== m || last.role !== 'assistant') return
+  if (typeof m.id !== 'number') return
+  messages.value.pop()
+  const am = newAssistantMsg()
+  messages.value.push(am)
+  chatError.value = null
+  chatOffline.value = false
+  const userMsg = [...messages.value].reverse().find((x) => x.role === 'user')
+  if (userMsg?.content) lastText.value = userMsg.content
+  await streamReply(
+    am,
+    `/api/qube/messages/${m.id}/regenerate?session_id=${encodeURIComponent(activeId.value)}`,
+    {},
+  )
+}
+
+/** 删除消息（及之后）→ 重载 */
+async function removeMessage(m: ChatMsg) {
+  deletingMsg.value = null
+  if (streaming.value || typeof m.id !== 'number' || !activeId.value) return
+  try {
+    await jsonFetch(`/api/qube/messages/${m.id}?session_id=${encodeURIComponent(activeId.value)}`, {
+      method: 'DELETE',
+    })
+    await reloadMessages()
+    loadSessions()
+  } catch (e) {
+    chatError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+async function copyText(text: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    copyOk.value = true
+    setTimeout(() => (copyOk.value = false), 1200)
+  } catch {
+    /* 忽略剪贴板权限 */
   }
 }
 
@@ -280,7 +503,8 @@ function applyToolSideEffect(call: ToolCall) {
 }
 
 function send() {
-  sendText(input.value)
+  if (editing.value) editSend()
+  else sendText(input.value)
 }
 
 function onPick(prompt: string) {
@@ -383,7 +607,66 @@ function toggleCanvas() {
   wsState.canvasCollapsed = !wsState.canvasCollapsed
 }
 
-const canvasVisible = computed(() => !wsState.canvasCollapsed && !!ws.value.active)
+// 面板宽度（驱动展开/收起动画：折叠 → 0px，CSS transition-[width] 平滑过渡）
+const sidebarPanelWidth = computed(() => (wsState.sidebarCollapsed ? 0 : wsState.sidebarWidthPx))
+const canvasPanelWidth = computed(() =>
+  wsState.canvasCollapsed || !ws.value.active ? 0 : wsState.canvasWidthPx,
+)
+
+// —— 会话搜索 / 时间分组 / 相对时间（对齐参考站） ————————————————
+const filteredSessions = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  const list = sessions.value.filter((s) => !q || s.title.toLowerCase().includes(q))
+  return [...list].sort(
+    (a, b) => Number(b.pinned || 0) - Number(a.pinned || 0) || b.updated_at - a.updated_at,
+  )
+})
+
+function dayBucket(ts: number): string {
+  const now = Date.now() / 1000
+  const diff = now - ts
+  if (diff < 3600) return '今天'
+  if (diff < 86400 * 2) return '昨天'
+  if (diff < 86400 * 7) return '过去 7 天'
+  if (diff < 86400 * 30) return '过去 30 天'
+  return new Date(ts * 1000).toLocaleDateString('zh-CN', { month: 'long' })
+}
+
+function relativeTime(ts: number): string {
+  const now = Date.now() / 1000
+  const diff = now - ts
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
+  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`
+  return new Date(ts * 1000).toLocaleDateString('zh-CN')
+}
+
+interface SessionGroup {
+  label: string
+  items: Session[]
+}
+const sessionGroups = computed<SessionGroup[]>(() => {
+  const pins = filteredSessions.value.filter((s) => s.pinned)
+  const rest = filteredSessions.value.filter((s) => !s.pinned)
+  const groups: SessionGroup[] = []
+  if (pins.length) groups.push({ label: '置顶', items: pins })
+  const buckets = new Map<string, Session[]>()
+  for (const s of rest) {
+    const b = dayBucket(s.updated_at)
+    if (!buckets.has(b)) buckets.set(b, [])
+    buckets.get(b)!.push(s)
+  }
+  const bucketsLs = ['今天', '昨天', '过去 7 天', '过去 30 天']
+  for (const name of bucketsLs) if (buckets.has(name)) groups.push({ label: name, items: buckets.get(name)! })
+  const remaining = Array.from(buckets.entries()).filter(([k]) => !bucketsLs.includes(k))
+  for (const [, items] of remaining) groups.push({ label: '更早', items })
+  return groups
+})
+
+function groupingLabel(s: Session): string {
+  return s.pinned ? '置顶' : dayBucket(s.updated_at)
+}
 
 onMounted(async () => {
   await Promise.all([loadSessions()])
@@ -414,12 +697,14 @@ watch(activeId, () => {
 
 <template>
   <div ref="rootEl" class="flex h-full">
-    <!-- QUBE 次级侧边栏（可收起 + 可拖宽，VSCode 风格拖杆） -->
+    <!-- QUBE 次级侧边栏（可收起 + 可拖宽，VSCode 风格拖杆；收起=宽度动画到 0） -->
     <div
-      v-show="!wsState.sidebarCollapsed"
-      class="relative flex shrink-0 flex-col border-r border-[rgba(15,0,0,0.08)] bg-[#f8f7f7]"
-      :class="sidebarDragging ? '' : 'transition-[width] duration-200 ease-out'"
-      :style="{ width: `${wsState.sidebarWidthPx}px` }"
+      class="relative flex shrink-0 flex-col overflow-hidden border-r border-[rgba(15,0,0,0.08)] bg-[#f8f7f7]"
+      :class="[
+        wsState.sidebarCollapsed ? 'border-transparent' : '',
+        sidebarDragging ? '' : 'transition-[width] duration-200 ease-out',
+      ]"
+      :style="{ width: `${sidebarPanelWidth}px` }"
     >
       <div class="flex items-center gap-1.5 px-3 py-3">
         <Sparkles :size="14" class="text-[#201d1d]" />
@@ -443,49 +728,86 @@ watch(activeId, () => {
         </button>
       </div>
 
-      <!-- 会话列表 -->
-      <div class="mt-2 min-h-0 flex-1 overflow-y-auto px-2">
-        <div class="mb-1 px-1 text-[10px] font-medium uppercase text-[#9a9898]">对话</div>
-        <div
-          v-for="s in sessions"
-          :key="s.id"
-          class="group relative mb-0.5 flex cursor-pointer items-center gap-1 px-2 py-1.5 text-xs"
-          :class="s.id === activeId ? 'font-medium text-[#201d1d]' : 'rounded-[4px] text-[#646262] hover:bg-[#f1eeee] hover:text-[#201d1d]'"
-          @click="openSession(s.id)"
-        >
-          <!-- 选中态左侧竖黑线（OpenCode 风格） -->
-          <span
-            v-if="s.id === activeId"
-            class="absolute left-0 top-1/2 h-[14px] w-[2px] -translate-y-1/2 bg-[#201d1d]"
-          />
+      <!-- 会话搜索 -->
+      <div class="px-2 pt-2">
+        <div class="flex items-center gap-1.5 rounded-[4px] border border-[rgba(15,0,0,0.10)] bg-[#fdfcfc] px-2 py-1">
+          <Search :size="12" class="shrink-0 text-[#9a9898]" />
           <input
-            v-if="renamingId === s.id"
-            v-model="renameDraft"
-            class="min-w-0 flex-1 rounded-[3px] border border-[rgba(15,0,0,0.2)] bg-[#fdfcfc] px-1 py-0.5 text-xs outline-none"
-            @click.stop
-            @keydown.enter="commitRename"
-            @blur="commitRename"
+            v-model="search"
+            placeholder="搜索对话…"
+            class="w-full min-w-0 bg-transparent text-xs text-[#201d1d] outline-none placeholder:text-[#9a9898]"
           />
-          <span v-else class="min-w-0 flex-1 truncate">{{ s.title }}</span>
-          <button
-            v-if="renamingId !== s.id"
-            class="hidden shrink-0 text-[#9a9898] hover:text-[#201d1d] group-hover:block"
-            title="重命名"
-            @click.stop="startRename(s)"
-          >
-            ✎
-          </button>
-          <button
-            v-if="renamingId !== s.id"
-            class="hidden shrink-0 text-[#9a9898] hover:text-[#ff3b30] group-hover:block"
-            title="删除"
-            @click.stop="removeSession(s.id)"
-          >
-            <Trash2 :size="12" />
-          </button>
         </div>
-        <div v-if="!sessions.length" class="px-2 py-6 text-center text-[11px] text-[#9a9898]">
-          暂无对话 — 点「新建对话」开始
+      </div>
+
+      <!-- 会话列表（置顶 + 时间分组） -->
+      <div class="mt-2 min-h-0 flex-1 overflow-y-auto px-2">
+        <template v-for="grp in sessionGroups" :key="grp.label">
+          <div class="mb-1 mt-2 flex items-center gap-1 px-1 text-[10px] font-medium uppercase text-[#9a9898]">
+            <Pin v-if="grp.label === '置顶'" :size="10" />
+            <span class="truncate">{{ grp.label }}</span>
+            <span class="ml-auto font-mono text-[9px]">{{ grp.items.length }}</span>
+          </div>
+          <div
+            v-for="s in grp.items"
+            :key="s.id"
+            class="group relative mb-0.5 flex cursor-pointer items-center gap-1 px-2 py-1.5 text-xs"
+            :class="s.id === activeId ? 'font-medium text-[#201d1d]' : 'rounded-[4px] text-[#646262] hover:bg-[#f1eeee] hover:text-[#201d1d]'"
+            @click="openSession(s.id)"
+          >
+            <!-- 选中态左侧竖黑线（OpenCode 风格） -->
+            <span
+              v-if="s.id === activeId"
+              class="absolute left-0 top-1/2 h-[14px] w-[2px] -translate-y-1/2 bg-[#201d1d]"
+            />
+            <input
+              v-if="renamingId === s.id"
+              v-model="renameDraft"
+              class="min-w-0 flex-1 rounded-[3px] border border-[rgba(15,0,0,0.2)] bg-[#fdfcfc] px-1 py-0.5 text-xs outline-none"
+              @click.stop
+              @keydown.enter="commitRename"
+              @blur="commitRename"
+            />
+            <template v-else>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-1">
+                  <span class="min-w-0 flex-1 truncate">{{ s.title }}</span>
+                  <span class="shrink-0 text-[9px] text-[#b0aeae]">{{ s.message_count }}</span>
+                </div>
+                <div class="mt-0.5 truncate text-[9px] text-[#b0aeae]">
+                  {{ groupingLabel(s) }} · {{ relativeTime(s.updated_at) }}
+                </div>
+              </div>
+              <button
+                v-if="renamingId !== s.id"
+                :class="s.pinned ? 'text-[#9a6200]' : 'text-[#9a9898] hover:text-[#9a6200]'"
+                class="hidden shrink-0 group-hover:block"
+                :title="s.pinned ? '取消置顶' : '置顶'"
+                @click.stop="togglePin(s)"
+              >
+                <Pin :size="12" />
+              </button>
+              <button
+                v-if="renamingId !== s.id"
+                class="hidden shrink-0 text-[#9a9898] hover:text-[#201d1d] group-hover:block"
+                title="重命名"
+                @click.stop="startRename(s)"
+              >
+                ✎
+              </button>
+              <button
+                v-if="renamingId !== s.id"
+                class="hidden shrink-0 text-[#9a9898] hover:text-[#ff3b30] group-hover:block"
+                title="删除"
+                @click.stop="removeSession(s.id)"
+              >
+                <Trash2 :size="12" />
+              </button>
+            </template>
+          </div>
+        </template>
+        <div v-if="!filteredSessions.length" class="px-2 py-6 text-center text-[11px] text-[#9a9898]">
+          {{ search ? '无匹配的对话' : '暂无对话 — 点「新建对话」开始' }}
         </div>
       </div>
 
@@ -553,14 +875,24 @@ watch(activeId, () => {
             {{ activeId ? sessions.find((s) => s.id === activeId)?.title || '当前对话' : 'QUBE 对话投研' }}
           </span>
         </div>
-        <button
-          v-if="ws.active"
-          class="flex shrink-0 items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-[11px] text-[#424245] hover:text-[#201d1d]"
-          @click="toggleCanvas"
-        >
-          <component :is="wsState.canvasCollapsed ? PanelRightOpen : PanelRightClose" :size="12" />
-          画板
-        </button>
+        <div class="flex shrink-0 items-center gap-1.5">
+          <button
+            v-if="activeId"
+            class="flex shrink-0 items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-[11px] text-[#424245] hover:text-[#201d1d]"
+            title="导出对话为 Markdown"
+            @click="exportSession(activeId)"
+          >
+            <Download :size="12" /> 导出
+          </button>
+          <button
+            v-if="ws.active"
+            class="flex shrink-0 items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-[11px] text-[#424245] hover:text-[#201d1d]"
+            @click="toggleCanvas"
+          >
+            <component :is="wsState.canvasCollapsed ? PanelRightOpen : PanelRightClose" :size="12" />
+            画板
+          </button>
+        </div>
       </div>
 
       <div ref="listEl" class="min-h-0 flex-1 overflow-y-auto">
@@ -568,14 +900,19 @@ watch(activeId, () => {
         <div v-else class="space-y-4 px-4 py-4">
           <ChatMessage
             v-for="(m, i) in messages"
-            :key="i"
+            :key="m.id ?? i"
             :msg="m"
             :streaming="streaming && i === messages.length - 1"
+            :is-last="i === messages.length - 1"
             @open-factor="openFactor"
             @open-strategy="openStrategy"
             @view-analysis="viewAnalysis"
             @view-backtest="viewBacktest"
             @optimize="optimize"
+            @copy="copyText"
+            @edit="startEdit"
+            @regenerate="regenerate"
+            @remove="deletingMsg = $event"
           >
             <template v-if="streaming && i === messages.length - 1 && !m.content && !m.tool_calls?.calls.length" #tail>
               <div class="flex items-center gap-1.5 px-1 text-xs text-[#9a9898]">
@@ -604,6 +941,64 @@ watch(activeId, () => {
 
       <!-- 输入区 -->
       <div class="shrink-0 border-t border-[rgba(15,0,0,0.08)] p-3">
+        <!-- 上下文用量 + 压缩 -->
+        <div v-if="stats" class="mb-1.5">
+          <div class="flex items-center gap-2 text-[10px]">
+            <span class="shrink-0 text-[#9a9898]">上下文</span>
+            <div class="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-[#ece9e9]">
+              <div
+                class="h-full rounded-full transition-all"
+                :style="{ width: Math.min(100, contextPct) + '%', background: contextColor }"
+              />
+            </div>
+            <span class="shrink-0 font-mono text-[#646262]">
+              <span :style="{ color: contextColor }">{{ contextPct.toFixed(0) }}%</span>
+              · <span>{{ fmtTokens(stats.context_used) }}/{{ fmtTokens(stats.context_window) }}</span>
+            </span>
+            <button
+              class="shrink-0 rounded px-1.5 py-0.5 text-[#9a9898] hover:bg-[#f1eeee] hover:text-[#201d1d]"
+              title="查看 token 用量构成"
+              @click="showBreakdown = !showBreakdown"
+            >
+              构成
+            </button>
+            <button
+              class="flex shrink-0 items-center gap-1 rounded border border-[rgba(15,0,0,0.12)] px-1.5 py-0.5 text-[#646262] hover:text-[#201d1d] disabled:cursor-not-allowed disabled:opacity-40"
+              :disabled="compressBusy || messages.length < 16"
+              :title="stats.compacted ? '已压缩过；再次压缩把更多早前对话并入摘要' : '把较早的对话压缩成摘要，释放上下文；不影响后续新消息'"
+              @click="compressSession()"
+            >
+              <Minimize2 :size="11" />
+              {{ compressBusy ? '压缩中…' : stats.compacted ? '重新压缩' : '压缩上下文' }}
+            </button>
+          </div>
+          <div v-if="showBreakdown && stats" class="mt-1.5 space-y-0.5 rounded-[4px] border border-[rgba(15,0,0,0.1)] bg-[#f8f7f7] px-2.5 py-1.5 font-mono text-[10px] text-[#646262]">
+            <div v-if="stats.compacted" class="text-[#9a6200]">（已压缩早期对话 — 摘要并入系统提示词，节省上下文）</div>
+            <div class="flex justify-between"><span>系统提示</span><span>{{ fmtTokens(stats.breakdown.system) }}</span></div>
+            <div v-if="stats.breakdown.summary" class="flex justify-between"><span>会话摘要</span><span>{{ fmtTokens(stats.breakdown.summary) }}</span></div>
+            <div class="flex justify-between"><span>最近对话</span><span>{{ fmtTokens(stats.breakdown.conversation) }}</span></div>
+            <div class="flex justify-between"><span>累计输出</span><span>{{ fmtTokens(stats.breakdown.completion) }}</span></div>
+            <div class="flex justify-between"><span>深度思考</span><span>{{ fmtTokens(stats.breakdown.reasoning) }}</span></div>
+            <div class="mt-0.5 flex justify-between border-t border-[rgba(15,0,0,0.1)] pt-0.5 text-[#201d1d]">
+              <span>合计</span><span>{{ fmtTokens(stats.total_tokens) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 编辑消息条 -->
+        <div
+          v-if="editing"
+          class="mb-1.5 flex items-center gap-2 rounded-[4px] border border-[#007aff]/30 bg-[#007aff]/6 px-2.5 py-1.5 text-[11px] text-[#0056b3]"
+        >
+          <Pencil :size="12" class="shrink-0" />
+          <span class="min-w-0 flex-1 truncate">正在编辑已发送的消息（发送后从此处继续对话）</span>
+          <button
+            class="shrink-0 rounded-[3px] border border-[#007aff]/30 px-2 py-0.5 text-[10px] text-[#0056b3] hover:bg-[#007aff]/10"
+            @click="cancelEdit"
+          >
+            取消
+          </button>
+        </div>
         <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] p-2 focus-within:border-[#201d1d]">
           <textarea
             ref="inputEl"
@@ -637,12 +1032,14 @@ watch(activeId, () => {
       </div>
     </div>
 
-    <!-- 右侧画板（可拖拽调宽；折叠 = width 0 隐藏） -->
+    <!-- 右侧画板（可拖拽调宽；折叠/无工件 = 宽度动画到 0 收起） -->
     <div
-      v-show="canvasVisible"
-      class="relative shrink-0 border-l border-[rgba(15,0,0,0.08)] bg-[#fdfcfc]"
-      :class="dragging ? '' : 'transition-[width] duration-300 ease-out'"
-      :style="{ width: `${wsState.canvasWidthPx}px` }"
+      class="relative shrink-0 overflow-hidden border-l border-[rgba(15,0,0,0.08)] bg-[#fdfcfc]"
+      :class="[
+        wsState.canvasCollapsed || !ws.active ? 'border-transparent' : '',
+        dragging ? '' : 'transition-[width] duration-300 ease-out',
+      ]"
+      :style="{ width: `${canvasPanelWidth}px` }"
     >
       <!-- 拖拽手柄（VSCode 风格：贴左缘） -->
       <ResizeHandle
@@ -651,13 +1048,6 @@ watch(activeId, () => {
         @drag-start="onDragStart"
         @dblclick="onDragDouble"
       />
-      <button
-        class="absolute -left-3.5 top-1/2 z-20 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] text-[#646262] hover:text-[#201d1d]"
-        title="收起画板"
-        @click="toggleCanvas"
-      >
-        <PanelRightClose :size="13" />
-      </button>
 
       <FactorBoard
         v-if="ws.active?.kind === 'factor'"
@@ -678,6 +1068,31 @@ watch(activeId, () => {
     <!-- 弹窗 / 抽屉 -->
     <SystemPromptDialog v-if="promptOpen" :open="promptOpen" @close="promptOpen = false" />
     <EngineConfigDrawer :open="configOpen" @close="configOpen = false" />
+
+    <!-- 删除消息确认 -->
+    <div
+      v-if="deletingMsg"
+      class="fixed inset-0 z-[90] flex items-center justify-center bg-black/40"
+      @click.self="deletingMsg = null"
+    >
+      <div class="w-[340px] rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-4">
+        <div class="text-sm font-medium text-[#201d1d]">删除这条消息？</div>
+        <div class="mt-2 text-xs text-[#646262]">
+          将删除这条消息及其之后的所有消息（会截断当前对话，不可恢复）。
+        </div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button
+            class="rounded-[4px] border border-[rgba(15,0,0,0.15)] px-3 py-1 text-xs text-[#646262]"
+            @click="deletingMsg = null"
+          >
+            取消
+          </button>
+          <button class="rounded-[4px] bg-[#ff3b30] px-3 py-1 text-xs text-white hover:opacity-85" @click="removeMessage(deletingMsg)">
+            删除
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="clearConfirm" class="fixed inset-0 z-[90] flex items-center justify-center bg-black/40" @click.self="clearConfirm = false">
       <div class="w-[320px] rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-4">
