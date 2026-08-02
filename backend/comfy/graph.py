@@ -67,7 +67,8 @@ def convert_prompt(prompt: dict[str, Any]) -> tuple[list[dict], list[dict]]:
         static_input: dict[str, Any] = {}
 
         for field, value in (node_data.get("inputs") or {}).items():
-            if _is_link(value):
+            # 仅当列表同时命中源节点存在时才按连线处理，避免字面量 [a,b] 被误判
+            if _is_link(value) and str(value[0]) in prompt:
                 src_id, out_idx = str(value[0]), int(value[1])
                 src_class = (prompt.get(src_id) or {}).get("class_type", "")
                 return_names = get_return_names(src_class)

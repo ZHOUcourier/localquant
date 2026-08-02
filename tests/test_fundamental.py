@@ -81,3 +81,41 @@ def test_fundamental_merge_keeps_fund_fields():
     m = fundamental._merge_frames(frames)
     assert "anntime" in m.columns
     assert "eps" in m.columns
+
+
+def test_fundamental_merge_no_duplicate_columns_and_eps_precedence():
+    # 多个报表都带 anntime、eps 同时出现在 Pershareindex/Income：
+    # 合并后不得出现重复列（否则 to_parquet/build 会报错），且 eps 取 Pershareindex。
+    frames = {
+        "Income": pd.DataFrame(
+            {
+                "m_anntime": [pd.Timestamp("2023-01-01"), pd.Timestamp("2023-04-01")],
+                "net_profit": [100.0, 120.0],
+                "revenue": [1000.0, 1300.0],
+                "eps": [99.9, 99.9],  # 应在合并中被 Pershareindex 覆盖
+            }
+        ),
+        "Pershareindex": pd.DataFrame(
+            {
+                "m_anntime": [pd.Timestamp("2023-01-01"), pd.Timestamp("2023-04-01")],
+                "eps": [1.2, 1.4],
+                "pb": [2.0, 2.1],
+                "roe": [10.0, 11.0],
+            }
+        ),
+        "Balance": pd.DataFrame(
+            {
+                "m_anntime": [pd.Timestamp("2023-01-01"), pd.Timestamp("2023-04-01")],
+                "total_assets": [5000.0, 5200.0],
+                "total_liab": [3000.0, 3100.0],
+            }
+        ),
+    }
+    m = fundamental._merge_frames(frames)
+    assert not m.columns.duplicated().any(), f"重复列: {m.columns}"
+    assert "anntime" in m.columns
+    # eps 无 Income 的 99.9，取 Pershareindex
+    assert (m["eps"] == 99.9).sum() == 0
+    assert m["eps"].iloc[0] == pytest.approx(1.2)
+    assert m.loc[m["eps"].notna(), "net_profit"].iloc[0] == pytest.approx(100.0)
+    assert m.loc[m["eps"].notna(), "total_assets"].iloc[0] == pytest.approx(5000.0)

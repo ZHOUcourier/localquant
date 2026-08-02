@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 from loguru import logger
 
@@ -16,6 +18,48 @@ from backend.data.qmt_client import QMTClient
 
 _cache = DataCache()
 _qmt = QMTClient()
+
+
+def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
+    """数据时效检查：统计各缓存标的的最新交易日及其陈旧天数（相对今日）
+
+    Returns:
+        {"latest": str, "stale_count": int, "total": int,
+         "stale": [{"code", "latest_date", "staleness_days"}], "fresh": [...]}
+    """
+    codes = list_cached_codes(period)
+    today = date.today()
+    rows: list[dict] = []
+    for code in codes[:max_codes]:
+        ts = _cache.get_latest_timestamp(code, period)
+        if not ts:
+            continue
+        try:
+            dt = pd.Timestamp(ts)
+            latest_d = dt.date()
+        except Exception:
+            continue
+        rows.append(
+            {
+                "code": code,
+                "latest_date": str(latest_d),
+                "staleness_days": (today - latest_d).days,
+            }
+        )
+    latest_date = max((r["latest_date"] for r in rows), default=None)
+    stale_threshold = 7  # 停牌/新股可能久缺数，7 天作为"明显滞后"的经验阈值
+    stale = [r for r in rows if r["staleness_days"] > stale_threshold]
+    return {
+        "period": period,
+        "total": len(rows),
+        "latest_date": latest_date,
+        "staleness_days": (today - pd.Timestamp(latest_date).date()).days
+        if latest_date
+        else None,
+        "stale_count": len(stale),
+        "stale": stale[:50],
+        "status": "ok" if not stale else "stale",
+    }
 
 PRICE_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
 

@@ -10,6 +10,7 @@ Base URL，仅自定义（BYOK）需要用户自填；也可切换为本机 CLI 
 
 import json
 import re
+import urllib.parse
 from typing import Any, Optional
 
 import httpx
@@ -27,6 +28,15 @@ from backend.services.ai_providers import (
 )
 
 router = APIRouter()
+
+
+def _ensure_http_scheme(base_url: str, label: str) -> None:
+    """仅允许 http(s) 端点，防止把用户 API Key 发往 file:// / 内网任意主机"""
+    scheme = urllib.parse.urlsplit(base_url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=400, detail=f"{label} 仅支持 http/https 协议"
+        )
 
 
 def _resolve_ai_config() -> tuple[str, str, str]:
@@ -53,6 +63,7 @@ def _resolve_ai_config() -> tuple[str, str, str]:
         raise HTTPException(
             status_code=400, detail="未配置 AI 模型名称，请到「设置 → AI 配置」中填写"
         )
+    _ensure_http_scheme(base_url, "AI Base URL")
     return base_url, settings.openai_api_key, model
 
 
@@ -251,6 +262,11 @@ async def ai_generate_workflow(body: WorkflowAIRequest):
     except Exception:
         raise HTTPException(
             status_code=502, detail=f"AI 返回的不是合法 JSON: {content[:300]}"
+        )
+    if not isinstance(wf, dict):
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI 返回的 JSON 结构不正确（应为对象）：{str(wf)[:300]}",
         )
 
     # 校验节点类名有效

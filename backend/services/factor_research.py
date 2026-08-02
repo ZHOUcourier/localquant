@@ -221,7 +221,8 @@ class FactorResearchService:
 
             ic_arr = np.array(ic_values) if ic_values else np.array([])
             ic_mean = float(ic_arr.mean()) if ic_arr.size else 0.0
-            ic_std = float(ic_arr.std()) if ic_arr.size else 0.0
+            # 样本标准差（ddof=1，与 pandas 系列 std() 口径一致），n<2 时无意义置 0
+            ic_std = float(ic_arr.std(ddof=1)) if ic_arr.size > 1 else 0.0
             # t 值 = IC均值 / (IC标准差 / sqrt(N))（AlphaLens 同口径）
             ic_tstat = (
                 ic_mean / (ic_std / np.sqrt(ic_arr.size))
@@ -241,8 +242,8 @@ class FactorResearchService:
                 if ic_arr.size > 3
                 else 0.0,
                 "rank_ic_mean": float(np.mean(rank_ic_values)) if rank_ic_values else 0,
-                "rank_ic_ir": float(np.mean(rank_ic_values) / np.std(rank_ic_values))
-                if rank_ic_values and np.std(rank_ic_values) > 0
+                "rank_ic_ir": float(np.mean(rank_ic_values) / np.std(rank_ic_values, ddof=1))
+                if len(rank_ic_values) > 1 and np.std(rank_ic_values, ddof=1) > 0
                 else 0,
                 "ic_positive_ratio": float(
                     sum(1 for x in ic_values if x > 0) / len(ic_values)
@@ -472,7 +473,8 @@ class FactorResearchService:
             inc = sum(1 for i in range(len(ann) - 1) if ann[i + 1] >= ann[i]) / (
                 len(ann) - 1
             )
-            monotonicity = max(inc, 1 - inc)
+            # 单调性只奖励「组序号越高收益越高」的单调递增方向，避免反向因子也被打满分
+            monotonicity = inc
         else:
             monotonicity = 0.0
         summary = {
@@ -631,21 +633,24 @@ class FactorResearchService:
     def _ic_decay_both(
         self, factor_data: pd.DataFrame, return_data: pd.DataFrame, max_period: int
     ) -> tuple[list, list]:
-        """同时计算 IC(pearson) 与 RankIC(spearman) 随持有期的衰减序列"""
+        """同时计算 IC(pearson) 与 RankIC(spearman) 随持有期的衰减序列
+
+        与 ic_analysis 同口径：IC(period=p) 用 factor(T) 对 T→T+p 的复利收益，
+        而非仅取第 p 日的单日收益，保证衰减曲线与 IC 汇总表可互相印证。
+        """
         ic_decay, rank_decay = [], []
         dates = factor_data.index
         for period in range(1, max_period + 1):
             ics, rics = [], []
             for i in range(len(dates) - period):
                 f = factor_data.loc[dates[i]].dropna()
-                r = (
-                    return_data.loc[dates[i + period]].dropna()
-                    if dates[i + period] in return_data.index
-                    else pd.Series(dtype=float)
-                )
-                common = f.index.intersection(r.index)
+                if dates[i + period] in return_data.index:
+                    comp = (1.0 + return_data.loc[dates[i + 1]: dates[i + period]]).prod() - 1.0
+                else:
+                    comp = pd.Series(dtype=float)
+                common = f.index.intersection(comp.index)
                 if len(common) > 10:
-                    fc, rc = f[common], r[common]
+                    fc, rc = f[common], comp[common]
                     ics.append(fc.corr(rc))
                     rics.append(fc.rank().corr(rc.rank()))
             ic_decay.append(
@@ -815,10 +820,14 @@ class FactorResearchService:
             dates = factor_data.index
             for i in range(len(dates) - period):
                 f = factor_data.loc[dates[i]].dropna()
-                r = return_data.loc[dates[i + period]].dropna()
-                common = f.index.intersection(r.index)
+                # 与 IC 汇总表同口径：取 T→T+p 复利收益而非第 p 日单日收益
+                if dates[i + period] in return_data.index:
+                    comp = (1.0 + return_data.loc[dates[i + 1]: dates[i + period]]).prod() - 1.0
+                else:
+                    comp = pd.Series(dtype=float)
+                common = f.index.intersection(comp.index)
                 if len(common) > 10:
-                    ic_values.append(f[common].corr(r[common]))
+                    ic_values.append(f[common].corr(comp[common]))
 
             avg_ic = float(np.mean(ic_values)) if ic_values else 0
             decay.append({"period": period, "ic": avg_ic})
@@ -853,8 +862,11 @@ class FactorResearchService:
 
         standardized = {}
         for name, df in factors.items():
-            std = df.std(axis=1).replace(0, np.nan)
-            standardized[name] = df.div(std, axis=0) * weights.get(name, 0.0)
+            # 先做横截面去均值再除以横截面标准差（z-score）：避免非零均值因子
+            # 把「市场/水平」整体带进合成因子，导致多空方向被系统性偏置
+            demeaned = df.sub(df.mean(axis=1), axis=0)
+            std = demeaned.std(axis=1).replace(0, np.nan)
+            standardized[name] = demeaned.div(std, axis=0) * weights.get(name, 0.0)
 
         combined = sum(standardized.values())
         return combined

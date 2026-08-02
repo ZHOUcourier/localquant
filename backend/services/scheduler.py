@@ -47,9 +47,14 @@ async def _finish_job(db, job_name: str, status: str, detail: str):
 
 
 async def _market_step() -> tuple[str, str]:
-    """收盘后: 行情增量补齐 + 参考数据快照。返回 (status, detail)。"""
+    """收盘后: 行情增量补齐 + 参考数据快照(成分/行业/股本/合约) + 财务快照。返回 (status, detail)。"""
     from backend.data.qmt_client import QMTClient
-    from backend.services import data_download, market_data, reference_data
+    from backend.services import (
+        data_download,
+        fundamental,
+        market_data,
+        reference_data,
+    )
 
     qmt = QMTClient()
     if not qmt.connected:
@@ -66,13 +71,15 @@ async def _market_step() -> tuple[str, str]:
         except Exception:
             failed += 1
 
+    snappable = codes or market_data.list_cached_codes("1d")
     ind = await asyncio.to_thread(reference_data.snapshot_industry, qmt)
-    cap = await asyncio.to_thread(reference_data.snapshot_capital, qmt, codes)
-    inst = await asyncio.to_thread(reference_data.snapshot_instrument, qmt, codes)
+    cap = await asyncio.to_thread(reference_data.snapshot_capital, qmt, snappable)
+    inst = await asyncio.to_thread(reference_data.snapshot_instrument, qmt, snappable)
+    fund = await asyncio.to_thread(fundamental.snapshot_fundamental, qmt, snappable)
 
     detail = (
         f"行情增量: {len(codes)} 只({added} 成功/{failed} 失败); "
-        f"快照: industry={ind} capital={cap} instrument={inst}"
+        f"快照: industry={ind} capital={cap} instrument={inst} 财务={fund}"
     )
     return "ok", detail
 

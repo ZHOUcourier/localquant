@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -117,7 +118,9 @@ def snapshot_capital(qmt, codes: list[str]) -> int:
             continue
         float_col = _pick_field(df, _FLOAT_SHARE_FIELDS)
         total_col = _pick_field(df, _TOTAL_SHARE_FIELDS)
-        time_col = _pick_field(df, ["m_timetag", "timetag", "m_anntime"])
+        # 点-in-time：用公告日 m_anntime 作为股本变动生效点（而非报告期 m_timetag），
+        # 避免研究日 T 提前用到尚未披露的新股本数量
+        time_col = _pick_field(df, ["m_anntime", "m_timetag", "timetag"])
         for _, row in df.iterrows():
             ts = row[time_col] if time_col else None
             dt = _parse_date(ts)
@@ -170,13 +173,28 @@ def snapshot_instrument(qmt, codes: list[str]) -> int:
 
 
 def _parse_date(value) -> Optional[str]:
-    """把 '20240101' / 时间戳 / datetime 等解析为 'YYYY-MM-DD'，失败返回 None"""
+    """把 '20240101' / '2024-01-01' / datetime / epoch(ms|s) 解析为 'YYYY-MM-DD'，失败返回 None"""
     if value is None or value == "" or value == 0:
         return None
     try:
+        # 数值：优先按 YYYYMMDD 紧凑日期，其次按 epoch 秒/毫秒
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            if pd.isna(value) or value == 0:
+                return None
+            v = float(value)
+            if 19000101 <= v <= 21001231 and abs(v - round(v)) < 1e-9:
+                s = str(int(v))
+                return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+            unit = "ms" if v >= 1e11 else "s"
+            return pd.to_datetime(v, unit=unit).date().isoformat()
         s = str(value)
-        if s.isdigit() and len(s) >= 8:
+        if len(s) == 8 and s.isdigit():
             return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        # 字符串型 epoch（如 '1600000000000.0'）
+        if s.replace(".", "", 1).isdigit() and len(s) >= 10:
+            v = float(s)
+            unit = "ms" if v >= 1e11 else "s"
+            return pd.to_datetime(v, unit=unit).date().isoformat()
         return pd.to_datetime(s).date().isoformat()
     except Exception:
         return None
@@ -210,7 +228,9 @@ def load_industry_map(as_of: str = "") -> dict[str, str]:
     if as_of:
         df = df[df["date"] <= as_of]
         if df.empty:
-            df = _read(_INDUSTRY_FILE)
+            # as_of 早于任何行业快照：宁可返回空（调用方退化为不按行业中性化），
+            # 也不回退到 as_of 之后的「未来」行业造成前视
+            return {}
     latest = df.sort_values("date").drop_duplicates("code", keep="last")
     return dict(zip(latest["code"], latest["industry"]))
 
@@ -267,6 +287,35 @@ def build_market_cap_panel(close_panel: pd.DataFrame) -> Optional[pd.DataFrame]:
         .reindex(close_panel.index)
     )
     return aligned * close_panel[common]
+
+
+def build_turnover_panel(volume_panel, close_panel) -> Optional[pd.DataFrame]:
+    """换手率面板 = 成交股数 / 流通股本（按变动日 ffill）；无股本/成交数据返回 None"""
+    cap = _read(_CAPITAL_FILE)
+    if cap is None or cap.empty:
+        return None
+    if volume_panel is None or close_panel is None:
+        return None
+    free_shares = cap.dropna(subset=["float_shares"])
+    free_shares = free_shares[free_shares["float_shares"] > 0]
+    if free_shares.empty:
+        return None
+    shares = free_shares.pivot_table(
+        index="date", columns="code", values="float_shares", aggfunc="last"
+    )
+    shares.index = pd.to_datetime(shares.index)
+    shares = shares.sort_index()
+    common = volume_panel.columns.intersection(shares.columns)
+    if common.empty:
+        return None
+    aligned = (
+        shares[common]
+        .reindex(shares.index.union(volume_panel.index))
+        .ffill()
+        .reindex(volume_panel.index)
+    )
+    # 成交额/价格 → 股数不可得；直接用成交量(股) / 流通股本
+    return volume_panel[common].div(aligned.replace(0, np.inf)) * 100.0
 
 
 def load_instrument_frame() -> Optional[pd.DataFrame]:

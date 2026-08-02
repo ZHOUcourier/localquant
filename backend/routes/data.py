@@ -5,6 +5,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
@@ -38,6 +39,35 @@ class BatchDownloadRequest(BaseModel):
     period: str = "1d"
     start_date: str = ""
     end_date: str = ""
+
+
+class FundamentalSnapshotRequest(BaseModel):
+    """财务数据快照（公告日点位，防前视）"""
+
+    codes: list[str] = []  # 空=自动取已缓存品种
+
+
+@router.post("/snapshot-fundamental")
+async def snapshot_fundamental(req: FundamentalSnapshotRequest):
+    """拉取财务数据（Pershareindex/Income/Balance/CostCapital，报告公告时点）并落盘.
+
+    供 fund_* 因子使用；无 QMT 时返回明确跳过信息。
+    """
+    from backend.data.qmt_client import QMTClient
+    from backend.services import fundamental
+
+    qmt = QMTClient()
+    if not qmt.connected:
+        raise HTTPException(status_code=400, detail="QMT 未连接，无法下载财务数据")
+    codes = req.codes or market_data.list_cached_codes("1d")
+    if not codes:
+        raise HTTPException(status_code=400, detail="无待快照品种，请指定 codes 或先下载行情")
+    try:
+        records = await run_in_threadpool(fundamental.snapshot_fundamental, qmt, codes)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"财务快照失败: {e}")
+        raise HTTPException(status_code=500, detail=f"财务快照失败: {e}")
+    return {"status": "ok", "codes": len(codes), "records": records}
 
 
 def _format_size(size_bytes: int) -> str:
@@ -186,6 +216,12 @@ async def coverage(period: str = "1d"):
     """缓存覆盖度：每只股票的起止日期与条数"""
     entries = market_data.cache_coverage(period)
     return {"period": period, "count": len(entries), "entries": entries}
+
+
+@router.get("/freshness")
+async def data_freshness_endpoint():
+    """数据时效检查：最新交易日、滞后天数与显著滞后的标的清单"""
+    return market_data.data_freshness()
 
 
 @router.get("/reference-status")

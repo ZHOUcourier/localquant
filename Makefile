@@ -20,12 +20,12 @@ dev:
 	@lsof -ti :8000 | xargs kill -9 2>/dev/null || true
 	@echo "启动后端 http://localhost:8000 + 前端 http://localhost:5173 （Ctrl+C 退出）"
 	@trap 'kill 0' INT TERM; \
-	uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload & \
+	uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload & \
 	(cd frontend && npm run dev) & \
 	wait
 
 dev-backend:
-	uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+	uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 
 dev-frontend:
 	cd frontend && npm run dev

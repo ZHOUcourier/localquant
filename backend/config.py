@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     scheduler_recalc_periods: list[int] = [1, 5, 10, 20]
     scheduler_max_recalc: int = 500  # 单次批处理最多重算因子数（保护）
 
+    # 跨机器访问时显式放行的来源（逗号分隔）；默认仅本机前端来源
+    allowed_origins: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

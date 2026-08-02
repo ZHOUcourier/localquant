@@ -539,6 +539,11 @@ async def _tool_run_backtest(args: dict, session_id: str) -> dict:
         "init_balance",
         "commission_rate",
         "slippage",
+        "stamp_tax",
+        "normalize",
+        "take_profit",
+        "stop_loss",
+        "trailing_stop",
         "stock_pool",
     ):
         if args.get(k) not in (None, ""):

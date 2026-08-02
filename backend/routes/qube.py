@@ -12,6 +12,7 @@ import asyncio
 import json
 import pathlib
 import time
+import urllib.parse
 import uuid
 from typing import Optional
 
@@ -386,11 +387,23 @@ async def _save_message(  # noqa: PLR0913
         await db.close()
     # 首次用户消息：后台尝试 AI 生成更贴切的短标题（best-effort，失败保留截断标题）
     if is_first_user and role == "user":
-        _TITLE_TASKS.add(asyncio.create_task(_auto_title(session_id, content)))
+        t = asyncio.create_task(_auto_title(session_id, content))
+        _TITLE_TASKS.add(t)
+        t.add_done_callback(_TITLE_TASKS.discard)  # 完成后即释放引用，防内存累积
 
 
 # 后台标题生成任务引用（避免 task 被 GC + FastAPI 关停时警告）
 _TITLE_TASKS: set[asyncio.Task] = set()
+
+# 因子分析等重后台任务的并发上限（懒创建，防 import 时绑定事件循环）
+_research_sem_obj: asyncio.Semaphore | None = None
+
+
+def _research_sem() -> asyncio.Semaphore:
+    global _research_sem_obj
+    if _research_sem_obj is None:
+        _research_sem_obj = asyncio.Semaphore(2)
+    return _research_sem_obj
 
 
 async def _auto_title(session_id: str, content: str) -> None:
@@ -454,6 +467,9 @@ def _resolve_qube_api() -> tuple[str, str, str]:
         raise HTTPException(status_code=400, detail="自定义（BYOK）需要填写 Base URL")
     if not model:
         raise HTTPException(status_code=400, detail="未配置模型名称")
+    scheme = urllib.parse.urlsplit(base_url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="QUBE Base URL 仅支持 http/https 协议")
     return base_url, settings.qube_api_key, model
 
 
@@ -1482,10 +1498,11 @@ async def start_factor_analysis(body: FactorAnalysisRequest):
     )
 
     async def _run():
-        try:
-            await execute_factor_analysis(aid)
-        except Exception:
-            pass  # 错误已落库（status=error），轮询侧展示
+        async with _research_sem():
+            try:
+                await execute_factor_analysis(aid)
+            except Exception:
+                pass  # 错误已落库（status=error），轮询侧展示
 
     asyncio.create_task(_run())
     return {"id": aid, "status": "running"}

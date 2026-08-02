@@ -21,7 +21,8 @@ router = APIRouter()
 duckdb_service = DuckDBService()
 
 _SQL_FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|drop|alter|create|attach|copy|pragma|install|load)\b",
+    r"\b(insert|update|delete|drop|create|alter|attach|detach|"
+    r"export|copy|import|install|load|pragma|call)\b",
     re.IGNORECASE,
 )
 

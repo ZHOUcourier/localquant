@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Optional
 
 import duckdb
@@ -9,6 +10,16 @@ import pandas as pd
 from loguru import logger
 
 from backend.config import settings
+
+# 单次查询返回的最大结果行数（防止整市场扫描 OOM）
+MAX_RESULT_ROWS = 2000
+
+# 写/危险操作关键字，禁止在本地查询接口中出现（读接口只允许查询）
+_SQL_FORBIDDEN = re.compile(
+    r"\b(insert|update|delete|drop|create|alter|attach|detach|"
+    r"export|copy|import|install|load|pragma|call)\b",
+    re.IGNORECASE,
+)
 
 
 class DuckDBService:
@@ -34,12 +45,32 @@ class DuckDBService:
             {"columns": [...], "data": [...], "row_count": N}
         """
         try:
+            statement = sql.lstrip().lstrip("(").lower()
+            if not statement.startswith(("select", "with", "describe", "show")):
+                return {
+                    "columns": [],
+                    "data": [],
+                    "row_count": 0,
+                    "error": "仅支持 SELECT / WITH / DESCRIBE 查询",
+                }
+            if _SQL_FORBIDDEN.search(sql):
+                return {
+                    "columns": [],
+                    "data": [],
+                    "row_count": 0,
+                    "error": "SQL 中包含不允许的写操作关键字",
+                }
+
             conn = duckdb.connect()
             if params:
                 result = conn.execute(sql, params).fetchdf()
             else:
                 result = conn.execute(sql).fetchdf()
             conn.close()
+
+            truncated = len(result) > MAX_RESULT_ROWS
+            if truncated:
+                result = result.iloc[:MAX_RESULT_ROWS]
 
             columns = result.columns.tolist()
             data = result.values.tolist()
@@ -61,6 +92,7 @@ class DuckDBService:
                 "columns": columns,
                 "data": clean_data,
                 "row_count": len(clean_data),
+                "truncated": truncated if truncated else False,
             }
         except Exception as e:
             logger.error(f"DuckDB query failed: {e}")

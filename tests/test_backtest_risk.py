@@ -86,3 +86,21 @@ def test_risk_respects_down_block():
     )
     # 只要运行不抛错且仓位最终归零即视为通过
     assert r["positions"].iloc[-1]["A"] == pytest.approx(0.0)
+
+
+def test_trailing_stop_peak_reset_on_reentry():
+    # 重新建仓时移动止损须以新仓位峰值从其 1.0 起点重新累计，
+    # 不得沿用旧仓位的最高点（否则新仓瞬间被判回撤超标而错误强平）
+    idx = pd.bdate_range("2023-01-02", periods=45)
+    p = []
+    for i in range(45):
+        p.append(10 * 1.01**i if i < 20 else 10 * 1.01**20 * 0.985 ** (i - 20))
+    px = pd.DataFrame(p, index=idx, columns=["A"])
+    sig = pd.DataFrame([1.0] * 30 + [0.0] * 5 + [1.0] * 10, index=idx, columns=["A"])
+    r = ba.run_backtest(
+        sig, px, initial_capital=1e6, commission_rate=0, stamp_tax=0,
+        trailing_stop=0.03,
+    )
+    # 旧峰值已回落，若峰值不清零，重新开仓后 0.03 的移动止损会立刻命中
+    assert r["positions"].loc[idx[30:34], "A"].abs().sum() == pytest.approx(0.0)  # 空仓期
+    assert r["positions"].iloc[-1]["A"] > 0.5  # 新仓位未被误强平

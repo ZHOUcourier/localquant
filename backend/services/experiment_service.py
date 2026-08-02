@@ -109,7 +109,12 @@ class ExperimentService:
                 experiments.append(exp)
 
         if len(experiments) < 2:
-            return {"error": "至少需要 2 个实验进行对比", "experiments": experiments}
+            return {
+                "error": "至少需要 2 个实验进行对比",
+                "experiments": experiments,
+                "param_diffs": {},
+                "metric_comparison": {},
+            }
 
         # 参数差异
         all_param_keys = set()

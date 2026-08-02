@@ -230,12 +230,21 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
         await stage(6)
         from backend.services.factor_research import factor_research
 
+        mask = None
+        try:
+            from backend.services.market_data import build_cross_section_mask
+
+            mask = build_cross_section_mask(panels)
+        except Exception:
+            mask = None
+            logger.warning("无法构建可交易掩码，QUBE 因子研究将不做停牌/ST 过滤", exc_info=True)
         result = await asyncio.to_thread(
             factor_research.full_factor_analysis,
             factor,
             returns,
             periods,
             n_groups,
+            mask=mask,
         )
         await stage(7)
 
@@ -325,6 +334,10 @@ DEFAULT_BACKTEST_PARAMS = {
     "commission_rate": 0.001,
     "slippage": 0.001,
     "stamp_tax": 0.0005,
+    "normalize": "none",
+    "take_profit": 0.0,
+    "stop_loss": 0.0,
+    "trailing_stop": 0.0,
     "frequency": "1d",
     "stock_pool": [],
 }
@@ -433,6 +446,10 @@ async def execute_backtest_run(run_id: str) -> dict:
         commission = float(params.get("commission_rate") or 0.001)
         slippage = float(params.get("slippage") or 0.001)
         stamp_tax = float(params.get("stamp_tax") or 0.0005)
+        take_profit = float(params.get("take_profit") or 0.0)
+        stop_loss = float(params.get("stop_loss") or 0.0)
+        trailing_stop = float(params.get("trailing_stop") or 0.0)
+        normalize = str(params.get("normalize") or "none")
         result = await asyncio.to_thread(
             lambda: backtest_analysis.run_backtest(
                 signals=signals_df,
@@ -441,11 +458,15 @@ async def execute_backtest_run(run_id: str) -> dict:
                 commission_rate=commission,
                 slippage=slippage,
                 stamp_tax=stamp_tax,
+                normalize=normalize,
                 tradable_mask=reference["tradable_mask"],
                 up_limit=reference["up_limit"],
                 down_limit=reference["down_limit"],
                 high=panels.get("high"),
                 low=panels.get("low"),
+                take_profit=take_profit,
+                stop_loss=stop_loss,
+                trailing_stop=trailing_stop,
             )
         )
         for a in result.get("assumptions", []):
@@ -498,7 +519,13 @@ async def execute_backtest_run(run_id: str) -> dict:
                 "trade_count": len(trades),
                 "final_equity": float(equity.iloc[-1]) if len(equity) else init_balance,
             }
-            return metrics, equity_list, trades[-1000:]
+            # 明细数据量受限时只保留尾部，并显式标注截断，避免 trade_count 与明细不一致
+            _TRADE_TAIL = 1000
+            trimmed = trades[:_TRADE_TAIL]
+            if len(trades) > _TRADE_TAIL:
+                metrics["trades_truncated"] = True
+                metrics["stored_trade_count"] = len(trimmed)
+            return metrics, equity_list, trimmed
 
         metrics, equity_list, trades = await asyncio.to_thread(_summarize)
         log_lines.append(
@@ -521,6 +548,31 @@ async def execute_backtest_run(run_id: str) -> dict:
             log_text="\n".join(log_lines),
             finished_at=int(time.time()),
         )
+        # 溯源：记录本次回测的参数与环境，确保指标可复现
+        try:
+            from backend.services.provenance import record_provenance
+
+            prov_params = {
+                k: v
+                for k, v in params.items()
+                if k not in ("signal_code", "stock_pool", "period_start", "period_end")
+            }
+            prov_params["run_id"] = run_id
+            await record_provenance(
+                kind="backtest",
+                entity_id=run_id,
+                entity_name=f"回测·{run_id[:8]}",
+                params=prov_params,
+                metrics={
+                    "total_return": metrics.get("total_return"),
+                    "sharpe_ratio": metrics.get("sharpe_ratio"),
+                    "max_drawdown": metrics.get("max_drawdown"),
+                    "trade_count": metrics.get("trade_count"),
+                },
+                source="qube_backtest",
+            )
+        except Exception:
+            logger.debug("回测溯源记录失败（非致命）", exc_info=True)
         return {"backtest_run_id": run_id, "metrics": metrics}
     except Exception as e:
         logger.error(f"回测 {run_id} 失败: {e}")

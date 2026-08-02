@@ -45,8 +45,9 @@ class BacktestAnalysisService:
         tradable_mask : DataFrame | None
             可交易掩码（False=停牌）：停牌日冻结持仓、不计换手成本。
         up_limit / down_limit / high / low : DataFrame | None
-            涨跌停近似价与高低价：一字涨停禁买入加仓、一字跌停禁卖出减仓，
-            当日调仓意图顺延。缺失时不处理并记入 assumptions。
+            涨跌停近似价与高低价：一字涨停禁买入加仓、一字跌停禁卖出减仓。
+            未成交的调仓意图不推演挂单顺延（持仓保持不动，该笔调仓丢弃），并在
+            assumptions 明示次数；缺失时不处理并记入 assumptions。
         take_profit / stop_loss : float（默认 0=关闭）
             单仓止盈 / 止损比例（0.08 = +8% 止盈 / -8% 止损）。基于前收盘判定，T 日执行。
         trailing_stop : float（默认 0=关闭）
@@ -107,6 +108,7 @@ class BacktestAnalysisService:
         r_prev = np.ones(n_assets)
         peak_prev = np.ones(n_assets)
         risk_lock = np.zeros(n_assets, dtype=bool)  # True=风控退出后，信号归零前保持空仓
+        blocked_trades = 0
 
         for t in range(n_days):
             desired = np.nan_to_num(tgt_arr[t]).copy()
@@ -117,7 +119,8 @@ class BacktestAnalysisService:
                 if risk_lock.any():
                     desired[risk_lock] = 0.0
 
-            # 止盈 / 止损 / 移动止损（用截至 t-1 收盘的持仓收益判定，T 日执行）
+            # 止盈 / 止损 / 移动止损（用截至 t-1 收盘的持仓收益判定，T 日执行；
+            # 多头按 price_ret 计盈，空头按 -price_ret 计盈，长/空两侧同套风控）
             if manage and t > 0:
                 trig = np.zeros(n_assets, dtype=bool)
                 if stop_loss > 0:
@@ -126,38 +129,60 @@ class BacktestAnalysisService:
                     trig |= r_prev - 1 >= take_profit
                 if trailing_stop > 0:
                     trig |= (peak_prev - r_prev >= trailing_stop) & (r_prev >= 1)
-                exit_now = trig & (prev > 0.0)
+                exit_now = trig & (prev != 0.0)
                 if exit_now.any():
                     desired[exit_now] = 0.0
                     risk_lock[exit_now] = True
                     risk_exits += int(exit_now.sum())
 
             actual = desired.copy()
-            was_held = prev > 0.0
+            was_held = prev != 0.0
             frozen = ~tradable_arr[t]
             actual[frozen] = prev[frozen]
             buy_blocked = up_board[t] & (desired > prev)
             actual[buy_blocked] = prev[buy_blocked]
             sell_blocked = down_board[t] & (desired < prev)
             actual[sell_blocked] = prev[sell_blocked]
+            if (buy_blocked | sell_blocked).any():
+                blocked_trades += int((buy_blocked | sell_blocked).sum())
             trade = actual - prev
             buy_arr[t] = np.clip(trade, 0.0, None)
             sell_arr[t] = np.clip(-trade, 0.0, None)
             pos_arr[t] = actual
             prev = actual
 
-            # 收盘后更新持仓收益轨迹（供下一日风控判定）
+            # 收盘后更新持仓收益轨迹（符号感知：多头× 价涨利润，空头×价跌）
             if manage:
-                day_factor = 1.0 + np.nan_to_num(pr_arr[t])
-                hold_after = actual > 0.0
+                sign_prev = np.where(prev > 0, 1.0, np.where(prev < 0, -1.0, 0.0))
+                hold_after = actual != 0.0
+                same_side = np.where(actual * prev > 0, True, False)
+                pnl = (1.0 + sign_prev * np.nan_to_num(pr_arr[t]))
                 r_prev = np.where(
-                    hold_after & was_held,
-                    r_prev * day_factor,
-                    np.where(hold_after, day_factor, r_prev),
+                    hold_after & was_held & same_side,
+                    r_prev * pnl,
+                    np.where(
+                        hold_after,
+                        1.0 + np.sign(actual) * np.nan_to_num(pr_arr[t]),
+                        r_prev,
+                    ),
                 )
+                # 移动止损：持仓期间累计最高点（含新建仓首日，确保重仓时峰值清零）
                 peak_prev = np.where(
-                    hold_after, np.maximum(peak_prev, r_prev), peak_prev
+                    hold_after,
+                    np.where(
+                        was_held & same_side,
+                        np.maximum(peak_prev, r_prev),
+                        r_prev,
+                    ),
+                    peak_prev,
                 )
+
+        # 一字板/停牌导致调仓未能成交：持仓保持，未成交意图不追单（如实记录，不改写价格）
+        if blocked_trades:
+            assumptions.append(
+                f"涨停/跌停一字板共 {int(blocked_trades)} 次调仓无法按计划成交，"
+                f"当期持仓保持不动、该笔调仓意图不保留（不做挂单顺延推演）"
+            )
 
         if manage:
             notes = []

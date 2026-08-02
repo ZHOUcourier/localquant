@@ -24,6 +24,9 @@ from backend.plugins.base import BaseWorkNode
 
 CUSTOM_GROUP = "99-自定义节点"
 
+# 单份自定义节点源码上限（防止超大源码拖垮注册/加载）
+MAX_SOURCE_BYTES = 200_000
+
 
 def _custom_dir() -> Path:
     d = Path("./data/custom_nodes")
@@ -102,6 +105,8 @@ def create_custom_node(
 
     base_name: fork 场景传原节点类名；全新自定义节点可不传（要求源码中恰好一个节点类）
     """
+    if len(source.encode("utf-8")) > MAX_SOURCE_BYTES:
+        raise ValueError(f"自定义节点源码过大（上限 {MAX_SOURCE_BYTES} 字节）")
     captured = _exec_in_isolated_registry(source)
     cls = _pick_node_class(captured, base_name)
 
@@ -146,6 +151,8 @@ def update_custom_node(
     if not meta_path.exists() or register_name not in reg.ALL_WORK_NODES:
         raise ValueError(f"自定义节点 {register_name} 不存在")
 
+    if len(source.encode("utf-8")) > MAX_SOURCE_BYTES:
+        raise ValueError(f"自定义节点源码过大（上限 {MAX_SOURCE_BYTES} 字节）")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     captured = _exec_in_isolated_registry(source)
     cls = _pick_node_class(captured, meta.get("class_name") or None)

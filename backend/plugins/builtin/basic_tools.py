@@ -324,13 +324,29 @@ class DataDownloadNode(BaseWorkNode):
             return DataDownloadOutput(success=False)
 
         try:
+            import urllib.parse
             import urllib.request
 
-            save_path = input.save_path.strip()
-            if not save_path:
-                save_path = f"/tmp/downloaded_data.{input.file_type}"
-            os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-            urllib.request.urlretrieve(input.data_url, save_path)
+            from backend.config import settings
+
+            # 仅允许 http(s)，防止 file:// 读取本地文件 / 内网 SSRF 下载
+            parsed = urllib.parse.urlparse(input.data_url)
+            if parsed.scheme not in ("http", "https"):
+                return DataDownloadOutput(success=False)
+
+            # 保存路径收敛到输出目录的 downloads 子目录，禁止任意写
+            save_dir = settings.output_dir / "downloads"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            custom = input.save_path.strip()
+            filename = os.path.basename(custom) if custom else f"downloaded_data.{input.file_type}"
+            if not filename:
+                filename = f"downloaded_data.{input.file_type}"
+            save_path = str(save_dir / filename)
+
+            with urllib.request.urlopen(input.data_url, timeout=20) as resp, open(
+                save_path, "wb"
+            ) as f:
+                f.write(resp.read())
 
             # 读取为 DataFrame
             df = pd.DataFrame()

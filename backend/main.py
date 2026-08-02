@@ -13,6 +13,19 @@ from backend.config import settings
 from backend.database import init_db
 
 
+def _allowed_origins() -> list[str]:
+    """本地默认来源；可用 env ALLOWED_ORIGINS（逗号分隔）覆盖以支持跨机器访问"""
+    env = getattr(settings, "allowed_origins", "") or ""
+    if env.strip():
+        return [o.strip() for o in env.split(",") if o.strip()]
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -51,10 +64,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — 本工具面向本机单用户，仅放行本地前端来源；不用通配符，避免同源保护被禁用。
+# 如需跨机器访问，请在启动前显式配置 ALLOWED_ORIGINS（逗号分隔）并自行承担鉴权缺失风险。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

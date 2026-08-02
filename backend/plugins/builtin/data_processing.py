@@ -183,6 +183,32 @@ class FormulaCalcOutput(BaseModel):
     data: Optional[pd.DataFrame] = None
 
 
+# 公式/代码节点只提供受限内置函数，防止执行任意系统操作（与因子构建节点同款白名单）
+_SAFE_BUILTINS = {
+    "print": print,
+    "range": range,
+    "len": len,
+    "list": list,
+    "dict": dict,
+    "set": set,
+    "tuple": tuple,
+    "int": int,
+    "float": float,
+    "str": str,
+    "bool": bool,
+    "abs": abs,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "enumerate": enumerate,
+    "zip": zip,
+    "map": map,
+    "filter": filter,
+    "sorted": sorted,
+    "round": round,
+}
+
+
 @work_node(
     name="公式计算",
     group="02-数据处理",
@@ -212,7 +238,7 @@ class FormulaCalcNode(BaseWorkNode):
 
         df = df.copy()
         try:
-            exec(input.formula, {"df": df, "pd": pd, "np": np})  # noqa: S102
+            exec(input.formula, {"__builtins__": _SAFE_BUILTINS, "df": df, "pd": pd, "np": np})  # noqa: S102
         except Exception as e:
             print(f"公式计算错误: {e}")
 
@@ -381,7 +407,7 @@ class CodeExecOutput(BaseModel):
     example="QMT行情数据 → 代码执行 → 输出",
     notes=[
         "需把结果写回 df 变量；执行失败时原样返回输入数据",
-        "与「Python代码输入」节点功能类似，但不限制内置函数，请谨慎使用",
+        "内置函数为受限白名单（无 open/import/os 等），复杂逻辑请使用「自定义节点」",
     ],
 )
 class CodeExecNode(BaseWorkNode):
@@ -400,6 +426,7 @@ class CodeExecNode(BaseWorkNode):
 
         try:
             env = {
+                "__builtins__": _SAFE_BUILTINS,
                 "df": df.copy(),
                 "pd": pd,
                 "np": np,

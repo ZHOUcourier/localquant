@@ -105,11 +105,17 @@ async def update_config(body: ConfigUpdate):
 
 def _write_env(updates: dict[str, str]) -> None:
     """就地更新 .env 中的键值，保留未涉及的行与注释；不存在的键追加到末尾"""
+    sanitized: dict[str, str] = {}
+    for key, value in updates.items():
+        # 清洗换行/回车/空字节等，防止通过配置值注入新的 env 键或控制字符
+        cleaned = "".join(ch for ch in str(value) if ch not in "\r\n\x00")
+        sanitized[key] = cleaned
+
     lines: list[str] = []
     if ENV_FILE.exists():
         lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
 
-    remaining = dict(updates)
+    remaining = dict(sanitized)
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:

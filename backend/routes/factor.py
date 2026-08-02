@@ -1,5 +1,6 @@
 """因子路由 — 直接调用本地因子研究服务"""
 
+import asyncio
 import time
 import uuid
 
@@ -7,6 +8,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from loguru import logger
+from pydantic import BaseModel
 from pydantic import BaseModel
 
 from backend.database import get_db
@@ -22,6 +24,24 @@ from backend.services import market_data
 from backend.services.factor_research import factor_research
 
 router = APIRouter()
+
+
+async def _spawn_provenance(
+    kind: str,
+    entity_name: str,
+    params: dict,
+    metrics: dict | None = None,
+):
+    """后台异步落一条溯源记录，失败不阻断主请求"""
+    try:
+        from backend.services.provenance import record_provenance
+
+        await record_provenance(
+            kind=kind, entity_name=entity_name, params=params or {}, metrics=metrics,
+            source="research_local",
+        )
+    except Exception:
+        logger.debug("因子研究溯源记录失败（非致命）", exc_info=True)
 
 
 # 因子编写参考（字段 + 算子）— 供前端「变量参考」面板展示，与求值环境对齐
@@ -170,12 +190,41 @@ async def compute_factor(req: FactorComputeRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     close = panels["close"]
+    # 待注入的参考面板：市值 / 换手率（无股本快照则为 None，不注入避免误导取值）
+    aug = dict(panels)
+    try:
+        from backend.services import reference_data
+
+        mc = reference_data.build_market_cap_panel(close)
+        if mc is not None:
+            aug["market_cap"] = mc
+        turn = reference_data.build_turnover_panel(panels.get("volume"), close)
+        if turn is not None:
+            aug["turnover"] = turn
+        industry_map = reference_data.load_industry_map()
+    except Exception:
+        logger.debug("市值/换手率/行业面板不可用，跳过注入", exc_info=True)
+        mc, turn, industry_map = None, None, None
+    # 基本面公告日点位：仅股票代码区间内已有快照记录的字段注入，避免 fund_xxx 无从取值
+    fundamental_panels = {}
+    try:
+        from backend.services.fundamental import build_fundamental_panels
+
+        fundamental_panels = build_fundamental_panels(
+            list(close.columns), close.index
+        ) or {}
+    except Exception:
+        fundamental_panels = {}
     # 构建公式求值命名空间：基础字段 + vwap/returns + 全部量化算子
     # （RANK/DELAY/DELTA/CORR/TS_RANK/DECAYLINEAR 等，大小写均可），
     # 使因子库中的 Alpha101/Alpha191 公式可直接运行。
     from backend.services.factor_operators import build_operator_namespace
 
-    eval_ctx = build_operator_namespace(panels)
+    eval_ctx = build_operator_namespace(
+        aug,
+        industry_map=industry_map,
+        fundamental={f"fund_{f}": p for f, p in fundamental_panels.items()},
+    )
 
     try:
         if req.mode == "formula":
@@ -246,6 +295,18 @@ async def ic_analysis(req: ICAnalysisRequest):
         factor_df.index = pd.to_datetime(factor_df.index)
         return_df.index = pd.to_datetime(return_df.index)
         result = factor_research.ic_analysis(factor_df, return_df, req.periods)
+        asyncio.create_task(
+            _spawn_provenance(
+                "factor_ic",
+                f"IC分析·periods={req.periods}",
+                {
+                    "periods": req.periods,
+                    "n_stocks": int(factor_df.shape[1]),
+                    "n_dates": int(factor_df.shape[0]),
+                },
+                {"ic_mean": float(result.get("summary", {}).get("ic_mean", 0.0))},
+            )
+        )
         return result
     except Exception as e:
         logger.error(f"IC分析失败: {e}")
@@ -260,6 +321,18 @@ async def quantile_analysis(req: QuantileRequest):
         factor_df.index = pd.to_datetime(factor_df.index)
         return_df.index = pd.to_datetime(return_df.index)
         result = factor_research.quantile_analysis(factor_df, return_df, req.n_groups)
+        asyncio.create_task(
+            _spawn_provenance(
+                "factor_quantile",
+                f"分层分析·groups={req.n_groups}",
+                {
+                    "n_groups": req.n_groups,
+                    "n_stocks": int(factor_df.shape[1]),
+                    "n_dates": int(factor_df.shape[0]),
+                },
+                None,
+            )
+        )
         return result
     except Exception as e:
         logger.error(f"分层分析失败: {e}")
@@ -305,9 +378,22 @@ async def full_analysis(req: QuantileRequest):
         return_df = _dict_to_df(req.return_data)
         factor_df.index = pd.to_datetime(factor_df.index)
         return_df.index = pd.to_datetime(return_df.index)
-        return factor_research.full_factor_analysis(
+        res = factor_research.full_factor_analysis(
             factor_df, return_df, n_groups=req.n_groups
         )
+        asyncio.create_task(
+            _spawn_provenance(
+                "factor_full",
+                f"完整因子分析·groups={req.n_groups}",
+                {
+                    "n_groups": req.n_groups,
+                    "n_stocks": int(factor_df.shape[1]),
+                    "n_dates": int(factor_df.shape[0]),
+                },
+                res.get("summary") or None,
+            )
+        )
+        return res
     except Exception as e:
         logger.error(f"因子分析失败: {e}")
         raise HTTPException(status_code=500, detail=f"因子分析失败: {e}")

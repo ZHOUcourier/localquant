@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -58,7 +57,7 @@ def snapshot_fundamental(qmt, codes: list[str]) -> int:
             data = qmt.get_financial(
                 [code], tables=tables, report_type="announce_time"
             )
-            frames = code_frames(data.get(code))
+            frames = _code_frames(data.get(code))
             if not frames:
                 continue
             merged = _merge_frames(frames)
@@ -81,31 +80,47 @@ def _code_frames(code_tables) -> dict[str, pd.DataFrame]:
 
 
 def _merge_frames(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """把多张财务表按公告日合并成一张宽表：columns=字段, row ann ，升序
+    """把多张财务表按公告日合并成一张宽表：columns=字段, row 为公告日, 升序
 
-    返回值列名含有推荐标准字段 + 时间列 'anntime'/'timetag'。
+    以 anntime 为连接键、按表优先级（Pershareindex > Income > Balance > CostCapital）
+    合并各表呈现的指标，避免 `pd.concat(axis=1)` 造成的重复列（各表都带 anntime，
+    eps 又同时出现在 Pershareindex/Income）导致无法落盘。
     """
+    _PRIORITY = ["Pershareindex", "Income", "Balance", "CostCapital", "Cashflow"]
+    order = {p: i for i, p in enumerate(_PRIORITY)}
     parts: list[pd.DataFrame] = []
     for table, df in frames.items():
-        ann = _find_col(df, ["m_anntime", "anntime", "announce_time", "mAnnounce"])
+        ann = _find_col(df, ["m_anntime", "announce_time", "mAnnounce", "anntime"])
         if ann is None:
             continue
-        rename = {"m_anntime": "anntime", "mAnnounce": "anntime",
-                  "announce_time": "anntime", "anntime": "anntime"}
-        ttag_col = _find_col(df, ["m_timetag", "timetag", "report_time"])
-        keep = {ann, ttag_col} if ttag_col else {ann}
+        keep = set()
         for c in df.columns:
             if str(c).lower() in {f.lower() for f in FUND_FIELDS}:
                 keep.add(c)
-        sub = df[list(keep)].copy()
-        if "anntime" not in sub.columns:
-            sub = sub.rename(columns={ann: "anntime"})
+        if not keep:
+            continue
+        ren = {}
+        if ann != "anntime":
+            ren[ann] = "anntime"
+        sub = df[list(keep | {ann})].copy().rename(columns=ren)
+        sub["_table"] = order.get(table, 99)
         parts.append(sub)
     if not parts:
         return pd.DataFrame()
-    merged = pd.concat(parts, axis=1, ignore_index=False)
+
+    rows = sorted(parts, key=lambda s: int(s.iloc[0]["_table"]) if len(s) else 0)
+    if not rows:
+        return pd.DataFrame()
+    merged = rows[0].drop(columns="_table")
+    for r in rows[1:]:
+        r = r.drop(columns="_table")
+        merged = pd.merge(
+            merged, r, on="anntime", how="outer", suffixes=("", "_dup")
+        )
+        merged = merged[[c for c in merged.columns if not c.endswith("_dup")]]
     if "anntime" not in merged.columns:
         return pd.DataFrame()
+    merged = merged.sort_values("anntime")
     return merged
 
 

@@ -13,6 +13,16 @@ from backend.services.backtest_analysis import backtest_analysis
 
 router = APIRouter()
 
+# 回测后台任务并发上限（懒创建，避免 import 时绑定事件循环）
+_backtest_sem: Optional[asyncio.Semaphore] = None
+
+
+def _backtest_sem() -> asyncio.Semaphore:
+    global _backtest_sem
+    if _backtest_sem is None:
+        _backtest_sem = asyncio.Semaphore(2)
+    return _backtest_sem
+
 
 # ── 请求模型 ─────────────────────────────────────────────────
 
@@ -88,9 +98,10 @@ async def run_strategy(req: RunStrategyRequest):
     """
     from backend.services.sandbox import run_signals
 
-    # 1. 加载真实行情（无数据时返回明确错误）
+    # 1. 加载真实行情（无数据时返回明确错误）；重活放线程池，避免阻塞事件循环
     try:
-        panels = market_data.load_price_panels(
+        panels = await asyncio.to_thread(
+            market_data.load_price_panels,
             codes=req.stock_pool,
             start_date=req.start_date,
             end_date=req.end_date,
@@ -116,10 +127,11 @@ async def run_strategy(req: RunStrategyRequest):
 
     # 3. 回测 + 绩效（接入停牌/涨跌停等参考面板，缺失项记入 assumptions）
     try:
-        reference = market_data.load_reference_panels(
-            close=prices, volume=panels.get("volume")
+        reference = await asyncio.to_thread(
+            market_data.load_reference_panels, close=prices, volume=panels.get("volume")
         )
-        result = backtest_analysis.run_backtest(
+        result = await asyncio.to_thread(
+            backtest_analysis.run_backtest,
             signals=signals_df,
             prices=prices,
             initial_capital=req.initial_capital,
@@ -139,11 +151,14 @@ async def run_strategy(req: RunStrategyRequest):
         equity_curve = result["equity_curve"]
         strategy_returns = result["strategy_returns"]
 
-        tear = backtest_analysis.performance_tear_sheet(
-            returns=strategy_returns,
-            risk_free_rate=req.risk_free_rate,
+        tear, dd = await asyncio.to_thread(
+            lambda: (
+                backtest_analysis.performance_tear_sheet(
+                    returns=strategy_returns, risk_free_rate=req.risk_free_rate
+                ),
+                backtest_analysis.drawdown_analysis(strategy_returns),
+            )
         )
-        dd = backtest_analysis.drawdown_analysis(strategy_returns)
 
         def _ser(s) -> dict:
             return {
@@ -280,6 +295,11 @@ class CreateRunRequest(BaseModel):
     init_balance: float = 1_000_000
     commission_rate: float = 0.001
     slippage: float = 0.001
+    stamp_tax: float = 0.0005
+    normalize: str = "none"
+    take_profit: float = 0.0
+    stop_loss: float = 0.0
+    trailing_stop: float = 0.0
     stock_pool: list[str] = []
 
 
@@ -320,10 +340,13 @@ async def create_run(req: CreateRunRequest):
     )
 
     async def _run():
-        try:
-            await execute_backtest_run(run_id)
-        except Exception:
-            pass  # 错误已落库（status=error）
+        # 并发上限：避免无限堆积的重回测任务耗尽线程/内存
+        sem = _backtest_sem()
+        async with sem:
+            try:
+                await execute_backtest_run(run_id)
+            except Exception:
+                pass  # 错误已落库（status=error）
 
     asyncio.create_task(_run())
     return {"id": run_id, "status": "running"}

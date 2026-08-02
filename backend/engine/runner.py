@@ -10,6 +10,7 @@
   3. SSE 事件推送（节点开始/完成/失败/整体完成）
 """
 
+import asyncio
 import hashlib
 import json
 import pickle
@@ -306,7 +307,8 @@ async def run_workflow(
             if cached is not None:
                 output = cached
             else:
-                output = _run_node(node_name_cls, merged_input)
+                # 节点计算放线程池，避免慢节点阻塞事件循环（与 Comfy 队列 worker 对齐）
+                output = await asyncio.to_thread(_run_node, node_name_cls, merged_input)
                 if cache_key:
                     _cache_store(cache_key, output)
 
@@ -459,7 +461,8 @@ async def run_workflow_stream(
                 output = cached
                 is_cached = True
             else:
-                output = _run_node(node_name_cls, merged_input)
+                # 节点计算放线程池，避免慢节点阻塞事件循环与中断响应
+                output = await asyncio.to_thread(_run_node, node_name_cls, merged_input)
                 is_cached = False
                 if cache_key:
                     _cache_store(cache_key, output)

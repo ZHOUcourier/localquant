@@ -24,8 +24,8 @@ class BacktestInput(BaseModel):
     high: dict = {}  # 可选最高价面板（用于一字板判定）
     low: dict = {}  # 可选最低价面板（用于一字板判定）
     initial_capital: float = 1_000_000.0
-    commission_rate: float = 0.0008  # 默认佣金率（与官网一致）
-    slippage: float = 0.0
+    commission_rate: float = 0.001  # 默认佣金率（与回测引擎/其余入口一致）
+    slippage: float = 0.001
     stamp_tax: float = 0.0005  # 卖出印花税
     normalize: str = "long_only"  # 权重归一方式
     frequency: str = "1d"  # 回测频率
@@ -84,7 +84,7 @@ class BacktestOutput(BaseModel):
         "signals / prices 均需连线提供（面板：index=日期, columns=股票）；benchmark 为可选基准收盘序列",
         "volume/high/low 为可选连线：提供后启用停牌冻结与一字板不可成交处理，未提供时不处理并在 assumptions 中明示",
         "normalize 默认 long_only（正信号按日归一 Σw=1，避免信号值直接作权重的隐性杠杆），可选 dollar_neutral / none",
-        "佣金率默认 0.0008，滑点默认 0，卖出印花税默认 0.0005；T 日信号 T+1 执行；指标按 252 交易日年化",
+        "佣金率默认 0.001，滑点 0.001，卖出印花税 0.0005（与回测引擎/其余入口口径一致）；T 日信号 T+1 执行；指标按 252 交易日年化",
         "止盈/止损/移动止损（0 关闭）：单仓逐仓风控，基于 T-1 收盘判定、T 日执行，避免当日盘中前视；命中会覆盖信号目标为平仓",
         "移动止损 trailing_stop 仅对盈利仓生效：自建仓后最高点回撤达比例即止（锁盈）",
         "提供 benchmark 时额外输出跟踪误差/信息比率等相对基准指标",

@@ -951,6 +951,11 @@ def build_operator_namespace(
         "RETURNS_": close.pct_change() if close is not None else None,
         "adv20": ADV(volume, 20) if volume is not None else None,
         "ADV20": ADV(volume, 20) if volume is not None else None,
+        # 派生参考面板（可基线提供）：市值 / 换手率 / 行业映射（供 INDUSTRY_NEUTRALIZE）
+        "market_cap": panels.get("market_cap"),
+        "MARKET_CAP": panels.get("market_cap"),
+        "turnover": panels.get("turnover"),
+        "TURNOVER": panels.get("turnover"),
         # 基本面（公告日点位）字段：fund_pe / fund_pb / fund_eps / fund_roe ...
         **({f: p for f, p in fundamental.items()} if fundamental else {}),
         **({f.upper(): p for f, p in fundamental.items()} if fundamental else {}),
