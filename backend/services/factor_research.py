@@ -2,7 +2,7 @@
 
 import re
 import time
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 import numpy as np
 import pandas as pd
@@ -1297,6 +1297,712 @@ class FactorResearchService:
             return True
         finally:
             await db.close()
+
+    # ── 公式在本地行情上的求值（供单因子重算 / 批量扫描 / 样本外验证复用）──
+
+    def eval_formula_on_local(
+        self,
+        formula: str,
+        start_date: str = "",
+        end_date: str = "",
+    ) -> dict:
+        """在本地缓存行情面板上对公式求值，返回因子面板与配套研究数据
+
+        Returns:
+            {ok, factor_df, return_data, mask, data_date, n_stocks, n_dates, message}
+            数据不足或公式报错时 ok=False（message 说明原因，不伪造数据）。
+        """
+        if not formula:
+            return {"ok": False, "message": "无可解析公式，暂不支持本地分析"}
+        try:
+            from backend.services import market_data, reference_data
+            from backend.services.factor_operators import build_operator_namespace
+
+            codes = market_data.list_cached_codes("1d")
+            if len(codes) < 30:
+                return {
+                    "ok": False,
+                    "message": f"本地仅 {len(codes)} 只股票缓存，不足以稳定估计 IC（至少 30 只）",
+                }
+            panels = market_data.load_price_panels(
+                codes=codes, start_date=start_date, end_date=end_date
+            )
+            close = panels.get("close")
+            if close is None or len(close.index) < 60:
+                return {"ok": False, "message": "本地行情区间不足 60 个交易日"}
+            ns = build_operator_namespace(
+                panels, industry_map=reference_data.load_industry_map()
+            )
+            try:
+                from backend.services.fundamental import build_fundamental_panels
+
+                fund = build_fundamental_panels(codes, panels["close"].index)
+                if fund:
+                    ns.update({f"fund_{f}": p for f, p in fund.items()})
+                    ns.update({f"FUND_{f.upper()}": p for f, p in fund.items()})
+            except Exception:
+                pass
+            factor_df = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+            if isinstance(factor_df, pd.Series):
+                factor_df = factor_df.to_frame()
+            if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
+                return {"ok": False, "message": "公式未产出有效因子面板"}
+            return_data = close.pct_change()
+            mask = None
+            try:
+                from backend.services.market_data import build_cross_section_mask
+
+                mask = build_cross_section_mask(panels)
+            except Exception:
+                mask = None
+            return {
+                "ok": True,
+                "factor_df": factor_df,
+                "return_data": return_data,
+                "mask": mask,
+                "panels": panels,
+                "data_date": str(close.index[-1])[:10],
+                "n_stocks": len(close.columns),
+                "n_dates": len(close.index),
+            }
+        except Exception as e:
+            logger.warning(f"公式因子本地求值失败: {e}")
+            return {"ok": False, "message": f"本地分析失败: {e}"}
+
+    def analyze_formula_on_local(self, formula: str) -> dict:
+        """在本地缓存行情面板上对公式因子跑完整分析，返回 {ok, metrics, ...}。
+
+        供预置因子重算与自建因子注册时的指标快照复用；数据不足时 ok=False。
+        """
+        res = self.eval_formula_on_local(formula)
+        if not res.get("ok"):
+            return {"ok": False, "message": res.get("message", "")}
+        report = self.full_factor_analysis(
+            res["factor_df"].dropna(how="all"),
+            res["return_data"],
+            periods=[1, 5, 10, 20],
+            mask=res.get("mask"),
+        )
+        s = report["summary"]
+        metrics = {
+            "ic_mean": float(s.get("ic_mean", 0.0)),
+            "rank_ic": float(s.get("rank_ic", 0.0)),
+            "ic_ir": float(s.get("ic_ir", 0.0)),
+            "ic_std": float(s.get("ic_std", 0.0)),
+            "annualized_return": float(s.get("annual_return", 0.0)),
+            "maximum_drawdown": float(s.get("max_drawdown", 0.0)),
+            "sharpe_ratio": float(s.get("sharpe_ratio", 0.0)),
+        }
+        return {
+            "ok": True,
+            "metrics": metrics,
+            "data_date": res["data_date"],
+            "n_stocks": res["n_stocks"],
+            "n_dates": res["n_dates"],
+        }
+
+    # ── 因子批量扫描（P1）─────────────────────────────────────
+
+    @staticmethod
+    def _scan_factor_metrics(
+        factor_df: pd.DataFrame,
+        return_data: pd.DataFrame,
+        periods: list[int] | None = None,
+        mask: pd.DataFrame | None = None,
+    ) -> dict:
+        """单因子的扫描指标：核心 IC 指标 + 分层多空（轻量，不做完整报告）
+
+        与 ic_analysis / quantile_analysis 同口径，保证扫描结果与详情页一致。
+        """
+        periods = periods or [1, 5, 10, 20]
+        ic = FactorResearchService().ic_analysis(
+            factor_df, return_data, periods=[periods[0]], mask=mask
+        )
+        base = ic.get(f"period_{periods[0]}", {})
+        quantile = FactorResearchService().quantile_analysis(
+            factor_df, return_data, n_groups=5, mask=mask
+        )
+        ls_series = quantile.get("long_short_series", [])
+        ls_cum = float(ls_series[-1]["cum_return"]) if ls_series else 0.0
+        return {
+            "ic_mean": float(base.get("ic_mean", 0.0)),
+            "rank_ic": float(base.get("rank_ic_mean", 0.0)),
+            "ic_ir": float(base.get("ic_ir", 0.0)),
+            "ic_std": float(base.get("ic_std", 0.0)),
+            "t_stat": float(base.get("ic_tstat", 0.0)),
+            "positive_ratio": float(base.get("ic_positive_ratio", 0.0)),
+            "n_cross_sections": int(len(base.get("ic_series", []))),
+            "long_short_cum": ls_cum,
+            "monotonicity": float(quantile.get("monotonicity", 0.0)),
+        }
+
+    async def scan_factors_stream(
+        self,
+        factor_ids: list[int] | None = None,
+        category_codes: list[str] | None = None,
+        limit: int = 100,
+        start_date: str = "",
+        end_date: str = "",
+        periods: list[int] | None = None,
+        max_workers: int = 4,
+    ) -> AsyncGenerator[str, None]:
+        """批量扫描因子 IC（SSE 逐因子进度）
+
+        事件类型：
+          scan_start:  {total, factor_ids}
+          factor_done: {index, factor_id, factor_name, ok, metrics|error}
+          scan_done:   {ok_count, failed, failed_names, data_date,
+                        n_stocks, n_dates, duration_ms}
+
+        面板只加载一次、全因子共享；预置因子指标「覆盖更新」写入库并留存历史快照。
+        """
+        import asyncio
+        import concurrent.futures
+        import time
+
+        from backend.services import market_data
+
+        started = time.perf_counter()
+
+        # 1. 取因子清单（按 id 或类别过滤），仅扫描公式型因子
+        db = await get_db()
+        try:
+            clauses, params = [], []
+            if factor_ids:
+                marks = ",".join("?" * len(factor_ids))
+                clauses.append(f"id IN ({marks})")
+                params.extend(factor_ids)
+            if category_codes:
+                marks = ",".join("?" * len(category_codes))
+                clauses.append(f"category_code IN ({marks})")
+                params.extend(category_codes)
+            where = " WHERE " + " AND ".join(clauses) if clauses else ""
+            cursor = await db.execute(
+                f"SELECT * FROM preset_factors{where} ORDER BY id LIMIT ?",
+                (*params, limit),
+            )
+            rows = [dict(r) for r in await cursor.fetchall()]
+        finally:
+            await db.close()
+
+        targets = []
+        for row in rows:
+            formula = extract_formula(row.get("description"))
+            if not formula:
+                continue
+            targets.append(
+                {
+                    "factor_id": row["id"],
+                    "factor_name": row.get("factor_name", ""),
+                    "category_name": row.get("category_name", ""),
+                    "formula": formula,
+                }
+            )
+        if not targets:
+            yield _sse("scan_done", {"ok_count": 0, "failed": 0, "failed_names": [],
+                                     "message": "所选因子均无可解析公式（仅支持公式型因子）"})
+            return
+
+        # 2. 加载面板（一次）+ 构造求值命名空间
+        try:
+            panels = await asyncio.to_thread(
+                market_data.load_price_panels,
+                codes=[],
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except ValueError as e:
+            yield _sse("scan_done", {"ok_count": 0, "failed": len(targets),
+                                     "failed_names": [t["factor_name"] for t in targets],
+                                     "message": str(e)})
+            return
+
+        from backend.services import reference_data
+        from backend.services.factor_operators import build_operator_namespace
+
+        ns = build_operator_namespace(
+            panels, industry_map=reference_data.load_industry_map()
+        )
+        try:
+            from backend.services.fundamental import build_fundamental_panels
+
+            fund = build_fundamental_panels(
+                list(panels["close"].columns), panels["close"].index
+            )
+            if fund:
+                ns.update({f"fund_{f}": p for f, p in fund.items()})
+                ns.update({f"FUND_{f.upper()}": p for f, p in fund.items()})
+        except Exception:
+            pass
+        return_data = panels["close"].pct_change()
+        mask = None
+        try:
+            mask = market_data.build_cross_section_mask(panels)
+        except Exception:
+            mask = None
+
+        yield _sse("scan_start", {"total": len(targets), "factor_ids": [t["factor_id"] for t in targets]})
+
+        def _eval_one(item: dict) -> dict:
+            t0 = time.perf_counter()
+            try:
+                factor_df = eval(item["formula"], {"__builtins__": {}}, ns)  # noqa: S307
+                if isinstance(factor_df, pd.Series):
+                    factor_df = factor_df.to_frame()
+                if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
+                    return {**item, "ok": False, "error": "公式未产出有效因子面板"}
+                metrics = self._scan_factor_metrics(
+                    factor_df.dropna(how="all"), return_data, periods, mask
+                )
+                return {
+                    **item,
+                    "ok": True,
+                    "metrics": metrics,
+                    "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                }
+            except Exception as e:  # noqa: BLE001
+                return {**item, "ok": False, "error": str(e)[:300]}
+
+        ok_count = 0
+        failed_names: list[str] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_eval_one, t): i for i, t in enumerate(targets)}
+            for fut in concurrent.futures.as_completed(futures):
+                res = fut.result()
+                if res.get("ok"):
+                    ok_count += 1
+                    await self._persist_scan_result(res, return_data)
+                else:
+                    failed_names.append(res.get("factor_name", ""))
+                yield _sse("factor_done", res)
+
+        yield _sse(
+            "scan_done",
+            {
+                "ok_count": ok_count,
+                "failed": len(failed_names),
+                "failed_names": failed_names,
+                "data_date": str(panels["close"].index[-1])[:10],
+                "n_stocks": len(panels["close"].columns),
+                "n_dates": len(panels["close"].index),
+                "duration_ms": int((time.perf_counter() - started) * 1000),
+            },
+        )
+
+    async def _persist_scan_result(self, res: dict, return_data: pd.DataFrame) -> None:
+        """扫描结果写回预置因子（覆盖更新语义）+ 留存历史快照 + 溯源"""
+        db = await get_db()
+        try:
+            await self._ensure_history_table(db)
+            m = res["metrics"]
+            factor_id = res["factor_id"]
+            cursor = await db.execute(
+                "SELECT ic_mean, rank_ic, ic_ir, ic_std, annualized_return, "
+                "maximum_drawdown, sharpe_ratio, turnover_rate, data_date "
+                "FROM preset_factors WHERE id = ?",
+                (factor_id,),
+            )
+            row = await cursor.fetchone()
+            old = dict(row) if row else {}
+            await db.execute(
+                "INSERT INTO preset_factor_ic_history "
+                "(factor_id, ic_mean, rank_ic, ic_ir, ic_std, annualized_return, "
+                " maximum_drawdown, sharpe_ratio, turnover_rate, data_date, snapshot_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    factor_id,
+                    old.get("ic_mean"),
+                    old.get("rank_ic"),
+                    old.get("ic_ir"),
+                    old.get("ic_std"),
+                    old.get("annualized_return"),
+                    old.get("maximum_drawdown"),
+                    old.get("sharpe_ratio"),
+                    old.get("turnover_rate"),
+                    old.get("data_date"),
+                    int(time.time()),
+                ),
+            )
+            await db.execute(
+                "UPDATE preset_factors SET ic_mean = ?, rank_ic = ?, ic_ir = ?, "
+                "ic_std = ?, data_date = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (m["ic_mean"], m["rank_ic"], m["ic_ir"], m["ic_std"],
+                 str(return_data.index[-1])[:10], factor_id),
+            )
+            await db.commit()
+            try:
+                from backend.services.provenance import record_provenance
+
+                await record_provenance(
+                    kind="factor",
+                    entity_id=str(factor_id),
+                    entity_name=res.get("factor_name", ""),
+                    params={"action": "batch_scan", "formula": res.get("formula", "")},
+                    metrics=m,
+                    notes=f"批量扫描写入（覆盖更新），耗时 {res.get('elapsed_ms', 0)}ms",
+                    source="scan",
+                )
+            except Exception:
+                pass
+        finally:
+            await db.close()
+
+    # ── 样本外验证（walk-forward）（P5）─────────────────────
+
+    def _window_ic_metrics(
+        self,
+        factor_data: pd.DataFrame,
+        return_data: pd.DataFrame,
+        period: int,
+        i0: int,
+        i1: int,
+        mask: pd.DataFrame | None = None,
+    ) -> dict:
+        """窗口内 IC 指标（与 ic_analysis 同口径：T 日因子 vs T→T+p 前向累计收益）"""
+        dates = factor_data.index[i0:i1]
+        ics, rics = [], []
+        for i in range(len(dates) - period):
+            f = factor_data.loc[dates[i]].dropna()
+            fwd = return_data.loc[dates[i + 1]:dates[i + period]]
+            comp = ((1.0 + fwd).prod(min_count=1) - 1.0).dropna()
+            common = f.index.intersection(comp.index)
+            if mask is not None and dates[i] in mask.index:
+                mrow = mask.loc[dates[i]]
+                tradable = mrow[mrow.fillna(0).astype(float) > 0]
+                common = common.intersection(tradable.index)
+            if len(common) < 10:
+                continue
+            ics.append(f[common].corr(comp[common]))
+            rics.append(f[common].rank().corr(comp[common].rank()))
+        n = len(ics)
+        arr = np.array(ics) if ics else np.array([])
+        rarr = np.array(rics) if rics else np.array([])
+        ic_mean = float(arr.mean()) if arr.size else 0.0
+        ic_std = float(arr.std(ddof=1)) if arr.size > 1 else 0.0
+        t_stat = ic_mean / (ic_std / np.sqrt(arr.size)) if ic_std > 0 and arr.size else 0.0
+        return {
+            "ic_mean": ic_mean,
+            "rank_ic_mean": float(rarr.mean()) if rarr.size else 0.0,
+            "ic_ir": ic_mean / ic_std if ic_std > 0 else 0.0,
+            "t_stat": float(t_stat),
+            "positive_ratio": float(sum(1 for x in ics if x > 0) / n) if n else 0.0,
+            "n_cross_sections": n,
+        }
+
+    def _window_long_short(
+        self,
+        factor_data: pd.DataFrame,
+        return_data: pd.DataFrame,
+        i0: int,
+        i1: int,
+        n_groups: int = 5,
+        mask: pd.DataFrame | None = None,
+    ) -> tuple[float, float]:
+        """窗口内多空累计收益与日均多空收益（T 日分组 → T+1 日收益，无前视）"""
+        dates = factor_data.index[i0:i1]
+        spread = []
+        for i in range(len(dates) - 1):
+            f = factor_data.loc[dates[i]].dropna()
+            nxt = dates[i + 1]
+            if nxt not in return_data.index:
+                continue
+            r = return_data.loc[nxt].dropna()
+            common = f.index.intersection(r.index)
+            if mask is not None and dates[i] in mask.index:
+                mrow = mask.loc[dates[i]]
+                tradable = mrow[mrow.fillna(0).astype(float) > 0]
+                common = common.intersection(tradable.index)
+            if len(common) < n_groups * 2:
+                continue
+            try:
+                groups = pd.qcut(f[common], q=n_groups, labels=False, duplicates="drop")
+            except Exception:
+                continue
+            top = common[groups == n_groups - 1]
+            bot = common[groups == 0]
+            if len(top) and len(bot):
+                spread.append(float(r[top].mean() - r[bot].mean()))
+        if not spread:
+            return 0.0, 0.0
+        cum = float(np.prod([1 + s for s in spread]) - 1)
+        return cum, float(np.mean(spread))
+
+    def walk_forward_validation(
+        self,
+        factor_data: pd.DataFrame,
+        return_data: pd.DataFrame,
+        train_days: int = 252,
+        test_days: int = 63,
+        n_splits: int = 3,
+        period: int = 1,
+        n_groups: int = 5,
+        mask: pd.DataFrame | None = None,
+    ) -> dict:
+        """因子样本外（walk-forward）验证：滚动锚定分割，防过拟合
+
+        每折：训练窗口 [0, t) 估 in-sample IC；测试窗口 [t, t+test) 估
+        out-of-sample IC 与分层多空收益；窗口逐折后移（扩张式，无前视）。
+
+        Returns:
+            folds 明细 + aggregate（OOS IC 均值/t 值/同向一致性/多空累计/衰减）
+        """
+        factor_data = factor_data.dropna(how="all")
+        dates = factor_data.index
+        n_total = len(dates)
+        if n_total < train_days + test_days:
+            return {
+                "ok": False,
+                "message": f"样本不足：需至少 {train_days + test_days} 个交易日，当前 {n_total}",
+            }
+
+        folds = []
+        oos_ics: list[float] = []
+        oos_ls: list[float] = []
+        t_end = train_days
+        k = 0
+        while t_end + test_days <= n_total and k < n_splits:
+            t0, t1 = t_end, t_end + test_days
+            ins = self._window_ic_metrics(factor_data, return_data, period, 0, t0, mask)
+            oos = self._window_ic_metrics(factor_data, return_data, period, t0, t1, mask)
+            ls_cum, ls_mean = self._window_long_short(
+                factor_data, return_data, t0, t1, n_groups, mask
+            )
+            folds.append(
+                {
+                    "fold": k + 1,
+                    "train_end": str(dates[t0 - 1])[:10],
+                    "test_start": str(dates[t0])[:10],
+                    "test_end": str(dates[t1 - 1])[:10],
+                    "in_sample": ins,
+                    "out_of_sample": oos,
+                    "long_short_cum": round(ls_cum, 4),
+                    "long_short_mean_daily": round(ls_mean, 6),
+                }
+            )
+            oos_ics.append(oos["ic_mean"])
+            oos_ls.append(ls_cum)
+            t_end = t1
+            k += 1
+
+        if not folds:
+            return {"ok": False, "message": "分割后无有效测试窗口"}
+
+        # 同向一致性：in-sample 与 OOS 的 IC 符号一致比例
+        sign_hits = sum(
+            1 for fd in folds if fd["in_sample"]["ic_mean"] * fd["out_of_sample"]["ic_mean"] > 0
+        )
+        oos_arr = np.array(oos_ics)
+        oos_mean = float(oos_arr.mean())
+        oos_std = float(oos_arr.std(ddof=1)) if oos_arr.size > 1 else 0.0
+        oos_t = oos_mean / (oos_std / np.sqrt(oos_arr.size)) if oos_std > 0 else 0.0
+
+        # 全部测试区间的 IC 衰减（同口径 T→T+p 复利收益）
+        test_end_final = t_end
+        decay = []
+        for p in [1, 5, 10, 20]:
+            w = self._window_ic_metrics(
+                factor_data, return_data, p, train_days, test_end_final, mask
+            )
+            decay.append({"period": p, "ic": round(w["ic_mean"], 4)})
+
+        aggregate = {
+            "oos_ic_mean": round(oos_mean, 4),
+            "oos_ic_tstat": round(oos_t, 4),
+            "oos_ic_ir": round(oos_mean / oos_std, 4) if oos_std > 0 else 0.0,
+            "oos_sign_consistency": round(sign_hits / len(folds), 4),
+            "oos_long_short_total": round(float(np.prod([1 + x for x in oos_ls]) - 1), 4),
+            "oos_long_short_mean_fold": round(float(np.mean(oos_ls)), 4),
+            "ic_decay_oos": decay,
+        }
+        return {
+            "ok": True,
+            "train_days": train_days,
+            "test_days": test_days,
+            "n_splits": len(folds),
+            "period": period,
+            "n_groups": n_groups,
+            "folds": folds,
+            "aggregate": aggregate,
+        }
+
+    # ── 因子生命周期 / 拥挤度（P2）──────────────────────────
+
+    async def factor_health(
+        self,
+        category_code: str | None = None,
+        min_snapshots: int = 2,
+    ) -> list[dict]:
+        """因子体检：基于 IC 历史快照判断生命周期阶段与 IC 趋势
+
+        阶段判定（快照 ≥ min_snapshots 时）：
+          失效: |最近 IC| < 0.01；  衰减: 最近 IC 显著低于历史均值；
+          萌芽: 最近 IC 显著高于历史均值；  稳定: 其余且 |IC| ≥ 0.02；  观察: 其余。
+        """
+        db = await get_db()
+        try:
+            await self._ensure_history_table(db)
+            where, params = "", []
+            if category_code:
+                where = " WHERE category_code = ?"
+                params.append(category_code)
+            cursor = await db.execute(
+                f"SELECT id, factor_name, category_name, category_code, ic_mean, "
+                f"rank_ic, data_date FROM preset_factors{where} ORDER BY id",
+                params,
+            )
+            factors = [dict(r) for r in await cursor.fetchall()]
+
+            cursor = await db.execute(
+                "SELECT factor_id, ic_mean, ic_std, ic_ir, data_date, snapshot_at "
+                "FROM preset_factor_ic_history ORDER BY factor_id, snapshot_at ASC"
+            )
+            hist: dict[int, list[dict]] = {}
+            for r in await cursor.fetchall():
+                hist.setdefault(r["factor_id"], []).append(dict(r))
+        finally:
+            await db.close()
+
+        out: list[dict] = []
+        for f in factors:
+            snaps = [s for s in hist.get(f["id"], []) if s.get("ic_mean") is not None]
+            item = {
+                "factor_id": f["id"],
+                "factor_name": f["factor_name"],
+                "category_name": f["category_name"],
+                "category_code": f["category_code"],
+                "latest_ic_mean": f.get("ic_mean") or 0.0,
+                "latest_rank_ic": f.get("rank_ic") or 0.0,
+                "data_date": f.get("data_date"),
+                "n_snapshots": len(snaps),
+            }
+            if len(snaps) < min_snapshots:
+                item["stage"] = "样本不足"
+                item["ic_trend"] = 0.0
+                item["trend_label"] = "—"
+                out.append(item)
+                continue
+            hist_ics = [s["ic_mean"] for s in snaps]
+            hist_mean = float(np.mean(hist_ics))
+            hist_std = float(np.std(hist_ics, ddof=1)) if len(hist_ics) > 1 else 0.0
+            recent = hist_ics[-min(6, len(hist_ics)):]
+            recent_mean = float(np.mean(recent))
+            recent_last = float(hist_ics[-1])
+            hist_var = max(hist_std * 0.5, 0.005)
+            trend = recent_mean - hist_mean
+            if abs(recent_last) < 0.01:
+                stage = "失效"
+            elif trend <= -hist_var and (abs(hist_mean) >= 0.03 or abs(recent_last) < 0.02):
+                stage = "衰减"
+            elif trend >= hist_var and abs(recent_last) >= 0.02:
+                stage = "萌芽"
+            elif abs(recent_last) >= 0.02:
+                stage = "稳定"
+            else:
+                stage = "观察"
+            item.update(
+                {
+                    "stage": stage,
+                    "ic_trend": round(trend, 4),
+                    "trend_label": "↑" if trend > 0 else ("↓" if trend < 0 else "→"),
+                    "hist_ic_mean": round(hist_mean, 4),
+                    "recent_ic_mean": round(recent_mean, 4),
+                    "last_snapshot_at": snaps[-1].get("snapshot_at"),
+                }
+            )
+            out.append(item)
+        return out
+
+    async def pool_crowding(self) -> dict:
+        """因子池拥挤度：池内因子两两截面相关（均值 |ρ| 越高越拥挤）
+
+        依赖本地行情面板；结果按 data_date 内存缓存（TTL 6h），避免重复计算。
+        """
+        import time as _time
+
+        global _CROWDING_CACHE
+        now = _time.time()
+        if (
+            _CROWDING_CACHE["data_date"]
+            and now - _CROWDING_CACHE["ts"] < 6 * 3600
+        ):
+            return _CROWDING_CACHE["payload"]
+
+        pool = await self.get_pool()
+        formulas = []
+        for f in pool:
+            formula = extract_formula(f.get("description"))
+            if formula:
+                formulas.append({"factor_id": f["id"], "factor_name": f["factor_name"], "formula": formula})
+        if len(formulas) < 2:
+            payload = {"ok": False, "message": "因子池不足 2 个公式型因子，无法计算拥挤度",
+                       "avg_abs_corr": 0.0, "pairs": []}
+            _CROWDING_CACHE.update({"ts": now, "data_date": "", "payload": payload})
+            return payload
+
+        res = self.eval_formula_on_local(formulas[0]["formula"])
+        if not res.get("ok"):
+            payload = {"ok": False, "message": res.get("message", ""),
+                       "avg_abs_corr": 0.0, "pairs": []}
+            _CROWDING_CACHE.update({"ts": now, "data_date": "", "payload": payload})
+            return payload
+        factor_df = res["factor_df"]
+        return_data = res["return_data"]
+        mask = res.get("mask")
+        dates = factor_df.index
+        from backend.services import reference_data
+        from backend.services.factor_operators import build_operator_namespace
+
+        ns = build_operator_namespace(
+            res["panels"], industry_map=reference_data.load_industry_map()
+        )
+        factors: dict[str, pd.DataFrame] = {formulas[0]["factor_name"]: factor_df}
+        for item in formulas[1:]:
+            try:
+                fd = eval(item["formula"], {"__builtins__": {}}, ns)  # noqa: S307
+                if isinstance(fd, pd.Series):
+                    fd = fd.to_frame()
+                if isinstance(fd, pd.DataFrame) and not fd.empty:
+                    factors[item["factor_name"]] = fd.reindex(index=dates)
+            except Exception:
+                continue
+        if len(factors) < 2:
+            payload = {"ok": False, "message": "池内可求值因子不足 2 个", "avg_abs_corr": 0.0, "pairs": []}
+            _CROWDING_CACHE.update({"ts": now, "data_date": "", "payload": payload})
+            return payload
+        corr = self.factor_correlation(factors)
+        names = list(factors.keys())
+        pairs, acc = [], []
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                v = corr["matrix"][names[i]][names[j]]
+                acc.append(abs(float(v)))
+                pairs.append({"factor_a": names[i], "factor_b": names[j], "corr": round(float(v), 4)})
+        pairs.sort(key=lambda p: abs(p["corr"]), reverse=True)
+        payload = {
+            "ok": True,
+            "n_factors": len(names),
+            "avg_abs_corr": round(float(np.mean(acc)), 4) if acc else 0.0,
+            "max_abs_corr": round(float(max(acc)), 4) if acc else 0.0,
+            "pairs": pairs[:30],
+            "data_date": res["data_date"],
+        }
+        _CROWDING_CACHE.update({"ts": now, "data_date": res["data_date"], "payload": payload})
+        return payload
+
+
+# 因子池拥挤度缓存（按 data_date + TTL 6h）
+_CROWDING_CACHE: dict = {"ts": 0.0, "data_date": "", "payload": {}}
+
+
+def _sse(event_type: str, data: dict) -> str:
+    """SSE 事件格式化（与批量下载服务同风格）"""
+    import json
+    from datetime import datetime
+
+    data.setdefault("timestamp", datetime.now().isoformat())
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    return f"event: {event_type}\ndata: {payload}\n\n"
 
 
 # 全局单例

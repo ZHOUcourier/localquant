@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -63,6 +64,20 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
 
 PRICE_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
 
+# 统一话术：空缓存 / 未连接时的指引文案，各处保持一致，研究员可据此判断「没数据」而非「出 bug」
+_CACHE_GUIDE = "请先在「数据中心」下载行情数据（数据管理 → 按板块/代码批量下载），或核对缓存目录"
+
+
+def no_cache_error_detail(scope: str = "") -> dict:
+    """统一的「本地无缓存数据」结构化错误体
+
+    code 供程序分支（如 QUBE/CLI 判断 no_cached_data），message/hint 供人阅读。
+    """
+    msg = "本地无缓存行情数据"
+    if scope:
+        msg += f"（{scope}）"
+    return {"code": "no_cached_data", "message": msg, "hint": _CACHE_GUIDE}
+
 
 def list_cached_codes(period: str = "1d") -> list[str]:
     """列出本地缓存中指定周期的全部股票代码"""
@@ -81,22 +96,99 @@ def list_cached_codes(period: str = "1d") -> list[str]:
     return codes
 
 
-def _load_single(code: str, period: str) -> pd.DataFrame | None:
-    """加载单只股票 K 线：本地缓存优先，其次 QMT（并回写缓存）"""
+def _load_single(code: str, period: str, adjust: str = "qfq") -> pd.DataFrame | None:
+    """加载单只股票 K 线：本地缓存优先，其次 QMT（并回写缓存）
+
+    adjust: qfq（前复权，默认，与历史行为一致）/ hfq（后复权）/ none（不复权）。
+    缓存帧含不复权价 + adjust_factor 列；旧版前复权缓存（无 factor 列）
+    在 qfq 模式下透明兼容，hfq/none 模式明确报错提示重下。
+    """
     df = _cache.get(code, period)
     if df is not None and not df.empty:
-        return df
+        return _apply_adjust(df, code, adjust)
 
     if _qmt.connected:
         try:
-            data = _qmt.get_kline([code], period=period)
-            df = data.get(code)
-            if df is not None and not df.empty:
-                _cache.save(code, period, df)
-                return df
+            df = _fetch_and_cache(code, period)
+            if df is not None:
+                return _apply_adjust(df, code, adjust)
         except Exception as e:
             logger.warning(f"QMT 获取 {code} 行情失败: {e}")
     return None
+
+
+# 旧版缓存（前复权价、无 adjust_factor 列）已按 qfq 读取的标记
+_legacy_adjust: set[str] = set()
+
+
+def _apply_adjust(df: pd.DataFrame, code: str, adjust: str = "qfq") -> pd.DataFrame:
+    """把含 adjust_factor 列的缓存帧换算为目标复权口径
+
+    存储语义：不复权 OHLCV + adjust_factor（= 后复权价 / 不复权价，锚定上市日，
+    新增除权事件不改变历史 factor，增量缓存天然一致；前复权 = raw × factor/latest_factor）。
+    """
+    if adjust not in ("qfq", "hfq", "none"):
+        raise ValueError(f"未知复权口径: {adjust}（可选 qfq/hfq/none）")
+    if "adjust_factor" not in df.columns:
+        if adjust != "qfq":
+            raise ValueError(
+                f"{code} 为旧版前复权缓存，仅支持 qfq 读取 — "
+                "请重新下载该标的以启用复权因子存储（raw + adjust_factor）"
+            )
+        _legacy_adjust.add(code)
+        df = df.copy()
+        df["adjust_factor"] = 1.0
+        return df
+    if adjust == "qfq":
+        df = df.copy()
+        scale = df["adjust_factor"] / float(df["adjust_factor"].iloc[-1])
+        for col in ("open", "high", "low", "close"):
+            if col in df.columns:
+                df[col] = df[col].astype(float) * scale
+    elif adjust == "hfq":
+        df = df.copy()
+        for col in ("open", "high", "low", "close"):
+            if col in df.columns:
+                df[col] = df[col].astype(float) * df["adjust_factor"].astype(float)
+    return df
+
+
+def _fetch_and_cache(code: str, period: str) -> pd.DataFrame | None:
+    """从 QMT 拉不复权 + 后复权两套数据，合成 adjust_factor 并落缓存
+
+    后复权锚定上市日，增量缓存自洽（新增除权只影响事件之后的价格），
+    前复权由 raw × factor/latest_factor 在读取时合成，根治跨除权重算问题。
+    """
+    raw = _qmt.get_kline([code], period=period, dividend_type="none").get(code)
+    if raw is None or raw.empty:
+        return None
+    raw = normalize_kline_fields(raw)
+    back = _qmt.get_kline([code], period=period, dividend_type="back").get(code)
+    if back is None or back.empty:
+        logger.warning(f"{code} 后复权数据缺失，adjust_factor 置 1（按不复权存储）")
+        raw = raw.copy()
+        raw["adjust_factor"] = 1.0
+    else:
+        back = normalize_kline_fields(back)
+        raw = _merge_with_factor(raw, back)
+    _cache.save(code, period, raw)
+    return raw
+
+
+def _merge_with_factor(raw: pd.DataFrame, back: pd.DataFrame) -> pd.DataFrame:
+    """不复权帧 + 后复权帧 → 不复权 OHLCV + adjust_factor 列（按日期对齐）"""
+    raw = raw.copy()
+    raw.index = normalize_timestamp(raw.index).normalize()
+    back_close = back["close"].astype(float)
+    back_close.index = normalize_timestamp(back_close.index).normalize()
+    back_close = back_close[~back_close.index.duplicated(keep="last")]
+    factor = back_close.reindex(raw.index)
+    raw_close = raw["close"].astype(float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        raw["adjust_factor"] = (factor / raw_close).replace([np.inf, -np.inf], np.nan)
+    # 无除权区间 factor≈1，缺失回填 1（避免 NaN 污染收益序列）
+    raw["adjust_factor"] = raw["adjust_factor"].fillna(1.0)
+    return raw
 
 
 def load_price_panels(
@@ -104,8 +196,13 @@ def load_price_panels(
     start_date: str = "",
     end_date: str = "",
     period: str = "1d",
+    adjust: str = "qfq",
 ) -> dict[str, pd.DataFrame]:
     """加载多只股票的行情面板
+
+    Args:
+        codes: 股票代码列表；空则取全部本地缓存
+        adjust: 复权口径（qfq 默认 / hfq / none）
 
     Returns:
         {field: DataFrame(index=date, columns=code)}，field 含 open/high/low/close/volume/amount
@@ -118,14 +215,15 @@ def load_price_panels(
     if not codes:
         raise ValueError(
             "本地无缓存行情数据且未指定股票池 — "
-            "请先在「数据管理」页下载行情数据，或在股票池中填入代码"
+            + _CACHE_GUIDE
+            + "，或在股票池中填入代码"
         )
 
     frames: dict[str, dict[str, pd.Series]] = {f: {} for f in PRICE_FIELDS}
     missing: list[str] = []
 
     for code in codes:
-        df = _load_single(code, period)
+        df = _load_single(code, period, adjust=adjust)
         if df is None or df.empty:
             missing.append(code)
             continue
@@ -141,7 +239,7 @@ def load_price_panels(
         qmt_hint = "" if _qmt.connected else "（QMT 未连接，无法在线获取）"
         raise ValueError(
             f"未找到任何行情数据{qmt_hint} — 缺失: {', '.join(missing[:10])}。"
-            "请先在「数据管理」页下载对应股票的日线数据"
+            + _CACHE_GUIDE
         )
 
     panels: dict[str, pd.DataFrame] = {}

@@ -175,3 +175,105 @@ async def stress(req: StressReq):
         return out
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/panel")
+async def risk_panel(
+    codes: str = "",
+    start_date: str = "",
+    end_date: str = "",
+):
+    """从本地行情缓存加载风险分析面板（close/volume/amount，前复权口径）
+
+    让风险页直接使用真实缓存数据（股票池 + 区间），无需手工粘贴 JSON。
+    """
+    pool = [c.strip() for c in codes.split(",") if c.strip()]
+    try:
+        panels = market_data.load_price_panels(
+            codes=pool, start_date=start_date, end_date=end_date
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    out = {
+        "codes": list(panels.get("close", pd.DataFrame()).columns),
+        "start": (
+            str(panels["close"].index[0].date())
+            if "close" in panels and len(panels["close"])
+            else ""
+        ),
+        "end": (
+            str(panels["close"].index[-1].date())
+            if "close" in panels and len(panels["close"])
+            else ""
+        ),
+        "close": _panel_dict(panels.get("close", pd.DataFrame())),
+        "volume": _panel_dict(panels.get("volume", pd.DataFrame())),
+        "amount": _panel_dict(panels.get("amount", pd.DataFrame())),
+    }
+    return out
+
+
+class AttributionRunRequest(BaseModel):
+    run_id: str
+
+
+@router.post("/attribution-run")
+async def attribution_run(req: AttributionRunRequest):
+    """回测记录风格归因（回归法）：读取已落库净值 + 本地行情面板
+
+    组合日收益 ~ Σ β×风格因子收益 + alpha：回答「策略赚的钱来自哪种风格，
+    剩下的是不是纯 alpha」。股票池/区间取自回测参数，风格暴露基于缓存面板。
+    """
+    import json
+
+    from backend.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM backtest_runs WHERE id = ?", (req.run_id,)
+        )
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="回测记录不存在")
+
+    equity = json.loads(row["equity_json"] or "[]")
+    if len(equity) < 10:
+        raise HTTPException(status_code=400, detail="回测记录无净值数据（未完成或过于短暂）")
+    params = json.loads(row["params_json"] or "{}")
+    eq = pd.Series(
+        {e["ts"]: float(e["equity"]) for e in equity if e.get("equity")}
+    ).sort_index()
+    eq.index = pd.to_datetime(eq.index)
+    strategy_returns = eq.pct_change().dropna()
+    if len(strategy_returns) < 30:
+        raise HTTPException(status_code=400, detail="回测区间过短，不足以做风格归因（需 ≥30 个交易日）")
+
+    try:
+        panels = market_data.load_price_panels(
+            codes=list(params.get("stock_pool") or []),
+            start_date=str(params.get("period_start") or ""),
+            end_date=str(params.get("period_end") or ""),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    close = panels["close"]
+    styles = risk_svc.build_style_exposures(
+        close,
+        volume=panels.get("volume"),
+        amount=panels.get("amount"),
+    )
+    style_res = risk_svc.style_factor_returns(close.pct_change(), styles)
+    result = risk_svc.strategy_regression_attribution(
+        strategy_returns, style_res["factor_returns"]
+    )
+    result["status"] = "ok"
+    result["run_id"] = req.run_id
+    result["strategy_name"] = row["strategy_name"] or ""
+    result["n_stocks"] = int(close.shape[1])
+    result["data_date"] = str(close.index[-1])[:10]
+    result["style_factor_summary"] = style_res["summary"]
+    return result

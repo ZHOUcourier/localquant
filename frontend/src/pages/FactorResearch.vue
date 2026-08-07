@@ -234,7 +234,8 @@ const corrOption = computed(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col gap-4 overflow-auto">
+  <!-- 整页滚动：内容自然高度，滚动由外层 Layout main 承接（避免双层滚动条） -->
+  <div class="flex flex-col gap-4">
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-semibold text-[#201d1d]">因子研究</h1>
       <Tabs :items="pageTabs" :active-key="pageTab" @change="(k) => (pageTab = k)" />

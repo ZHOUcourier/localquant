@@ -687,3 +687,96 @@ class FactorCombineNode(BaseWorkNode):
 
 def _valid(df) -> bool:
     return isinstance(df, pd.DataFrame) and not df.empty
+
+
+# ────────────────────── 因子样本外验证（walk-forward） ──────────────────────
+
+
+@ui(
+    train_days={"input_type": "number_field"},
+    test_days={"input_type": "number_field"},
+    n_splits={"input_type": "number_field"},
+    period={"input_type": "number_field"},
+    n_groups={"input_type": "number_field"},
+    factor_data={"input_type": "None"},
+    return_data={"input_type": "None"},
+)
+class WalkForwardInput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    factor_data: Optional[pd.DataFrame] = None
+    return_data: Optional[pd.DataFrame] = None
+    train_days: int = 252
+    test_days: int = 63
+    n_splits: int = 3
+    period: int = 1
+    n_groups: int = 5
+
+
+class WalkForwardOutput(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    validation_report: Optional[dict] = None  # 完整验证报告（folds + aggregate）
+    oos_summary: Optional[pd.DataFrame] = None  # 每折 in-sample / OOS 指标表
+
+
+@work_node(
+    name="因子样本外验证",
+    group="06-因子分析",
+    box_color="#FF9800",
+    description="walk-forward 滚动锚定分割：每折输出训练段 in-sample IC 与测试段 out-of-sample IC/分层多空，聚合 OOS IC 均值/t值/同向一致性/衰减，防过拟合",
+    example="因子构建（公式） → 因子样本外验证 → 输出",
+    notes=[
+        "factor_data / return_data 需从上游因子构建节点连线（面板：index=日期, columns=股票）",
+        "训练窗口按 [0, t) 扩张式滚动，测试窗口 [t, t+test_days) 逐折后移，无前视",
+        "OOS IC 与 IC 汇总表同口径（T 日因子 vs T→T+p 前向复利收益）",
+        "样本不足（少于 train_days + test_days 个交易日）时明确报错",
+    ],
+)
+class WalkForwardNode(BaseWorkNode):
+    """因子样本外验证（复用 factor_research 服务）"""
+
+    @classmethod
+    def input_model(cls) -> Optional[Type[BaseModel]]:
+        return WalkForwardInput
+
+    @classmethod
+    def output_model(cls) -> Optional[Type[BaseModel]]:
+        return WalkForwardOutput
+
+    def run(self, input: WalkForwardInput) -> Optional[BaseModel]:
+        if not _valid(input.factor_data) or not _valid(input.return_data):
+            raise ValueError(
+                "因子样本外验证：需要上游连线提供 factor_data 与 return_data（面板 DataFrame）"
+            )
+
+        result = factor_research.walk_forward_validation(
+            input.factor_data,
+            input.return_data,
+            train_days=input.train_days,
+            test_days=input.test_days,
+            n_splits=input.n_splits,
+            period=input.period,
+            n_groups=input.n_groups,
+        )
+        if not result.get("ok"):
+            raise ValueError(result.get("message", "样本外验证失败"))
+
+        rows = []
+        for fd in result["folds"]:
+            rows.append(
+                {
+                    "fold": fd["fold"],
+                    "train_end": fd["train_end"],
+                    "test_start": fd["test_start"],
+                    "test_end": fd["test_end"],
+                    "in_sample_ic": fd["in_sample"]["ic_mean"],
+                    "in_sample_t": fd["in_sample"]["t_stat"],
+                    "oos_ic": fd["out_of_sample"]["ic_mean"],
+                    "oos_t": fd["out_of_sample"]["t_stat"],
+                    "oos_rank_ic": fd["out_of_sample"]["rank_ic_mean"],
+                    "long_short_cum": fd["long_short_cum"],
+                }
+            )
+        return WalkForwardOutput(
+            validation_report=result,
+            oos_summary=pd.DataFrame(rows),
+        )

@@ -33,10 +33,11 @@ const activeTab = ref('overview')
 </script>
 
 <template>
-  <div class="flex flex-col h-full">
+  <!-- 整页滚动：内容自然高度，滚动由外层 Layout main 承接（避免双层滚动条） -->
+  <div class="flex flex-col">
     <Tabs :items="tabItems" :active-key="activeTab" @change="(k) => (activeTab = k)" />
 
-    <div class="flex-1 mt-4 overflow-auto">
+    <div class="mt-4">
       <DataOverview v-if="activeTab === 'overview'" />
       <SQLPanel v-if="activeTab === 'sql'" />
       <MarketScanner v-if="activeTab === 'scan'" />

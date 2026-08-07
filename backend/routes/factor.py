@@ -637,3 +637,132 @@ async def add_to_pool(factor_id: int):
     """加入因子池"""
     await factor_research.add_to_pool(factor_id)
     return {"success": True}
+
+
+# ── 因子批量扫描（P1）────────────────────────────────────────
+
+
+class FactorScanRequest(BaseModel):
+    factor_ids: list[int] = []  # 指定因子；与 category_codes 二选一
+    category_codes: list[str] = []  # 按类别批量
+    limit: int = 100  # 扫描上限
+    start_date: str = ""
+    end_date: str = ""
+    periods: list[int] = [1, 5, 10, 20]
+    max_workers: int = 4
+
+
+@router.post("/scan")
+async def scan_factors(req: FactorScanRequest):
+    """批量扫描因子 IC（SSE 逐因子进度）— 面板只加载一次，结果覆盖更新 + 历史快照
+
+    事件：scan_start / factor_done / scan_done（详见服务层 docstring）。
+    """
+    if not req.factor_ids and not req.category_codes:
+        raise HTTPException(status_code=400, detail="请选择要扫描的因子（factor_ids 或 category_codes）")
+    if req.limit < 1 or req.limit > 500:
+        raise HTTPException(status_code=400, detail="limit 需在 1~500 之间")
+
+    from fastapi.responses import StreamingResponse
+
+    return StreamingResponse(
+        factor_research.scan_factors_stream(
+            factor_ids=req.factor_ids,
+            category_codes=req.category_codes,
+            limit=req.limit,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            periods=req.periods,
+            max_workers=req.max_workers,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ── 因子样本外验证（walk-forward，P5）───────────────────────
+
+
+class WalkForwardRequest(BaseModel):
+    factor_data: dict | None = None  # {date: {code: value}}；与 formula 二选一
+    return_data: dict | None = None
+    formula: str = ""  # 提供时走本地行情求值（无需预计算面板）
+    start_date: str = ""
+    end_date: str = ""
+    train_days: int = 252
+    test_days: int = 63
+    n_splits: int = 3
+    period: int = 1
+    n_groups: int = 5
+
+
+@router.post("/validation")
+async def walk_forward(req: WalkForwardRequest):
+    """因子样本外验证：滚动锚定 train/test 分割，输出每折 in-sample 与 OOS 指标"""
+    try:
+        if req.formula:
+            res = factor_research.eval_formula_on_local(
+                req.formula, req.start_date, req.end_date
+            )
+            if not res.get("ok"):
+                raise HTTPException(status_code=400, detail=res.get("message", "公式求值失败"))
+            factor_df, return_data, mask = (
+                res["factor_df"],
+                res["return_data"],
+                res.get("mask"),
+            )
+        else:
+            if not req.factor_data or not req.return_data:
+                raise HTTPException(
+                    status_code=400, detail="需提供 formula（本地求值）或 factor_data/return_data 面板"
+                )
+            factor_df = _dict_to_df(req.factor_data)
+            return_data = _dict_to_df(req.return_data)
+            mask = None
+        result = factor_research.walk_forward_validation(
+            factor_df,
+            return_data,
+            train_days=req.train_days,
+            test_days=req.test_days,
+            n_splits=req.n_splits,
+            period=req.period,
+            n_groups=req.n_groups,
+            mask=mask,
+        )
+        # 溯源
+        await _spawn_provenance(
+            kind="factor",
+            entity_id="validation",
+            entity_name="walk-forward",
+            params=req.model_dump(),
+            metrics=result.get("aggregate", {}),
+            notes=result.get("message", ""),
+            source="validation",
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"样本外验证失败: {e}")
+        raise HTTPException(status_code=400, detail=f"样本外验证失败: {e}")
+
+
+# ── 因子生命周期 / 拥挤度（P2）──────────────────────────────
+
+
+@router.get("/health")
+async def factor_health(category_code: str = "", min_snapshots: int = 2):
+    """因子体检：基于 IC 历史快照的生命周期阶段与 IC 趋势"""
+    return await factor_research.factor_health(
+        category_code=category_code or None, min_snapshots=min_snapshots
+    )
+
+
+@router.post("/health/crowding")
+async def factor_crowding():
+    """因子池拥挤度：池内因子两两截面相关（均值 |ρ|，TTL 6h 缓存）"""
+    return await factor_research.pool_crowding()

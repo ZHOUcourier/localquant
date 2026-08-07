@@ -42,14 +42,41 @@ def expand_sector(sector: str) -> list[str]:
 
 
 def _download_one(code: str, period: str, start: str, end: str) -> int:
-    """下载单只并合并入缓存，返回缓存总行数"""
+    """下载单只并合并入缓存，返回缓存总行数
+
+    存储语义：不复权 OHLCV + adjust_factor（由后复权价反推，锚定上市日，
+    增量缓存自洽）；旧版前复权缓存（无 adjust_factor 列）无法逆推不复权价，
+    合并前整体丢弃重建，保证帧内口径一致。
+    """
+    from backend.data.converter import normalize_timestamp
+    from backend.services import market_data
+
     qmt = market_data._qmt
     qmt.download_history([code], period=period, start_time=start, end_time=end)
-    data = qmt.get_kline([code], period=period, start_time=start, end_time=end)
-    df = data.get(code)
-    if df is None or df.empty:
+    raw = qmt.get_kline(
+        [code], period=period, start_time=start, end_time=end, dividend_type="none"
+    ).get(code)
+    if raw is None or raw.empty:
         raise ValueError("QMT 未返回数据")
-    merged = market_data._cache.get_or_append(code, period, df)
+    raw = market_data.normalize_kline_fields(raw)
+    back = qmt.get_kline(
+        [code], period=period, start_time=start, end_time=end, dividend_type="back"
+    ).get(code)
+    if back is None or back.empty:
+        logger.warning(f"{code} 后复权数据缺失，adjust_factor 置 1（按不复权存储）")
+        raw = raw.copy()
+        raw["adjust_factor"] = 1.0
+    else:
+        raw = market_data._merge_with_factor(raw, market_data.normalize_kline_fields(back))
+
+    existing = market_data._cache.get(code, period)
+    if existing is not None and "adjust_factor" not in existing.columns:
+        # 旧版前复权缓存：口径不可逆，整体丢弃重建（新帧为准，提示区间可能变短）
+        market_data._cache.invalidate(code, period)
+        logger.info(f"{code} 旧版前复权缓存已重建为 不复权+adjust_factor 存储")
+        merged = raw.copy()
+    else:
+        merged = market_data._cache.get_or_append(code, period, raw)
     return len(merged)
 
 

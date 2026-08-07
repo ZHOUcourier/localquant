@@ -84,6 +84,7 @@ from backend.routes import (
     factor,
     plugins,
     qube,
+    regime,
     strategy,
     system,
     workflow,
@@ -110,6 +111,7 @@ app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(risk.router, prefix="/api/risk", tags=["risk"])
 app.include_router(ops.router, prefix="/api/ops", tags=["ops"])
+app.include_router(regime.router, prefix="/api/regime", tags=["regime"])
 
 # ComfyUI 协议适配层 + 官方前端托管（/comfy/api/* + /comfy/ws + /comfy/）
 from backend.comfy.routes import mount_comfy

@@ -314,13 +314,15 @@ async def ai_status():
 # 场景 3：因子 AI 分析建议
 # ---------------------------------------------------------------------------
 
-FACTOR_ADVICE_SYSTEM = """你是量化因子研究专家。用户会提供一个选股因子的名称、公式与回测指标，请给出专业、简洁的分析与建议。
+FACTOR_ADVICE_SYSTEM = """你是量化因子研究专家。用户会提供一个选股因子的名称、公式、回测指标，以及（可选）walk-forward 样本外验证结果，请给出专业、简洁的分析与建议。
 
-输出要求（Markdown，中文，控制在 400 字以内）：
+输出要求（Markdown，中文，控制在 450 字以内）：
 ## 因子逻辑解读
 用通俗语言解释公式在捕捉什么市场现象（动量/反转/量价背离等）
 ## 指标评价
 逐项点评 IC 均值、ICIR、年化收益、回撤、换手率的强弱（给出行业经验参考区间）
+## 样本外验证（若提供了验证数据）
+点评 OOS IC 是否显著（|t| ≥ 2 才可信）、与 in-sample 的同向一致性（≥50% 为稳定）、OOS 多空累计与 IC 衰减速度；明确指出「因子在样本外是否仍然有效」这一核心结论
 ## 使用建议
 适合的使用场景（单因子/多因子合成/中性化后使用）、适合的调仓周期、风险提示
 
@@ -333,20 +335,51 @@ class FactorAdviceRequest(BaseModel):
     formula: Optional[str] = None
     description: Optional[str] = None
     metrics: dict[str, Any] = {}
+    validation: Optional[dict[str, Any]] = None  # walk-forward 样本外验证结果（可选）
+
+
+def _format_validation(validation: dict[str, Any]) -> str:
+    """把 walk-forward 验证结果压缩成供 LLM 阅读的文本（缺失则返回空串）"""
+    agg = validation.get("aggregate") if isinstance(validation, dict) else None
+    folds = validation.get("folds") if isinstance(validation, dict) else []
+    if not agg:
+        return ""
+    lines = [
+        "样本外验证（walk-forward，train/test 滚动锚定分割）：",
+        f"- 分割：训练 {validation.get('train_days', '?')} 日 / 测试 {validation.get('test_days', '?')} 日 / {validation.get('n_splits', '?')} 折，IC 周期 p={validation.get('period', 1)}",
+        f"- OOS IC 均值: {agg.get('oos_ic_mean')}（t 值 {agg.get('oos_ic_tstat')}，|t|≥2 才显著）",
+        f"- OOS ICIR: {agg.get('oos_ic_ir')}；in-sample 与 OOS 同向一致性: {agg.get('oos_sign_consistency')}",
+        f"- OOS 多空累计: {agg.get('oos_long_short_total')}（均值每折 {agg.get('oos_long_short_mean_fold')}）",
+        f"- 测试段 IC 衰减: " + " / ".join(
+            f"p{d['period']}={d['ic']}" for d in agg.get("ic_decay_oos", [])
+        ),
+    ]
+    if folds:
+        for fd in folds[:6]:
+            lines.append(
+                f"- 第{fd['fold']}折: 训练截止 {fd['train_end']} · 测试 {fd['test_start']}~{fd['test_end']} | "
+                f"IS IC {fd['in_sample']['ic_mean']:.4f} (t {fd['in_sample']['t_stat']:.2f}) | "
+                f"OOS IC {fd['out_of_sample']['ic_mean']:.4f} (t {fd['out_of_sample']['t_stat']:.2f}) | "
+                f"多空累计 {fd['long_short_cum']:.2%}"
+            )
+    return "\n".join(lines)
 
 
 @router.post("/factor-advice")
 async def ai_factor_advice(body: FactorAdviceRequest):
-    """AI 分析单个因子：解读公式逻辑 + 点评指标 + 使用建议"""
+    """AI 分析单个因子：解读公式逻辑 + 点评指标 + 样本外验证（如有）"""
     metrics_text = "\n".join(
         f"- {k}: {v}" for k, v in body.metrics.items() if v is not None
     )
+    validation_text = _format_validation(body.validation)
     user = (
         f"因子名称：{body.factor_name}（{body.factor_code or ''}）\n"
         f"因子公式：{body.formula or '未提供'}\n"
         f"因子描述：{body.description or '无'}\n"
         f"回测指标：\n{metrics_text or '无'}"
     )
+    if validation_text:
+        user += f"\n\n{validation_text}"
     content = await _chat(FACTOR_ADVICE_SYSTEM, user, temperature=0.4)
     return {"advice": content}
 

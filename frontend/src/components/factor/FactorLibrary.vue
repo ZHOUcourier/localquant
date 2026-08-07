@@ -84,6 +84,69 @@ const { data: categories } = usePresetFactorCategories()
 const addToPoolMutation = useAddToFactorPool()
 const addingId = ref<number | null>(null)
 
+/* ── 因子体检（生命周期阶段 + IC 趋势；批量扫描/重算历史积累后生效） ── */
+interface HealthItem {
+  factor_id: number
+  factor_name: string
+  stage: string
+  ic_trend: number
+  trend_label: string
+  recent_ic_mean: number
+  n_snapshots: number
+}
+const healthMap = ref<Map<number, HealthItem>>(new Map())
+const healthLoaded = ref(false)
+const crowding = ref<{ loading: boolean; error: string | null; data: any | null }>({
+  loading: false,
+  error: null,
+  data: null,
+})
+
+async function loadHealth() {
+  try {
+    const res = await fetch('/api/factor/health')
+    if (res.ok) {
+      const items = (await res.json()) as HealthItem[]
+      healthMap.value = new Map(items.map((h) => [h.factor_id, h]))
+      healthLoaded.value = true
+    }
+  } catch {
+    // 静默：体检徽标为增强功能，不可用时不影响浏览
+  }
+}
+void loadHealth()
+
+async function runCrowding() {
+  crowding.value = { loading: true, error: null, data: null }
+  try {
+    const res = await fetch('/api/factor/health/crowding', { method: 'POST' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => null)
+      throw new Error(err?.detail ?? `HTTP ${res.status}`)
+    }
+    crowding.value.data = await res.json()
+  } catch (e) {
+    crowding.value.error = e instanceof Error ? e.message : String(e)
+  } finally {
+    crowding.value.loading = false
+  }
+}
+
+const STAGE_COLORS: Record<string, string> = {
+  稳定: 'bg-[#30d158]/15 text-[#248a3d]',
+  萌芽: 'bg-[#007aff]/10 text-[#0056b3]',
+  观察: 'bg-[#ff9f0a]/15 text-[#cc7f08]',
+  衰减: 'bg-[#ff9f0a]/25 text-[#a05a00]',
+  失效: 'bg-[#ff3b30]/10 text-[#c62d23]',
+  样本不足: 'bg-[#f1eeee] text-[#9a9898]',
+}
+
+function stageBadge(h: HealthItem | undefined): string {
+  if (!h) return ''
+  const base = STAGE_COLORS[h.stage] ?? STAGE_COLORS['样本不足']
+  return `<span class="rounded-[3px] px-1.5 py-0.5 text-[10px] font-medium ${base}">${h.stage} ${h.trend_label || ''}</span>`
+}
+
 // 记录每个因子的卡片/行元素，用于 App Store 卡片展开动画的起点坐标
 const cardEls = new Map<number, HTMLElement>()
 function setCardRef(id: number, el: unknown) {
@@ -191,6 +254,16 @@ function cardPerfMetrics(f: PresetFactor) {
           <BookOpen :size="12" />
           变量参考
         </button>
+        <!-- 因子池拥挤度 -->
+        <button
+          type="button"
+          :disabled="crowding.loading"
+          class="flex items-center gap-1 rounded-[4px] border border-[rgba(124,58,237,0.35)] bg-[#fdfcfc] px-2 py-1.5 text-xs text-[#7c3aed] transition-colors hover:bg-[#f8f7f7] disabled:opacity-50 cursor-pointer"
+          title="池内因子两两截面相关（越高越拥挤）"
+          @click="runCrowding"
+        >
+          {{ crowding.loading ? '计算中...' : '因子池拥挤度' }}
+        </button>
         <!-- 排序选择 -->
         <div class="w-[120px]">
           <Select v-model="sortModel" :options="sortSelectOptions" placeholder="排序" />
@@ -223,6 +296,33 @@ function cardPerfMetrics(f: PresetFactor) {
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- 因子池拥挤度结果 -->
+    <div
+      v-if="crowding.data || crowding.error"
+      class="mb-3 rounded-[4px] border border-[rgba(124,58,237,0.3)] bg-[#fdfcfc] p-3"
+    >
+      <div v-if="crowding.error" class="text-xs text-[#c62d23]">{{ crowding.error }}</div>
+      <template v-else-if="crowding.data">
+        <div class="mb-1 text-xs font-semibold text-[#201d1d]">
+          因子池拥挤度
+          <span v-if="crowding.data.ok" class="ml-1 text-[#646262]">
+            · 平均 |ρ| {{ crowding.data.avg_abs_corr }} · 最高 {{ crowding.data.max_abs_corr }} ·
+            {{ crowding.data.n_factors }} 个因子 · 数据截至 {{ crowding.data.data_date }}
+          </span>
+        </div>
+        <div v-if="crowding.data.ok && crowding.data.pairs.length" class="flex flex-wrap gap-1.5">
+          <span
+            v-for="p in crowding.data.pairs"
+            :key="`${p.factor_a}-${p.factor_b}`"
+            class="rounded-[3px] border border-[rgba(15,0,0,0.1)] bg-[#f8f7f7] px-2 py-0.5 font-mono text-[10px] text-[#646262]"
+          >
+            {{ p.factor_a }} × {{ p.factor_b }}: {{ p.corr }}
+          </span>
+        </div>
+        <div v-else-if="!crowding.data.ok" class="text-xs text-[#cc7f08]">{{ crowding.data.message }}</div>
+      </template>
     </div>
 
     <!-- 分类标签栏 -->
@@ -285,6 +385,7 @@ function cardPerfMetrics(f: PresetFactor) {
           <div class="mb-2 flex items-start justify-between gap-2">
             <span class="text-sm font-medium leading-tight text-[#201d1d]">{{ f.factor_name }}</span>
             <span class="flex shrink-0 items-center gap-1 text-[11px] text-[#646262]">
+              <span v-if="healthLoaded && healthMap.get(f.id)" v-html="stageBadge(healthMap.get(f.id))" />
               <span class="inline-block h-[6px] w-[6px] rounded-full" :style="{ backgroundColor: f.category_color_hex || '#646262' }" />
               {{ f.category_name || '未分类' }}
             </span>
@@ -365,6 +466,7 @@ function cardPerfMetrics(f: PresetFactor) {
             <td class="px-3 py-2 text-sm font-medium text-[#201d1d]">{{ f.factor_name }}</td>
             <td class="px-3 py-2">
               <span class="inline-flex items-center gap-1 text-xs text-[#646262]">
+                <span v-if="healthLoaded && healthMap.get(f.id)" v-html="stageBadge(healthMap.get(f.id))" />
                 <span class="inline-block h-[6px] w-[6px] rounded-full" :style="{ backgroundColor: f.category_color_hex || '#646262' }" />
                 {{ f.category_name || '未分类' }}
               </span>

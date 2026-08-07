@@ -201,10 +201,17 @@ class BacktestAnalysisService:
         positions = pd.DataFrame(pos_arr, index=common_idx, columns=common_cols)
         trades = pd.DataFrame(buy_arr + sell_arr, index=common_idx, columns=common_cols)
 
-        # 成本：买卖均计佣金+滑点，卖出另计印花税
-        buy_cost = buy_arr.sum(axis=1) * (commission_rate + slippage)
-        sell_cost = sell_arr.sum(axis=1) * (commission_rate + slippage + stamp_tax)
-        costs = pd.Series(buy_cost + sell_cost, index=common_idx)
+        # 成本拆分：佣金（买卖双向）/ 滑点（买卖双向）/ 印花税（仅卖出）
+        # 与原合并口径完全一致：buy×(c+s) + sell×(c+s+t) = (buy+sell)×c + (buy+sell)×s + sell×t
+        turnover_series = trades.sum(axis=1)
+        commission_costs = turnover_series * commission_rate
+        slippage_costs = turnover_series * slippage
+        stamp_costs = pd.Series(sell_arr.sum(axis=1), index=common_idx) * stamp_tax
+        costs = commission_costs + slippage_costs + stamp_costs
+
+        cost_summary = self._cost_breakdown(
+            costs, commission_costs, slippage_costs, stamp_costs, turnover_series
+        )
 
         # 策略日收益（停牌/缺价日收益按 0 处理，与 pct_change fillna 一致）
         strategy_returns = (positions * price_returns).sum(axis=1) - costs
@@ -218,6 +225,10 @@ class BacktestAnalysisService:
             "positions": positions,
             "trades": trades,
             "costs": costs,
+            "commission_costs": commission_costs,
+            "slippage_costs": slippage_costs,
+            "stamp_costs": stamp_costs,
+            "cost_summary": cost_summary,
             "assumptions": assumptions,
             "initial_capital": initial_capital,
         }
@@ -274,6 +285,160 @@ class BacktestAnalysisService:
         up_board = (one_line & (c >= up - 0.005)).fillna(False).to_numpy(dtype=bool)
         down_board = (one_line & (c <= dn + 0.005)).fillna(False).to_numpy(dtype=bool)
         return up_board, down_board
+
+    # ── 成本拆分报告 ─────────────────────────────────────────
+
+    @staticmethod
+    def _cost_breakdown(
+        costs: "pd.Series",
+        commission: "pd.Series",
+        slippage: "pd.Series",
+        stamp: "pd.Series",
+        turnover: "pd.Series",
+    ) -> dict:
+        """成本构成汇总：佣金/滑点/印花税分列（金额、占比、每单位换手的 bps 成本）"""
+        total = float(costs.sum())
+        totals = {
+            "commission": float(commission.sum()),
+            "slippage": float(slippage.sum()),
+            "stamp_tax": float(stamp.sum()),
+        }
+        total_turnover = float(turnover.sum())
+        return {
+            "total_cost": total,
+            "breakdown": totals,
+            "shares": {
+                k: (v / total if total > 0 else 0.0) for k, v in totals.items()
+            },
+            "cost_bps_per_turnover": (total / total_turnover * 1e4)
+            if total_turnover > 0
+            else 0.0,
+            "total_turnover": total_turnover,
+            "n_days": int(costs.dropna().size),
+        }
+
+    # ── 容量分析 ─────────────────────────────────────────────
+
+    def capacity_analysis(
+        self,
+        signals: pd.DataFrame,
+        prices: pd.DataFrame,
+        amount: pd.DataFrame | None = None,
+        normalize: str = "long_only",
+        participation_rate: float = 0.1,
+        capital_levels: list[float] | None = None,
+    ) -> dict:
+        """容量分析：信号在给定参与率约束下可容纳的资金规模
+
+        思路（与回测引擎同一套 T+1 权重语义）：
+        - 目标权重按日截面归一 → T+1 执行，日换手金额 = |Δw| × 资金规模；
+        - 每只标的日成交额占比 = 换手金额 / 滚动 20 日平均成交额（ADV）；
+        - 超参与率约束（如 10%）即认为冲击不可忽略。
+
+        Returns:
+            levels: 各资金规模下的受限指标；suggested_capacity: 保证任何
+            (日, 标的) 换手占比都不超参与率的理论容量上限。
+        """
+        assumptions: list[str] = []
+        if amount is None:
+            return {
+                "ok": False,
+                "message": "缺少成交额面板（amount），容量分析需要每只标的的日成交额",
+                "levels": [],
+                "suggested_capacity": 0.0,
+                "assumptions": ["无成交额数据，容量分析不可用"],
+            }
+
+        common_idx = signals.index.intersection(prices.index)
+        common_cols = signals.columns.intersection(prices.columns)
+        signals = signals.loc[common_idx, common_cols]
+        prices = prices.loc[common_idx, common_cols]
+        amount = amount.reindex(index=common_idx, columns=common_cols)
+
+        if amount.isna().all().all():
+            return {
+                "ok": False,
+                "message": "成交额面板全为空，容量分析不可用",
+                "levels": [],
+                "suggested_capacity": 0.0,
+                "assumptions": ["成交额面板全为空"],
+            }
+
+        # 与回测一致的权重归一 + T+1 执行
+        weights = self._normalize_weights(signals, normalize)
+        targets = weights.shift(1).fillna(0.0)
+        turnover = targets.diff().abs().fillna(0.0)  # |Δw|（首日按建仓）
+
+        # 滚动 20 日平均成交额（ADV，单位元）
+        adv = amount.rolling(20, min_periods=5).mean()
+
+        levels_out: list[dict] = []
+        for cap in capital_levels or [1e8, 5e8, 1e9, 5e9, 1e10]:
+            traded_value = turnover * cap  # (日, 标的) 换手金额
+            participation = traded_value / adv.replace(0, float("nan"))
+            share = (participation > participation_rate).fillna(False)
+            valid = participation.notna() & (turnover > 0)
+            exceed_days = share.sum(axis=0)
+            exceed_ratio_days = float(
+                (share.any(axis=1)).mean() if len(share) else 0.0
+            )
+            constrained_stocks = int((exceed_days > 0).sum())
+            pvals = participation[valid].to_numpy() if valid.any().any() else None
+            mean_participation = float(pvals.mean()) if pvals is not None and pvals.size else 0.0
+            p95 = (
+                float(np.nanpercentile(pvals, 95))
+                if pvals is not None and pvals.size
+                else 0.0
+            )
+            levels_out.append(
+                {
+                    "capital": cap,
+                    "exceed_days_ratio": round(exceed_ratio_days, 4),
+                    "mean_participation": round(mean_participation, 4),
+                    "p95_participation": round(p95, 4),
+                    "constrained_stocks": constrained_stocks,
+                    "tradable_ratio": round(
+                        float((turnover > 0).any(axis=1).mean()), 4
+                    )
+                    if len(turnover)
+                    else 0.0,
+                }
+            )
+
+        # 理论容量：基准规模下最大单笔参与率 → 反推
+        base_cap = 1e8
+        traded_base = turnover * base_cap
+        participation_base = traded_base / adv.replace(0, float("nan"))
+        pvals_base = participation_base[valid].to_numpy() if valid.any().any() else None
+        max_ratio = float(pvals_base.max()) if pvals_base is not None and pvals_base.size else 0.0
+        # max_ratio=0 意味着基准确样本无流动性约束（如极低换手），给一个名义上限（1000 亿）
+        suggested = (
+            base_cap * participation_rate / max_ratio
+            if max_ratio > 0
+            else 1e11
+        )
+
+        assumptions.append(
+            f"容量分析按参与率 ≤ {participation_rate:.0%} 约束，ADV 取滚动 20 日均值；"
+            "未模拟冲击成本非线性与下单执行细节"
+        )
+        return {
+            "ok": True,
+            "participation_rate": participation_rate,
+            "levels": levels_out,
+            "suggested_capacity": float(suggested),
+            "suggested_label": self._format_capital(float(suggested)),
+            "assumptions": assumptions,
+        }
+
+    @staticmethod
+    def _format_capital(value: float) -> str:
+        """资金规模友好格式化：1.0 亿 / 5000 万 / 1000 万"""
+        if value >= 1e8:
+            return f"{value / 1e8:.1f} 亿"
+        if value >= 1e4:
+            return f"{value / 1e4:.0f} 万"
+        return f"{value:.0f} 元"
 
     # ── 绩效报告 ─────────────────────────────────────────────
 

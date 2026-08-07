@@ -25,7 +25,7 @@ function fmtPct(v: number | null | undefined, digits = 2): string {
   return `${(v * 100).toFixed(digits)}%`
 }
 
-type TabKey = 'formula' | 'data' | 'history' | 'ai'
+type TabKey = 'formula' | 'data' | 'history' | 'validation' | 'ai'
 
 export interface FactorDialogOrigin {
   x: number
@@ -245,6 +245,7 @@ const tabs = computed<{ key: TabKey; label: string }[]>(() => [
   { key: 'formula', label: '公式' },
   { key: 'data', label: '具体数据' },
   { key: 'history', label: `重算历史${history.value?.length ? `(${history.value.length})` : ''}` },
+  { key: 'validation', label: '样本外验证' },
   { key: 'ai', label: '✦ AI 分析' },
 ])
 
@@ -283,6 +284,8 @@ async function handleAI() {
           夏普比率: f.sharpe_ratio,
           换手率: f.turnover_rate,
         },
+        // 已运行过样本外验证则一并交给 AI 解读（核心结论：因子在样本外是否仍有效）
+        validation: validation.value?.result?.ok ? validation.value.result : null,
       }),
     })
     if (!res.ok) {
@@ -300,6 +303,51 @@ async function handleAI() {
 
 function copyFormula() {
   if (factor.value) navigator.clipboard?.writeText(factor.value.formula)
+}
+
+/* ── 样本外验证（walk-forward） ── */
+const validation = ref<{ loading: boolean; error: string | null; result: any | null }>({
+  loading: false,
+  error: null,
+  result: null,
+})
+const vfTrain = ref(252)
+const vfTest = ref(63)
+const vfSplits = ref(3)
+
+async function runValidation() {
+  const f = factor.value
+  if (!f?.formula) return
+  validation.value = { loading: true, error: null, result: null }
+  try {
+    const res = await fetch('/api/factor/validation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        formula: f.formula,
+        train_days: vfTrain.value,
+        test_days: vfTest.value,
+        n_splits: vfSplits.value,
+        period: 1,
+        n_groups: 5,
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => null)
+      throw new Error(err?.detail ?? `HTTP ${res.status}`)
+    }
+    validation.value.result = await res.json()
+  } catch (e) {
+    validation.value.error = e instanceof Error ? e.message : String(e)
+  } finally {
+    validation.value.loading = false
+  }
+}
+
+function vfSigColor(v: number): string {
+  if (v > 0.02) return '#248a3d'
+  if (v < -0.02) return '#c62d23'
+  return '#646262'
 }
 
 function typeBadgeClass(t?: string): string {
@@ -494,11 +542,115 @@ function typeBadgeClass(t?: string): string {
           </table>
         </div>
 
+        <!-- 样本外验证 Tab -->
+        <div v-if="tab === 'validation'">
+          <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] p-3">
+            <div class="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-[#646262]">
+              <span>训练天数</span>
+              <input v-model.number="vfTrain" type="number" min="60" class="w-16 rounded-[3px] border border-[rgba(15,0,0,0.15)] bg-[#fdfcfc] px-1.5 py-0.5 font-mono text-[11px]" />
+              <span>测试天数</span>
+              <input v-model.number="vfTest" type="number" min="20" class="w-14 rounded-[3px] border border-[rgba(15,0,0,0.15)] bg-[#fdfcfc] px-1.5 py-0.5 font-mono text-[11px]" />
+              <span>折数</span>
+              <input v-model.number="vfSplits" type="number" min="1" max="6" class="w-12 rounded-[3px] border border-[rgba(15,0,0,0.15)] bg-[#fdfcfc] px-1.5 py-0.5 font-mono text-[11px]" />
+              <button
+                type="button"
+                :disabled="validation.loading || !factor.formula"
+                class="flex items-center gap-1 rounded-[4px] bg-[#201d1d] px-3 py-1 text-xs text-[#fdfcfc] transition-colors hover:bg-[#0f0000] disabled:opacity-50 cursor-pointer"
+                @click="runValidation"
+              >
+                <RefreshCw :size="11" :class="validation.loading ? 'animate-spin' : ''" />
+                {{ validation.loading ? '验证中...' : '运行 walk-forward 验证' }}
+              </button>
+            </div>
+            <div class="text-[11px] leading-relaxed text-[#646262]">
+              滚动锚定分割（训练 [0,t) → 测试 [t, t+test)）：看 in-sample IC 在样本外是否仍然成立。
+              <span class="font-medium text-[#cc7f08]">OOS IC 显著为正 + 同向一致 ≥ 50%</span> 才值得继续研究。
+            </div>
+          </div>
+
+          <div v-if="validation.error" class="mt-2 rounded-[4px] border border-[#ff3b30]/40 bg-[#ff3b30]/8 px-2.5 py-1.5 text-[11px] text-[#c62d23]">
+            {{ validation.error }}
+          </div>
+          <div v-if="validation.loading" class="py-8 text-center text-xs text-[#9a9898]">样本外验证计算中（基于本地行情）...</div>
+
+          <template v-if="validation.result?.ok">
+            <!-- 聚合指标 -->
+            <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div
+                v-for="(label, key) in {
+                  oos_ic_mean: 'OOS IC 均值',
+                  oos_ic_tstat: 'OOS IC t值',
+                  oos_sign_consistency: '同向一致性',
+                  oos_long_short_total: 'OOS 多空累计',
+                }"
+                :key="key"
+                class="flex flex-col items-center rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-2 py-2"
+              >
+                <span class="text-[10px] text-[#9a9898]">{{ label }}</span>
+                <span class="mt-0.5 font-mono text-sm font-semibold" :style="{ color: vfSigColor(validation.result.aggregate[key]) }">
+                  {{ key === 'oos_sign_consistency' ? validation.result.aggregate[key].toFixed(2) : validation.result.aggregate[key].toFixed(4) }}
+                </span>
+              </div>
+            </div>
+
+            <!-- 逐折明细 -->
+            <div class="mt-3 overflow-auto">
+              <table class="w-full min-w-[560px] border-collapse text-xs">
+                <thead>
+                  <tr class="bg-[#f8f7f7]">
+                    <th
+                      v-for="h in ['折', '训练截止', '测试区间', 'IS IC', 'IS t值', 'OOS IC', 'OOS t值', 'OOS RANK_IC', '多空累计']"
+                      :key="h"
+                      class="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-left font-medium text-[#646262]"
+                    >
+                      {{ h }}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="fd in validation.result.folds" :key="fd.fold" class="border-b border-[rgba(15,0,0,0.08)]">
+                    <td class="px-2 py-1.5 font-mono text-[#646262]">{{ fd.fold }}</td>
+                    <td class="px-2 py-1.5 font-mono text-[#646262]">{{ fd.train_end }}</td>
+                    <td class="px-2 py-1.5 font-mono text-[#646262]">{{ fd.test_start }} ~ {{ fd.test_end }}</td>
+                    <td class="px-2 py-1.5 font-mono" :style="{ color: vfSigColor(fd.in_sample.ic_mean) }">{{ fd.in_sample.ic_mean.toFixed(4) }}</td>
+                    <td class="px-2 py-1.5 font-mono text-[#646262]">{{ fd.in_sample.t_stat.toFixed(2) }}</td>
+                    <td class="px-2 py-1.5 font-mono" :style="{ color: vfSigColor(fd.out_of_sample.ic_mean) }">{{ fd.out_of_sample.ic_mean.toFixed(4) }}</td>
+                    <td class="px-2 py-1.5 font-mono text-[#646262]">{{ fd.out_of_sample.t_stat.toFixed(2) }}</td>
+                    <td class="px-2 py-1.5 font-mono text-[#646262]">{{ fd.out_of_sample.rank_ic_mean.toFixed(4) }}</td>
+                    <td class="px-2 py-1.5 font-mono" :style="{ color: vfSigColor(fd.long_short_cum) }">{{ (fd.long_short_cum * 100).toFixed(1) }}%</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- OOS IC 衰减 -->
+            <div class="mt-3">
+              <div class="mb-1 text-[11px] font-medium text-[#646262]">测试段 IC 衰减（T→T+p 复利收益，与 IC 汇总同口径）</div>
+              <div class="flex flex-wrap gap-1.5">
+                <span
+                  v-for="d in validation.result.aggregate.ic_decay_oos"
+                  :key="d.period"
+                  class="rounded-[3px] border border-[rgba(15,0,0,0.1)] bg-[#f8f7f7] px-2 py-0.5 font-mono text-[11px]"
+                  :style="{ color: vfSigColor(d.ic) }"
+                >
+                  p{{ d.period }}: {{ d.ic.toFixed(4) }}
+                </span>
+              </div>
+            </div>
+          </template>
+          <div v-else-if="validation.result && !validation.result.ok" class="mt-2 text-[11px] text-[#cc7f08]">
+            {{ validation.result.message }}
+          </div>
+        </div>
+
         <!-- AI 分析 Tab -->
         <div v-if="tab === 'ai'">
           <div v-if="!aiAdvice && !aiLoading" class="flex flex-col items-center gap-3 py-6">
             <div class="text-center text-xs leading-relaxed text-[#646262]">
               AI 将解读该因子的公式逻辑、点评各项指标强弱，<br />
+              <template v-if="validation.result?.ok">
+                <span class="font-medium text-[#7c3aed]">并解读已运行的样本外验证结果</span>（OOS IC 显著性、同向一致性、衰减）<br />
+              </template>
               并给出使用场景与调仓周期建议（需先在设置中配置 AI）。
             </div>
             <button

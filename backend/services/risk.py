@@ -21,8 +21,9 @@ def _zscore_cross(df: pd.DataFrame) -> pd.DataFrame:
     return df.sub(mean, axis=0).div(std, axis=0)
 
 
-def _cumprod_ret(a: np.ndarray) -> float:
+def _cumprod_ret(a) -> float:
     """返回一段收益率数组累计收益（-1 保护）"""
+    a = np.asarray(a, dtype=float)
     a = a[np.isfinite(a)]
     if a.size == 0:
         return 0.0
@@ -433,3 +434,86 @@ def covariance_estimator(
     diag = np.diag(np.diag(sigma))
     shrink = shrinkage * diag + (1 - shrinkage) * sigma
     return pd.DataFrame(shrink, index=sigma.index, columns=sigma.columns)
+
+
+# ── 回测策略收益归因（回归法：不需要持仓权重，用风格因子日收益回归）──────────
+
+
+def strategy_regression_attribution(
+    strategy_returns: pd.Series,
+    style_returns: dict[str, pd.DataFrame],
+    min_obs: int = 30,
+) -> dict:
+    """收益归因（时序回归法）：组合日收益 ~ Σ β_style × 风格因子日收益 + alpha
+
+    与暴露法（strategy_attribution）互补——不需要逐日持仓权重面板，
+    只需要组合日收益 + 各风格因子日收益（来自 style_factor_returns），
+    适合对已落库的回测记录（净值曲线）直接做归因。
+
+    Returns:
+        {
+          ok: bool, message: str,
+          beta: {style: β},                每风格回归系数
+          contribution: {style: 累计贡献},  β_style × 因子收益逐日累加
+          alpha_cum: 残差累计收益,
+          alpha_annual: alpha 年化,
+          alpha_ir: alpha 信息比率,
+          r2: 风格因子解释的组合收益方差比例,
+          n_obs: 有效样本数,
+        }
+    """
+    sf = pd.concat(
+        [df.rename(columns=lambda c: name) for name, df in style_returns.items()],
+        axis=1,
+    ).sort_index()
+    ret = strategy_returns.dropna().sort_index()
+    common = ret.index.intersection(sf.index)
+    if len(common) < min_obs:
+        return {
+            "ok": False,
+            "message": f"重叠样本不足 {min_obs} 个交易日（当前 {len(common)}），无法归因",
+            "beta": {}, "contribution": {}, "alpha_cum": 0.0,
+            "alpha_annual": 0.0, "alpha_ir": 0.0, "r2": 0.0, "n_obs": len(common),
+        }
+    X = sf.reindex(common)
+    y = ret.reindex(common).to_numpy(dtype=float)
+
+    # 多元回归 y = alpha_d + Σ β X（带截距）
+    Xa = np.column_stack([np.ones(len(y)), X.to_numpy(dtype=float)])
+    try:
+        coef, _, _, _ = np.linalg.lstsq(Xa, y, rcond=None)
+    except Exception as e:
+        return {"ok": False, "message": f"回归失败: {e}", "beta": {},
+                "contribution": {}, "alpha_cum": 0.0, "alpha_annual": 0.0,
+                "alpha_ir": 0.0, "r2": 0.0, "n_obs": len(common)}
+
+    alpha_daily = coef[0]
+    betas = {s: float(coef[i + 1]) for i, s in enumerate(X.columns)}
+
+    # 各风格累计贡献 = Σ β_s × f_s,t（逐日），alpha 序列 = y - Σ β f
+    Xv = X.to_numpy(dtype=float)
+    alpha_series = y - Xv @ coef[1:]
+    contrib: dict[str, float] = {}
+    for i, s in enumerate(X.columns):
+        contrib[s] = _cumprod_ret((Xv[:, i] * coef[i + 1]).tolist()) if abs(coef[i + 1]) > 1e-12 else 0.0
+    alpha_cum = _cumprod_ret(alpha_series.tolist())
+    alpha_std = float(alpha_series.std())
+    alpha_ir = (alpha_series.mean() / alpha_std * np.sqrt(252)) if alpha_std > 0 else 0.0
+
+    # R² = 1 - SS_res/SS_tot
+    ss_res = float(((y - (Xv @ coef[1:] + alpha_daily)) ** 2).sum())
+    ss_tot = float(((y - y.mean()) ** 2).sum())
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+    return {
+        "ok": True,
+        "message": "",
+        "beta": {s: round(v, 4) for s, v in betas.items()},
+        "contribution": {s: round(v, 4) for s, v in contrib.items()},
+        "alpha_daily": round(float(alpha_daily), 6),
+        "alpha_cum": round(alpha_cum, 4),
+        "alpha_annual": round(float((1 + alpha_daily) ** 252 - 1), 4),
+        "alpha_ir": round(alpha_ir, 4),
+        "r2": round(r2, 4),
+        "n_obs": int(len(common)),
+    }

@@ -174,6 +174,7 @@ async def run_strategy(req: RunStrategyRequest):
             "strategy_returns": _ser(strategy_returns),
             "drawdown_series": _ser(dd["drawdown_series"]),
             "tear_sheet": {**tear, "max_drawdown": dd["max_drawdown"]},
+            "cost_summary": result["cost_summary"],
             "assumptions": result["assumptions"],
         }
     except HTTPException:
@@ -227,11 +228,47 @@ async def run_backtest(req: RunBacktestRequest):
                 for k, v in strategy_returns.items()
             },
             "initial_capital": req.initial_capital,
+            "cost_summary": result["cost_summary"],
             "assumptions": result["assumptions"],
         }
     except Exception as e:
         logger.error(f"回测执行失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class CapacityRequest(BaseModel):
+    signals: dict  # {date_str: {code: signal_value}}
+    prices: dict  # {date_str: {code: price}}
+    amount: Optional[dict] = None  # {date_str: {code: 成交额}}（建议提供）
+    normalize: str = "long_only"  # none / long_only / dollar_neutral
+    participation_rate: float = 0.1
+    capital_levels: Optional[list[float]] = None
+
+
+@router.post("/capacity")
+async def capacity(req: CapacityRequest):
+    """容量分析：信号在参与率约束下可容纳的资金规模（需成交额面板）"""
+    try:
+        import pandas as pd
+
+        signals_df = _dict_to_df(req.signals)
+        prices_df = _dict_to_df(req.prices)
+        amount_df = _dict_to_df(req.amount) if req.amount else None
+
+        result = backtest_analysis.capacity_analysis(
+            signals=signals_df,
+            prices=prices_df,
+            amount=amount_df,
+            normalize=req.normalize,
+            participation_rate=req.participation_rate,
+            capital_levels=req.capital_levels,
+        )
+        result["status"] = "ok"
+        return result
+    except Exception as e:
+        logger.error(f"容量分析失败: {e}")
+        raise HTTPException(status_code=400, detail=f"容量分析失败: {e}")
+
 
 
 @router.post("/tear-sheet")

@@ -289,6 +289,25 @@ function metricVal(key: string, fmt: string): string {
   return fmtNum(v, 2)
 }
 
+// 成本拆分（佣金/滑点/印花税；空时隐藏该块）
+interface CostSummary {
+  total_cost: number
+  breakdown: Record<string, number>
+  shares: Record<string, number>
+  cost_bps_per_turnover: number
+}
+const costSummary = computed<CostSummary | null>(() => {
+  const cs = (runDetail.value?.metrics as any)?.cost_summary as CostSummary | undefined
+  if (!cs || typeof cs.total_cost !== 'number') return null
+  return cs
+})
+
+function fmtMoney(v: number): string {
+  if (v >= 1e8) return `¥${(v / 1e8).toFixed(2)}亿`
+  if (v >= 1e4) return `¥${(v / 1e4).toFixed(1)}万`
+  return `¥${v.toFixed(0)}`
+}
+
 const equityOption = computed(() => {
   const eq = runDetail.value?.equity
   if (!eq?.length) return null
@@ -542,6 +561,34 @@ const busy = computed(() => btRunning.value || aiRunning.value)
                 <div class="text-[10px] text-[#9a9898]">{{ label }}</div>
                 <div class="mt-0.5 font-mono text-[13px] font-semibold text-[#201d1d]">
                   {{ metricVal(key, fmt) }}
+                </div>
+              </div>
+            </div>
+
+            <!-- 成本拆分（佣金/滑点/印花税分列） -->
+            <div
+              v-if="costSummary"
+              class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3"
+            >
+              <div class="mb-1.5 flex items-center justify-between text-xs font-semibold text-[#201d1d]">
+                <span>交易成本拆分</span>
+                <span class="font-mono text-[11px] font-normal text-[#646262]">
+                  合计 {{ fmtMoney(costSummary.total_cost) }} · {{ (costSummary.cost_bps_per_turnover ?? 0).toFixed(1) }}bps/换手
+                </span>
+              </div>
+              <div class="grid grid-cols-3 gap-1.5">
+                <div
+                  v-for="[key, label] in [['commission', '佣金'], ['slippage', '滑点'], ['stamp_tax', '印花税']]"
+                  :key="key"
+                  class="rounded-[4px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-2 py-1.5"
+                >
+                  <div class="text-[10px] text-[#9a9898]">{{ label }}</div>
+                  <div class="font-mono text-[12px] text-[#201d1d]">
+                    {{ fmtMoney(costSummary.breakdown?.[key] ?? 0) }}
+                    <span class="text-[10px] text-[#9a9898]">
+                      ({{ ((costSummary.shares?.[key] ?? 0) * 100).toFixed(1) }}%)
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>

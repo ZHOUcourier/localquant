@@ -7,7 +7,7 @@
 import { computed, ref } from 'vue'
 import { Card, Button } from '@/components/ui'
 import VChart from '@/components/ui/VChart.vue'
-import { Activity, SlidersHorizontal, Target, Scale, ShieldAlert, Loader2 } from 'lucide-vue-next'
+import { Activity, SlidersHorizontal, Target, Scale, ShieldAlert, Loader2, Database } from 'lucide-vue-next'
 
 type Panel = Record<string, Record<string, number>>
 
@@ -32,6 +32,41 @@ const state = ref<{
   metrics: Record<string, unknown> | null
   stress: Record<string, unknown> | null
 }>({ exposure: null, weights: null, metrics: null, stress: null })
+
+/* ── 从本地行情缓存加载真实面板（而非手工粘贴/合成示例） ── */
+const cacheCodes = ref('')
+const cacheStart = ref('')
+const cacheEnd = ref('')
+const cacheLoading = ref(false)
+const cacheInfo = ref('')
+const loadedPanels = ref<{ close: Panel; volume: Panel; amount: Panel } | null>(null)
+
+async function loadFromCache() {
+  cacheLoading.value = true
+  cacheInfo.value = ''
+  errorMsg.value = ''
+  try {
+    const q = new URLSearchParams()
+    if (cacheCodes.value.trim()) q.set('codes', cacheCodes.value.trim())
+    if (cacheStart.value) q.set('start_date', cacheStart.value)
+    if (cacheEnd.value) q.set('end_date', cacheEnd.value)
+    const res = await fetch(`/api/risk/panel?${q.toString()}`)
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(data?.detail ?? `接口错误 (HTTP ${res.status})`)
+    loadedPanels.value = { close: data.close, volume: data.volume, amount: data.amount }
+    panelText.value = JSON.stringify(
+      { close: data.close, volume: data.volume, amount: data.amount },
+      null,
+      2,
+    )
+    cacheInfo.value = `已加载 ${data.codes.length} 只标的 · ${data.start} ~ ${data.end}（前复权口径）`
+    state.value = { exposure: null, weights: null, metrics: null, stress: null }
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    cacheLoading.value = false
+  }
+}
 
 function mulberry32(a: number) {
   return function () {
@@ -132,7 +167,12 @@ async function guard(run: () => Promise<void>) {
 function runExposure() {
   return guard(async () => {
     const close = parseClose()
-    state.value.exposure = await postJson<Record<string, Panel>>('/api/risk/style-exposure', { close })
+    const panels = loadedPanels.value
+    state.value.exposure = await postJson<Record<string, Panel>>('/api/risk/style-exposure', {
+      close,
+      volume: panels?.volume ?? {},
+      amount: panels?.amount ?? {},
+    })
   })
 }
 
@@ -207,7 +247,8 @@ const weightChartOption = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col max-w-[1400px] overflow-auto">
+  <!-- 整页滚动：内容自然高度，滚动由外层 Layout main 承接（避免双层滚动条） -->
+  <div class="flex flex-col max-w-[1400px]">
     <div>
       <h1 class="text-xl font-semibold text-[#201d1d] mb-1">风险与组合分析</h1>
       <p class="text-[13px] text-[#646262]">
@@ -218,9 +259,27 @@ const weightChartOption = computed(() => {
     <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
       <!-- 输入 -->
       <Card title="输入面板（close: {日期: {代码: 收盘价}}）" class="row-span-2">
+        <!-- 从本地缓存加载（推荐：有缓存行情时直接取真实数据） -->
+        <div class="mb-3 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] p-2.5">
+          <div class="mb-1.5 text-[11px] font-medium text-[#646262]">从本地行情缓存加载（前复权）</div>
+          <div class="flex flex-wrap items-center gap-1.5">
+            <input
+              v-model="cacheCodes"
+              type="text"
+              placeholder="股票池，逗号分隔（留空=全部）"
+              class="min-w-[180px] flex-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-xs font-mono outline-none placeholder:text-[#9a9898]"
+            />
+            <input v-model="cacheStart" type="date" class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-1.5 py-1 text-xs" />
+            <input v-model="cacheEnd" type="date" class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-1.5 py-1 text-xs" />
+            <Button variant="secondary" size="sm" :loading="cacheLoading" @click="loadFromCache">
+              <Database :size="13" class="mr-1" /> 加载
+            </Button>
+          </div>
+          <div v-if="cacheInfo" class="mt-1.5 text-[11px] text-[#248a3d]">{{ cacheInfo }}</div>
+        </div>
         <textarea
           v-model="panelText"
-          rows="18"
+          rows="13"
           spellcheck="false"
           class="w-full font-mono text-xs p-2 rounded-[4px] border border-[#e3e0e0] bg-[#f8f7f7] text-[#201d1d] focus:outline-none focus:border-[#007aff] resize-y"
           placeholder='{"close": {"2023-03-01": {"000001.SZ": 12.3}}}'

@@ -14,6 +14,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.services import market_data
 from backend.services.duckdb_service import DuckDBService
 
 router = APIRouter()
@@ -118,6 +119,11 @@ async def list_tables():
                     "columns": columns,
                     "sample_range": date_range,
                     "codes": [_file_code(f) for f in files[:200]],
+                    "note": (
+                        "缓存为不复权价 + adjust_factor 列；前复权价 = close × adjust_factor / 最新 adjust_factor"
+                        if "adjust_factor" in columns
+                        else "旧版前复权缓存（无 adjust_factor 列）"
+                    ),
                 }
             )
     return {"tables": tables}
@@ -141,11 +147,13 @@ async def market_scan(body: ScanRequest):
     """按日期对全部缓存股票做条件扫描（如 close > 10; volume > 1000000）"""
     files = _cache_files(body.period)
     if not files:
+        err = market_data.no_cache_error_detail(body.period)
         return {
             "columns": [],
             "data": [],
             "row_count": 0,
-            "error": "本地无行情缓存数据，请先到「数据中心」下载行情",
+            "error": err["message"] + " — " + err["hint"],
+            "code": err["code"],
         }
 
     parsed = []
@@ -221,7 +229,11 @@ async def cross_section(body: CrossSectionRequest):
     """某日全市场指定字段的截面统计与分布直方图"""
     files = _cache_files(body.period)
     if not files:
-        return {"error": "本地无行情缓存数据，请先到「数据中心」下载行情"}
+        err = market_data.no_cache_error_detail(body.period)
+        return {
+            "error": err["message"] + " — " + err["hint"],
+            "code": err["code"],
+        }
 
     try:
         target = pd.to_datetime(body.date)

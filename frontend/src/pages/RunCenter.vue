@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
-import { Play, Square, GitBranch, ChevronRight, Loader2, Pencil } from 'lucide-vue-next'
+import { Play, Square, GitBranch, ChevronRight, Loader2, Pencil, Activity } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { Card, Badge, Button, VChart } from '@/components/ui'
 import { useWorkflows } from '@/composables/useWorkflow'
@@ -160,6 +160,49 @@ const topTab = ref<'workflow' | 'backtest'>('workflow')
 const btRuns = ref<BacktestRun[]>([])
 const btDetail = ref<BacktestRunDetail | null>(null)
 const btLoading = ref(false)
+// 风格归因（回归法）：组合收益 ~ Σ β×风格因子收益 + alpha
+const attribution = ref<{
+  loading: boolean
+  error: string | null
+  data: {
+    ok: boolean
+    message?: string
+    beta?: Record<string, number>
+    contribution?: Record<string, number>
+    alpha_cum?: number
+    alpha_annual?: number
+    alpha_ir?: number
+    r2?: number
+    n_obs?: number
+    n_stocks?: number
+    data_date?: string
+    style_factor_summary?: { style: string; mean: number; t: number; ir: number; cumulative: number }[]
+  } | null
+}>({ loading: false, error: null, data: null })
+
+async function runAttribution() {
+  const id = btDetail.value?.id
+  if (!id) return
+  attribution.value = { loading: true, error: null, data: null }
+  try {
+    const d = await jsonFetch('/api/risk/attribution-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: id }),
+    })
+    attribution.value.data = d
+  } catch (e) {
+    attribution.value.error = e instanceof Error ? e.message : String(e)
+  } finally {
+    attribution.value.loading = false
+  }
+}
+
+function attrColor(v: number): string {
+  if (v > 0.005) return '#c62d23'
+  if (v < -0.005) return '#1d8a3e'
+  return '#646262'
+}
 
 async function loadBtRuns() {
   btLoading.value = true
@@ -418,6 +461,70 @@ onMounted(loadBtRuns)
             <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3">
               <div class="mb-2 text-xs font-semibold text-[#201d1d]">净值曲线</div>
               <VChart v-if="btEquityOption" :option="btEquityOption" :height="200" />
+            </div>
+
+            <!-- 风格归因（回归法）：策略赚的钱来自哪种风格，剩的是不是纯 alpha -->
+            <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3">
+              <div class="mb-2 flex items-center justify-between">
+                <div class="text-xs font-semibold text-[#201d1d]">风格归因</div>
+                <div class="flex items-center gap-2">
+                  <span class="text-[10px] text-[#9a9898]">
+                    组合日收益 ~ Σ β×风格因子收益 + alpha（基于本地行情面板，需已下载回测区间数据）
+                  </span>
+                  <Button variant="secondary" size="sm" :loading="attribution.loading" @click="runAttribution">
+                    <Activity :size="12" class="mr-1" />
+                    {{ attribution.data ? '重新归因' : '运行归因' }}
+                  </Button>
+                </div>
+              </div>
+
+              <div v-if="attribution.error" class="rounded-[4px] border border-[#ff9f0a]/40 bg-[#ff9f0a]/8 px-2.5 py-1.5 text-[11px] text-[#8a5a00]">
+                {{ attribution.error }}
+              </div>
+              <template v-else-if="attribution.data">
+                <div v-if="attribution.data.ok" class="space-y-2">
+                  <div class="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                    <div class="rounded-[4px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-2 py-1.5">
+                      <div class="text-[10px] text-[#9a9898]">Alpha 累计</div>
+                      <div class="font-mono text-[12px] font-semibold" :style="{ color: attrColor(attribution.data.alpha_cum ?? 0) }">
+                        {{ ((attribution.data.alpha_cum ?? 0) * 100).toFixed(1) }}%
+                      </div>
+                    </div>
+                    <div class="rounded-[4px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-2 py-1.5">
+                      <div class="text-[10px] text-[#9a9898]">Alpha 年化</div>
+                      <div class="font-mono text-[12px] font-semibold" :style="{ color: attrColor(attribution.data.alpha_annual ?? 0) }">
+                        {{ ((attribution.data.alpha_annual ?? 0) * 100).toFixed(1) }}%
+                      </div>
+                    </div>
+                    <div class="rounded-[4px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-2 py-1.5">
+                      <div class="text-[10px] text-[#9a9898]">Alpha IR</div>
+                      <div class="font-mono text-[12px] text-[#201d1d]">{{ (attribution.data.alpha_ir ?? 0).toFixed(2) }}</div>
+                    </div>
+                    <div class="rounded-[4px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-2 py-1.5">
+                      <div class="text-[10px] text-[#9a9898]">风格解释 R²</div>
+                      <div class="font-mono text-[12px] text-[#201d1d]">{{ ((attribution.data.r2 ?? 0) * 100).toFixed(1) }}%</div>
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <span
+                      v-for="(v, s) in attribution.data.contribution ?? {}"
+                      :key="String(s)"
+                      class="rounded-[3px] border border-[rgba(15,0,0,0.1)] bg-[#f8f7f7] px-2 py-0.5 font-mono text-[10px]"
+                      :style="{ color: attrColor(v) }"
+                    >
+                      {{ s }} β={{ (attribution.data.beta?.[String(s)] ?? 0).toFixed(2) }} · 贡献 {{ (v * 100).toFixed(1) }}%
+                    </span>
+                  </div>
+                  <div class="text-[10px] text-[#9a9898]">
+                    样本 {{ attribution.data.n_obs }} 个交易日 · {{ attribution.data.n_stocks }} 只标的 · 数据截至
+                    {{ attribution.data.data_date }}
+                  </div>
+                </div>
+                <div v-else class="text-[11px] text-[#cc7f08]">{{ attribution.data.message }}</div>
+              </template>
+              <div v-else class="py-3 text-center text-[11px] text-[#9a9898]">
+                点击「运行归因」把这条回测的收益拆成风格贡献 + 纯 alpha
+              </div>
             </div>
 
             <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3">

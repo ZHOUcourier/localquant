@@ -127,16 +127,41 @@ async def download_data(req: DownloadRequest):
         qmt.download_history(
             [req.symbol], period=req.period, start_time=start, end_time=end
         )
-        data = qmt.get_kline(
-            [req.symbol], period=req.period, start_time=start, end_time=end
-        )
-        df = data.get(req.symbol)
-        if df is None or df.empty:
+        raw = qmt.get_kline(
+            [req.symbol],
+            period=req.period,
+            start_time=start,
+            end_time=end,
+            dividend_type="none",
+        ).get(req.symbol)
+        if raw is None or raw.empty:
             raise HTTPException(
                 status_code=404,
                 detail=f"QMT 未返回 {req.symbol} 的数据，请检查代码与日期区间",
             )
-        merged = market_data._cache.get_or_append(req.symbol, req.period, df)
+        df = market_data.normalize_kline_fields(raw)
+        back = qmt.get_kline(
+            [req.symbol],
+            period=req.period,
+            start_time=start,
+            end_time=end,
+            dividend_type="back",
+        ).get(req.symbol)
+        if back is None or back.empty:
+            logger.warning(f"{req.symbol} 后复权数据缺失，adjust_factor 置 1")
+            df = df.copy()
+            df["adjust_factor"] = 1.0
+        else:
+            df = market_data._merge_with_factor(
+                df, market_data.normalize_kline_fields(back)
+            )
+        existing = market_data._cache.get(req.symbol, req.period)
+        if existing is not None and "adjust_factor" not in existing.columns:
+            # 旧版前复权缓存口径不可逆，整体重建（不复权 + adjust_factor 存储）
+            market_data._cache.invalidate(req.symbol, req.period)
+            merged = df.copy()
+        else:
+            merged = market_data._cache.get_or_append(req.symbol, req.period, df)
         return {
             "status": "ok",
             "symbol": req.symbol,
@@ -152,9 +177,17 @@ async def download_data(req: DownloadRequest):
 
 @router.get("/sectors")
 async def get_sectors():
+    """QMT 板块列表；未连接时返回结构化错误而非静默空列表"""
     qmt = market_data._qmt
     if not qmt.connected:
-        return []
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "qmt_not_connected",
+                "message": "QMT 未连接，无法获取板块列表",
+                "hint": "xtquant 仅 Windows 可用，请在安装了 QMT 客户端的环境中运行后端",
+            },
+        )
     return qmt.get_sector_list()
 
 
@@ -235,8 +268,15 @@ async def reference_status():
 
 @router.get("/stocks")
 async def get_stocks():
-    """返回本地已缓存的股票代码列表"""
-    return market_data.list_cached_codes()
+    """返回本地已缓存的股票代码列表
+
+    缓存为空时返回 404 结构化错误（code=no_cached_data + 指引），
+    与 load_price_panels 等「数据缺失」语义对齐，避免静默空列表。
+    """
+    codes = market_data.list_cached_codes()
+    if not codes:
+        raise HTTPException(status_code=404, detail=market_data.no_cache_error_detail())
+    return codes
 
 
 @router.post("/quality-check")
@@ -327,9 +367,17 @@ def _quote_from_qmt(code: str) -> Optional[dict]:
 
 
 def _quote_from_cache(code: str) -> Optional[dict]:
-    """QMT 不可用时，从本地日线缓存取最近两日收盘价计算涨跌（非实时）"""
-    df = market_data._cache.get(code, "1d")
-    if df is None or df.empty or "close" not in df.columns or len(df) < 2:
+    """QMT 不可用时，从本地日线缓存取最近两日收盘价计算涨跌（非实时）
+
+    缓存为不复权 + adjust_factor 存储，读取时按 qfq 口径换算，
+    避免除权日前后涨跌幅跳变失真。
+    """
+    raw_df = market_data._cache.get(code, "1d")
+    if raw_df is None or raw_df.empty or "close" not in raw_df.columns or len(raw_df) < 2:
+        return None
+    try:
+        df = market_data._apply_adjust(raw_df, code, "qfq")
+    except ValueError:
         return None
     closes = df["close"].astype(float).dropna()
     if len(closes) < 2:

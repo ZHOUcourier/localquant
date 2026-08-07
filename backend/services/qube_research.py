@@ -518,6 +518,7 @@ async def execute_backtest_run(run_id: str) -> dict:
                 "max_drawdown": dd["max_drawdown"],
                 "trade_count": len(trades),
                 "final_equity": float(equity.iloc[-1]) if len(equity) else init_balance,
+                "cost_summary": result.get("cost_summary", {}),
             }
             # 明细数据量受限时只保留尾部，并显式标注截断，避免 trade_count 与明细不一致
             _TRADE_TAIL = 1000
