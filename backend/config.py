@@ -1,6 +1,11 @@
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+# .env 为配置的唯一事实来源：设置页写入 .env，读取时也应优先于 shell 环境变量，
+# 否则残留的 AI_*/QUBE_* 环境变量会静默覆盖 .env，导致设置页显示与持久化不一致。
+load_dotenv(override=True)
 
 
 class Settings(BaseSettings):

@@ -16,3 +16,4 @@ frontend/dist/
 # 注：.qoder/ 为故意纳管（含计划/截图），不忽略
 
 .vscode
+.opencode

@@ -22,11 +22,10 @@ _qmt = QMTClient()
 
 
 def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
-    """数据时效检查：统计各缓存标的的最新交易日及其陈旧天数（相对今日）
+    """数据时效检查：统计各缓存标的的最新交易日及其陈旧程度（相对最新交易日历）
 
-    Returns:
-        {"latest": str, "stale_count": int, "total": int,
-         "stale": [{"code", "latest_date", "staleness_days"}], "fresh": [...]}
+    陈旧口径：自然日 vs 工作日（交易日历不可得时用工作日近似）。
+    长假（春节/国庆）按交易日历判定不会误报「数据断档」。
     """
     codes = list_cached_codes(period)
     today = date.today()
@@ -48,19 +47,82 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
             }
         )
     latest_date = max((r["latest_date"] for r in rows), default=None)
-    stale_threshold = 7  # 停牌/新股可能久缺数，7 天作为"明显滞后"的经验阈值
-    stale = [r for r in rows if r["staleness_days"] > stale_threshold]
+    latest_ts = pd.Timestamp(latest_date) if latest_date else None
+
+    # 交易日历（QMT 有则用，未连接用工作日近似）：陈旧判定 = 最近数据日距「最新应交易日」的交易日数
+    trade_dates = _trading_calendar()
+    expected = trade_dates[-1] if trade_dates is not None else today
+    if latest_ts is not None:
+        if trade_dates is not None:
+            past = [d for d in trade_dates if d <= latest_ts.date()]
+            latest_trade_idx = len(past) - 1
+            expected_idx = len(trade_dates) - 1
+            stale_trade_days = expected_idx - latest_trade_idx
+        else:
+            stale_trade_days = len(pd.bdate_range(latest_ts.date(), today)) - 1
+    else:
+        stale_trade_days = None
+
+    # 停牌/新股可能久缺数，以「交易日」为经验阈值（约 5 个交易日明显滞后）
+    stale_threshold = 5
+    per_code_stale = {}
+    for r in rows:
+        if latest_ts is None:
+            per_code_stale[r["code"]] = 0
+            continue
+        d = pd.Timestamp(r["latest_date"]).date()
+        if trade_dates is not None:
+            past = [x for x in trade_dates if x <= d]
+            idx = len(past) - 1
+            per_code_stale[r["code"]] = expected_idx - idx
+        else:
+            per_code_stale[r["code"]] = len(pd.bdate_range(d, today)) - 1
+    stale = [
+        {**r, "stale_trade_days": per_code_stale.get(r["code"], 0)}
+        for r in rows
+        if per_code_stale.get(r["code"], 0) > stale_threshold
+    ]
     return {
         "period": period,
         "total": len(rows),
         "latest_date": latest_date,
-        "staleness_days": (today - pd.Timestamp(latest_date).date()).days
-        if latest_date
-        else None,
+        "staleness_days": (today - latest_ts.date()).days if latest_ts is not None else None,
+        "stale_trade_days": stale_trade_days,
+        "stale_threshold_trade_days": stale_threshold,
+        "calendar": "qmt" if trade_dates is not None else "weekday_approx",
         "stale_count": len(stale),
         "stale": stale[:50],
         "status": "ok" if not stale else "stale",
     }
+
+
+# 交易日历缓存（QMT 拉取失败/未连接时为 None → 用工作日近似）
+_trade_cal: dict = {"ts": 0.0, "dates": None}
+_TRADE_CAL_TTL = 6 * 3600
+
+
+def _trading_calendar() -> list | None:
+    """QMT 交易日历（SH 市场，覆盖 A 股主要交易日）；未连接/失败返回 None"""
+    import time
+
+    now = time.time()
+    if now - _trade_cal["ts"] < _TRADE_CAL_TTL:
+        return _trade_cal["dates"]
+    _trade_cal["ts"] = now
+    _trade_cal["dates"] = None
+    if not _qmt.connected:
+        return None
+    try:
+        dates = _qmt.get_trading_dates(market="SH")
+        parsed = sorted(
+            {pd.Timestamp(d).date() for d in dates}
+        )
+        if parsed:
+            _trade_cal["dates"] = parsed
+    except Exception as e:
+        logger.warning(f"获取交易日历失败: {e}")
+    return _trade_cal["dates"]
+
 
 PRICE_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
 
@@ -390,6 +452,47 @@ def cache_coverage(period: str = "1d") -> list[dict]:
 
 
 # ── 参考数据面板装配 ─────────────────────────────────────
+
+
+def dividend_events(
+    period: str = "1d",
+    codes: list[str] | None = None,
+    days: int = 90,
+    limit: int = 50,
+) -> list[dict]:
+    """从缓存 adjust_factor 检测除权除息事件
+
+    除权事件 = adjust_factor 相邻交易日跳变（后复权因子锚定上市日，
+    事件当日 factor 发生变化）。返回 [{code, date, factor_ratio, }] 按日期倒序。
+
+    factor_ratio = 当日 factor / 前一日 factor（>1 表示后复权放大，
+    如 1.5 对应 10 送 5 / 拆股等事件）。
+    """
+    all_codes = codes or list_cached_codes(period)
+    events: list[dict] = []
+    for code in all_codes:
+        df = _cache.get(code, period)
+        if df is None or df.empty or "adjust_factor" not in df.columns:
+            continue
+        try:
+            f = df["adjust_factor"].astype(float)
+            ratio = f / f.shift(1)
+            idx = ratio[(ratio.abs() - 1.0).abs() > 1e-9].dropna()
+        except Exception:
+            continue
+        for ts, r in idx.items():
+            events.append(
+                {
+                    "code": code,
+                    "date": str(pd.Timestamp(ts).date()),
+                    "factor_ratio": round(float(r), 6),
+                }
+            )
+    events.sort(key=lambda e: e["date"], reverse=True)
+    if days:
+        cutoff = pd.Timestamp(date.today()) - pd.Timedelta(days=days)
+        events = [e for e in events if pd.Timestamp(e["date"]) >= cutoff]
+    return events[:limit]
 
 
 def load_reference_panels(

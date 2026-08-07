@@ -440,6 +440,237 @@ class BacktestAnalysisService:
             return f"{value / 1e4:.0f} 万"
         return f"{value:.0f} 元"
 
+    # ── 因子池 → 组合回测闭环 ─────────────────────────────────
+
+    def portfolio_backtest(
+        self,
+        factors: list[dict],
+        start_date: str = "",
+        end_date: str = "",
+        combine_method: str = "equal",
+        top_n: int = 20,
+        initial_capital: float = 1_000_000,
+        commission_rate: float = 0.001,
+        slippage: float = 0.001,
+        stamp_tax: float = 0.0005,
+        take_profit: float = 0.0,
+        stop_loss: float = 0.0,
+        trailing_stop: float = 0.0,
+    ) -> dict:
+        """因子池 → 组合回测闭环（研究主链路一键打通）
+
+        因子公式求值（本地面板，一次加载）→ 合成（等权/IC 加权）→
+        每日截面取 Top-N 做多 → 向量化回测 → 绩效 → 风格归因。
+
+        Args:
+            factors: [{factor_id, factor_name, formula}]
+            combine_method: equal=等权合成 / ic_weighted=按全区间尾部滚动 RankIC
+                加权（研究参考口径：权重来自整段样本，含未来信息，报告中明示）
+            top_n: 每期截面做多只数（0=全部正因子值做多）
+
+        Returns:
+            {ok, message, signals?, equity_curve, strategy_returns,
+             tear_sheet, cost_summary, attribution, factor_weights, failed}
+        """
+        from backend.services import market_data, reference_data, risk
+        from backend.services.factor_operators import build_operator_namespace
+        from backend.services.factor_research import factor_research
+
+        codes = market_data.list_cached_codes("1d")
+        if len(codes) < 30:
+            raise ValueError(
+                f"本地仅 {len(codes)} 只股票缓存，不足以构建组合（至少 30 只）— "
+                "请先在「数据中心」下载行情数据"
+            )
+        panels = market_data.load_price_panels(
+            codes=codes, start_date=start_date, end_date=end_date
+        )
+        close = panels["close"]
+        if close is None or len(close.index) < 60:
+            raise ValueError("行情区间不足 60 个交易日，无法回测")
+
+        ns = build_operator_namespace(
+            panels, industry_map=reference_data.load_industry_map()
+        )
+        factor_frames: dict[str, pd.DataFrame] = {}
+        failed: list[dict] = []
+        for f in factors:
+            try:
+                fd = eval(f["formula"], {"__builtins__": {}}, ns)  # noqa: S307
+                if isinstance(fd, pd.Series):
+                    fd = fd.to_frame()
+                if isinstance(fd, pd.DataFrame) and not fd.empty:
+                    factor_frames[f["factor_name"]] = fd.reindex(index=close.index)
+                else:
+                    failed.append({"factor_name": f["factor_name"], "error": "公式未产出有效面板"})
+            except Exception as e:  # noqa: BLE001
+                failed.append({"factor_name": f["factor_name"], "error": str(e)[:200]})
+        if not factor_frames:
+            raise ValueError(
+                "所选因子均无法求值（" + "；".join(f"{x['factor_name']}: {x['error']}" for x in failed[:3]) + "）"
+            )
+
+        return_data = close.pct_change()
+        weights: dict[str, float] | None = None
+        if combine_method == "ic_weighted" and len(factor_frames) >= 2:
+            weights = factor_research._ic_weights(factor_frames, return_data, ic_window=120)
+            combined = factor_research.multi_factor_combine(
+                factor_frames, weights=weights
+            )
+        else:
+            combined = factor_research.multi_factor_combine(factor_frames, method="equal")
+
+        # 每日截面 Top-N 做多信号（T 日信号 → 回测引擎 T+1 执行）
+        n = int(top_n)
+        if n <= 0:
+            signals = (combined > 0).astype(float)
+        else:
+            ranked = combined.rank(axis=1, ascending=False)
+            signals = pd.DataFrame(
+                0.0, index=combined.index, columns=combined.columns
+            )
+            signals[ranked <= n] = 1.0
+        signals = signals.fillna(0.0)
+
+        reference = market_data.load_reference_panels(close, panels.get("volume"))
+        result = self.run_backtest(
+            signals=signals,
+            prices=close,
+            initial_capital=initial_capital,
+            commission_rate=commission_rate,
+            slippage=slippage,
+            stamp_tax=stamp_tax,
+            normalize="long_only",
+            tradable_mask=reference["tradable_mask"],
+            up_limit=reference["up_limit"],
+            down_limit=reference["down_limit"],
+            high=panels.get("high"),
+            low=panels.get("low"),
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            trailing_stop=trailing_stop,
+        )
+        strategy_returns = result["strategy_returns"]
+        tear = self.performance_tear_sheet(returns=strategy_returns)
+        dd = self.drawdown_analysis(strategy_returns)
+
+        # 风格归因（失败不阻断主结果）
+        attribution: dict | None = None
+        try:
+            styles = risk.build_style_exposures(
+                close, volume=panels.get("volume"), amount=panels.get("amount")
+            )
+            style_res = risk.style_factor_returns(return_data, styles)
+            attr = risk.strategy_regression_attribution(
+                strategy_returns, style_res["factor_returns"]
+            )
+            if attr.get("ok"):
+                attribution = {
+                    "alpha_cum": attr["alpha_cum"],
+                    "alpha_annual": attr["alpha_annual"],
+                    "alpha_ir": attr["alpha_ir"],
+                    "r2": attr["r2"],
+                    "beta": attr["beta"],
+                    "contribution": attr["contribution"],
+                    "n_obs": attr["n_obs"],
+                }
+        except Exception:  # noqa: BLE001
+            attribution = None
+
+        return {
+            "ok": True,
+            "combine_method": combine_method,
+            "top_n": n,
+            "n_factors": len(factor_frames),
+            "factor_names": list(factor_frames.keys()),
+            "factor_weights": weights or {k: 1.0 / len(factor_frames) for k in factor_frames},
+            "failed": failed,
+            "equity_curve": {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in result["equity_curve"].items()
+            },
+            "strategy_returns": {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in strategy_returns.items()
+            },
+            "drawdown_series": {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in dd["drawdown_series"].items()
+            },
+            "tear_sheet": {**tear, "max_drawdown": dd["max_drawdown"]},
+            "cost_summary": result["cost_summary"],
+            "attribution": attribution,
+            "assumptions": result["assumptions"],
+            "n_stocks": int(close.shape[1]),
+            "data_date": str(close.index[-1])[:10],
+        }
+
+    # ── 回测参数敏感性（网格扫描）────────────────────────────
+
+    def sensitivity_scan(
+        self,
+        signals: pd.DataFrame,
+        prices: pd.DataFrame,
+        param_grid: dict[str, list],
+        base: dict | None = None,
+        tradable_mask=None,
+        up_limit=None,
+        down_limit=None,
+        high=None,
+        low=None,
+    ) -> dict:
+        """回测参数网格扫描：对 param_grid 做笛卡尔积，逐组合跑回测
+
+        信号只算一次、面板共享；返回每个组合的绩效对比表，供研究员
+        验证策略对参数（成本/止盈止损/滑点等）的稳健性。
+
+        param_grid 支持键：commission_rate / slippage / stamp_tax /
+        normalize / take_profit / stop_loss / trailing_stop
+        """
+        import itertools
+
+        base = base or {}
+        keys = list(param_grid.keys())
+        combos = list(itertools.product(*param_grid.values()))
+        rows: list[dict] = []
+        for combo in combos:
+            params = dict(base)
+            params.update(dict(zip(keys, combo)))
+            try:
+                result = self.run_backtest(
+                    signals=signals,
+                    prices=prices,
+                    initial_capital=float(params.get("initial_capital", 1_000_000)),
+                    commission_rate=float(params.get("commission_rate", 0.001)),
+                    slippage=float(params.get("slippage", 0.001)),
+                    stamp_tax=float(params.get("stamp_tax", 0.0005)),
+                    normalize=str(params.get("normalize", "long_only")),
+                    tradable_mask=tradable_mask,
+                    up_limit=up_limit,
+                    down_limit=down_limit,
+                    high=high,
+                    low=low,
+                    take_profit=float(params.get("take_profit", 0.0)),
+                    stop_loss=float(params.get("stop_loss", 0.0)),
+                    trailing_stop=float(params.get("trailing_stop", 0.0)),
+                )
+                tear = self.performance_tear_sheet(result["strategy_returns"])
+                rows.append(
+                    {
+                        "params": {k: v for k, v in params.items() if k in keys},
+                        "total_return": tear["total_return"],
+                        "annual_return": tear["annual_return"],
+                        "sharpe_ratio": tear["sharpe_ratio"],
+                        "max_drawdown": tear["max_drawdown"],
+                        "volatility": tear["volatility"],
+                        "cost": float(result["cost_summary"]["total_cost"]),
+                        "trade_days": tear["trading_days"],
+                    }
+                )
+            except Exception as e:  # noqa: BLE001
+                rows.append({"params": dict(zip(keys, combo)), "error": str(e)[:200]})
+        return {"keys": keys, "rows": rows, "n_combos": len(combos)}
+
     # ── 绩效报告 ─────────────────────────────────────────────
 
     def performance_tear_sheet(

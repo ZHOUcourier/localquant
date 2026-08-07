@@ -271,6 +271,165 @@ async def capacity(req: CapacityRequest):
 
 
 
+class PortfolioRequest(BaseModel):
+    factor_ids: list[int] = []  # 空 = 取整个因子池
+    combine_method: str = "equal"  # equal / ic_weighted
+    top_n: int = 20  # 每日截面做多只数（0=全部正值做多）
+    start_date: str = ""
+    end_date: str = ""
+    initial_capital: float = 1_000_000
+    commission_rate: float = 0.001
+    slippage: float = 0.001
+    stamp_tax: float = 0.0005
+    take_profit: float = 0.0
+    stop_loss: float = 0.0
+    trailing_stop: float = 0.0
+
+
+@router.post("/portfolio")
+async def portfolio_backtest(req: PortfolioRequest):
+    """因子池 → 组合回测闭环：因子求值 → 合成（等权/IC加权）→ Top-N 做多 →
+    回测 → 绩效 → 风格归因（研究主链路一键打通）"""
+    import json
+
+    from backend.services.factor_research import extract_formula, factor_research
+
+    db = await get_db()
+    try:
+        if req.factor_ids:
+            marks = ",".join("?" * len(req.factor_ids))
+            cursor = await db.execute(
+                f"SELECT id, factor_name, description FROM preset_factors "
+                f"WHERE id IN ({marks}) ORDER BY id",
+                req.factor_ids,
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT pf.id, pf.factor_name, pf.description FROM preset_factors pf "
+                "INNER JOIN factor_pool fp ON fp.factor_id = pf.id ORDER BY fp.added_at DESC"
+            )
+        rows = [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+
+    factors = []
+    for r in rows:
+        formula = extract_formula(r.get("description"))
+        if formula:
+            factors.append(
+                {"factor_id": r["id"], "factor_name": r["factor_name"], "formula": formula}
+            )
+    if not factors:
+        raise HTTPException(status_code=400, detail="所选因子均无可用公式（仅支持公式型因子）")
+
+    try:
+        result = await asyncio.to_thread(
+            backtest_analysis.portfolio_backtest,
+            factors=factors,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            combine_method=req.combine_method,
+            top_n=req.top_n,
+            initial_capital=req.initial_capital,
+            commission_rate=req.commission_rate,
+            slippage=req.slippage,
+            stamp_tax=req.stamp_tax,
+            take_profit=req.take_profit,
+            stop_loss=req.stop_loss,
+            trailing_stop=req.trailing_stop,
+        )
+        # 溯源
+        try:
+            from backend.routes.factor import _spawn_provenance
+
+            await _spawn_provenance(
+                kind="backtest",
+                entity_id="portfolio",
+                entity_name=f"组合回测({len(factors)}因子,{req.combine_method},Top{req.top_n})",
+                params=req.model_dump(),
+                metrics={
+                    "total_return": result.get("tear_sheet", {}).get("total_return"),
+                    "sharpe_ratio": result.get("tear_sheet", {}).get("sharpe_ratio"),
+                    "alpha_cum": (result.get("attribution") or {}).get("alpha_cum"),
+                },
+                notes="因子池组合回测（等权/IC加权合成 + Top-N 多空）",
+                source="portfolio",
+            )
+        except Exception:
+            pass
+        result["status"] = "ok"
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"组合回测失败: {e}")
+        raise HTTPException(status_code=400, detail=f"组合回测失败: {e}")
+
+
+class SensitivityRequest(BaseModel):
+    signal_code: str  # 需定义 generate_signals(prices, **kwargs)
+    stock_pool: list[str] = []
+    start_date: str = ""
+    end_date: str = ""
+    param_grid: dict[str, list]  # {commission_rate: [0.0005, 0.001, 0.002], ...}
+    base_params: dict = {}
+
+
+@router.post("/sensitivity")
+async def sensitivity(req: SensitivityRequest):
+    """回测参数敏感性（网格扫描）：信号只算一次，逐参数组合回测对比
+
+    支持扫描参数：commission_rate / slippage / stamp_tax / normalize /
+    take_profit / stop_loss / trailing_stop
+    """
+    from backend.services.sandbox import run_signals
+
+    if not req.param_grid:
+        raise HTTPException(status_code=400, detail="param_grid 为空，无可扫描的参数")
+
+    try:
+        panels = await asyncio.to_thread(
+            market_data.load_price_panels,
+            codes=req.stock_pool,
+            start_date=req.start_date,
+            end_date=req.end_date,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    prices = panels["close"]
+
+    try:
+        signals_df, sandboxed = await run_signals(req.signal_code, prices)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if signals_df is None or signals_df.empty:
+        raise HTTPException(status_code=400, detail="信号为空 — 请检查信号逻辑与数据区间")
+
+    reference = await asyncio.to_thread(
+        market_data.load_reference_panels, prices, panels.get("volume")
+    )
+    try:
+        result = await asyncio.to_thread(
+            backtest_analysis.sensitivity_scan,
+            signals=signals_df,
+            prices=prices,
+            param_grid=req.param_grid,
+            base=req.base_params,
+            tradable_mask=reference["tradable_mask"],
+            up_limit=reference["up_limit"],
+            down_limit=reference["down_limit"],
+            high=panels.get("high"),
+            low=panels.get("low"),
+        )
+        result["status"] = "ok"
+        result["sandboxed"] = sandboxed
+        result["n_stocks"] = int(prices.shape[1])
+        return result
+    except Exception as e:
+        logger.error(f"参数敏感性扫描失败: {e}")
+        raise HTTPException(status_code=400, detail=f"参数敏感性扫描失败: {e}")
+
+
 @router.post("/tear-sheet")
 async def tear_sheet(req: TearSheetRequest):
     """计算绩效报告"""

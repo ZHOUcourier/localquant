@@ -257,6 +257,28 @@ async def data_freshness_endpoint():
     return market_data.data_freshness()
 
 
+@router.get("/dividend-events")
+async def dividend_events(
+    period: str = "1d",
+    days: int = 90,
+    limit: int = 50,
+):
+    """最近除权除息事件清单（adjust_factor 跳变检测）
+
+    研究员据此判断缓存区间是否跨除权事件、复权价口径是否受影响。
+    空缓存时返回统一结构化错误。
+    """
+    codes = market_data.list_cached_codes(period)
+    if not codes:
+        raise HTTPException(status_code=404, detail=market_data.no_cache_error_detail())
+    events = market_data.dividend_events(period=period, days=days, limit=limit)
+    return {
+        "period": period,
+        "count": len(events),
+        "events": events,
+    }
+
+
 @router.get("/reference-status")
 async def reference_status():
     """参考数据快照现状（成分/行业/股本/合约详情）"""
@@ -281,14 +303,25 @@ async def get_stocks():
 
 @router.post("/quality-check")
 async def quality_check():
-    """检查本地缓存数据完整性：空文件、缺失值、重复索引"""
+    """检查本地缓存数据完整性：空文件、缺失值、重复索引、价格/成交量异常、长期停牌"""
+    import numpy as np
     import pandas as pd
 
     issues: list[str] = []
     checked = 0
+    suspended: list[str] = []  # 最新数据远超最新交易日（疑似停牌/退市）
+    price_anomalies = 0
+    vol_anomalies = 0
 
     if not settings.cache_dir.exists():
         return {"passed": True, "issues": [], "summary": "本地无缓存数据，无可检查项"}
+
+    latest_trade = None
+    try:
+        latest_trade = market_data._trading_calendar()
+        latest_trade_date = latest_trade[-1] if latest_trade else None
+    except Exception:
+        latest_trade_date = None
 
     for period_dir in sorted(settings.cache_dir.iterdir()):
         if not period_dir.is_dir():
@@ -311,14 +344,58 @@ async def quality_check():
                 na = int(df["close"].isna().sum())
                 if na > 0:
                     issues.append(f"{name}: close 列存在 {na} 个缺失值")
+                # 价格异常：负价/零价 + 单日跳变（前复权口径下 >50% 极不正常）
+                c = pd.to_numeric(df["close"], errors="coerce")
+                if (c <= 0).any():
+                    issues.append(f"{name}: 存在非正价格 {int((c <= 0).sum())} 个")
+                adj = df["adjust_factor"].astype(float) if "adjust_factor" in df.columns else pd.Series(1.0, index=df.index)
+                if len(adj) > 1:
+                    qfq = c * adj / float(adj.iloc[-1])
+                    jump = qfq.pct_change().abs()
+                    bad = jump[jump > 0.5].dropna()
+                    if len(bad):
+                        price_anomalies += len(bad)
+                        first = str(bad.index[0])[:10]
+                        issues.append(
+                            f"{name}: 前复权单日跳变 >50% 共 {len(bad)} 次（最近 {first}，"
+                            "请确认除权事件是否已由 adjust_factor 正确吸收）"
+                        )
+            if "volume" in df.columns:
+                v = pd.to_numeric(df["volume"], errors="coerce")
+                adv = v.rolling(20).mean()
+                spike = v[v > adv * 20].dropna()
+                if len(spike):
+                    vol_anomalies += len(spike)
+                    first = str(spike.index[0])[:10]
+                    issues.append(f"{name}: 成交量超过 20 日均量 20 倍的尖峰共 {len(spike)} 次（最近 {first}）")
+
+            # 疑似停牌/退市：最新数据日距最新交易日 > 60 个交易日
+            if latest_trade_date is not None and "close" in df.columns:
+                try:
+                    last_d = pd.Timestamp(df.index[-1]).date()
+                    past = [d for d in latest_trade if d <= last_d]
+                    gap = len(latest_trade) - 1 - (len(past) - 1)
+                    if gap > 60:
+                        suspended.append(f"{name}（距今 {gap} 个交易日）")
+                except Exception:
+                    pass
 
     if checked == 0:
         return {"passed": True, "issues": [], "summary": "本地无缓存数据，无可检查项"}
 
+    extras = []
+    if suspended:
+        extras.append(f"疑似停牌/退市 {len(suspended)} 只：{'、'.join(suspended[:8])}{'…' if len(suspended) > 8 else ''}（历史回测需确认是否覆盖退市股，避免幸存者偏差）")
+    if price_anomalies:
+        extras.append(f"价格异常 {price_anomalies} 处")
+    if vol_anomalies:
+        extras.append(f"量能异常 {vol_anomalies} 处")
+
     return {
         "passed": len(issues) == 0,
         "issues": issues,
-        "summary": f"已检查 {checked} 个缓存文件，发现 {len(issues)} 个问题",
+        "summary": f"已检查 {checked} 个缓存文件，发现 {len(issues)} 个问题"
+        + ("；" + "；".join(extras) if extras else ""),
     }
 
 

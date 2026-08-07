@@ -25,10 +25,8 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "gpt-5.6-terra",
             "grok-4.5",
             "gemini-3.6-flash",
-            "gemini-3.5-flash-lite",
             "kimi-k3",
             "glm-5.2",
-            "kimi-k2.7-code",
             "ling-3.0-flash-free",
             "laguna-s-2.1-free",
             "hy3-free",
@@ -43,16 +41,13 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "grok-4.5",
             "hy3",
             "glm-5.2",
-            "kimi-k2.7-code",
             "qwen3.7-plus",
-            "minimax-m3",
             "qwen3.7-max",
+            "minimax-m3",
             "deepseek-v4-flash",
             "deepseek-v4-pro",
             "mimo-v2.5",
             "mimo-v2.5-pro",
-            "kimi-k2.6",
-            "glm-5.1",
         ],
     },
     "deepseek": {
@@ -75,14 +70,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "glm-5.1",
             "glm-5",
             "glm-5v-turbo",
-            "glm-4.7",
-            "glm-4.7-flashx",
-            "glm-4.7-flash",
-            "glm-4.6",
-            "glm-4.6v",
-            "glm-4.5",
-            "glm-4.5-air",
-            "glm-4.5-flash",
         ],
     },
     "zhipuai-coding-plan": {
@@ -94,9 +81,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "glm-5.1",
             "glm-5-turbo",
             "glm-5v-turbo",
-            "glm-4.7",
-            "glm-4.6v",
-            "glm-4.5-air",
         ],
     },
     "zai": {
@@ -109,14 +93,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "glm-5",
             "glm-5-turbo",
             "glm-5v-turbo",
-            "glm-4.7",
-            "glm-4.7-flash",
-            "glm-4.7-flashx",
-            "glm-4.6",
-            "glm-4.6v",
-            "glm-4.5",
-            "glm-4.5-air",
-            "glm-4.5-flash",
         ],
     },
     "zai-coding-plan": {
@@ -128,8 +104,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "glm-5.1",
             "glm-5-turbo",
             "glm-5v-turbo",
-            "glm-4.7",
-            "glm-4.5-air",
         ],
     },
     "kimi-for-coding": {
@@ -146,15 +120,9 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "qwen3.7-plus",
             "qwen3.7-max",
             "qwen3.6-flash",
-            "qwen3.6-plus",
-            "qwen3.5-plus",
-            "qwen3.5-flash",
             "glm-5.2",
-            "glm-5.1",
             "deepseek-v4-flash",
             "deepseek-v4-pro",
-            "kimi-k2.6",
-            "qwen-max",
         ],
     },
     "alibaba-token-plan-cn": {
@@ -167,8 +135,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "qwen3.7-max",
             "qwen3.6-flash",
             "glm-5.2",
-            "kimi-k2.7-code",
-            "kimi-k2.6",
             "deepseek-v4-flash",
             "deepseek-v4-pro",
         ],
@@ -181,14 +147,10 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "qwen3.7-plus",
             "qwen3.7-max",
             "qwen3.6-flash",
-            "qwen3.6-plus",
-            "qwen3.5-plus",
             "qwen3-coder-next",
             "qwen3-coder-plus",
             "MiniMax-M2.5",
             "glm-5",
-            "glm-4.7",
-            "kimi-k2.5",
         ],
     },
     "moonshotai-cn": {
@@ -199,13 +161,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "kimi-k3",
             "kimi-k2.7-code",
             "kimi-k2.7-code-highspeed",
-            "kimi-k2.6",
-            "kimi-k2.5",
-            "kimi-k2-thinking",
-            "kimi-k2-thinking-turbo",
-            "kimi-k2-turbo-preview",
-            "kimi-k2-0905-preview",
-            "kimi-k2-0711-preview",
         ],
     },
     "minimax-cn": {
@@ -216,10 +171,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "MiniMax-M3",
             "MiniMax-M2.7",
             "MiniMax-M2.7-highspeed",
-            "MiniMax-M2.5",
-            "MiniMax-M2.5-highspeed",
-            "MiniMax-M2.1",
-            "MiniMax-M2",
         ],
     },
     "minimax-cn-token-plan": {
@@ -230,10 +181,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "MiniMax-M3",
             "MiniMax-M2.7",
             "MiniMax-M2.7-highspeed",
-            "MiniMax-M2.5",
-            "MiniMax-M2.5-highspeed",
-            "MiniMax-M2.1",
-            "MiniMax-M2",
         ],
     },
     "openai": {
@@ -247,12 +194,6 @@ PROVIDER_PRESETS: dict[str, dict] = {
             "gpt-5.6-terra",
             "gpt-5.5-pro",
             "gpt-5.5",
-            "gpt-5.4",
-            "gpt-5.4-pro",
-            "gpt-5.4-mini",
-            "gpt-5.4-nano",
-            "gpt-4o",
-            "gpt-4o-mini",
         ],
     },
     # 自定义 BYOK：唯一需要用户自填 Base URL 的选项（模型也手输）
@@ -274,7 +215,6 @@ CLI_TOOLS: dict[str, dict] = {
         "args": ["-p", "--output-format", "text", "{prompt}"],
     },
     "codex": {"label": "Codex CLI", "bin": "codex", "args": ["exec", "{prompt}"]},
-    "coder": {"label": "Coder", "bin": "coder", "args": ["{prompt}"]},
     "qoder": {"label": "Qoder CLI", "bin": "qoder", "args": ["-p", "{prompt}"]},
     "opencode": {"label": "OpenCode", "bin": "opencode", "args": ["run", "{prompt}"]},
     "cursor-agent": {
@@ -308,7 +248,7 @@ CLI_TOOL_META: dict[str, dict] = {
     "codex": {
         "model_flag": ["-m"],
         "effort": "config",
-        "models": ["gpt-5-codex", "gpt-5", "gpt-5-mini", "o4-mini", "o3"],
+        "models": ["gpt-5-codex", "gpt-5", "gpt-5-mini"],
     },
     "opencode": {
         "model_flag": ["-m"],
@@ -325,7 +265,7 @@ CLI_TOOL_META: dict[str, dict] = {
     "qoder": {
         "model_flag": ["--model"],
         "effort": None,
-        "models": ["claude-sonnet-4.5", "claude-opus-4.5", "gpt-5", "auto"],
+        "models": ["claude-sonnet-5", "claude-opus-5", "gpt-5.6", "auto"],
     },
     "pi": {
         "model_flag": ["--model"],
@@ -335,16 +275,27 @@ CLI_TOOL_META: dict[str, dict] = {
     "kimi": {
         "model_flag": ["--model"],
         "effort": None,
-        "models": ["kimi-k2", "kimi-k2-turbo", "kimi-latest"],
+        "models": ["kimi-k3", "kimi-k2.7-code", "kimi-latest"],
     },
-    "codebuddy": {"model_flag": ["--model"], "effort": None, "models": []},
-    "coder": {"model_flag": ["--model"], "effort": None, "models": []},
-    "hermes": {"model_flag": ["--model"], "effort": None, "models": []},
-    "cursor-agent": {"model_flag": ["--model"], "effort": None, "models": []},
+    "codebuddy": {
+        "model_flag": ["--model"],
+        "effort": None,
+        "models": ["claude-sonnet-5", "gpt-5.6", "deepseek-v4-pro"],
+    },
+    "hermes": {
+        "model_flag": ["--model"],
+        "effort": None,
+        "models": ["claude-sonnet-5", "gpt-5.6", "grok-4.5"],
+    },
+    "cursor-agent": {
+        "model_flag": ["--model"],
+        "effort": None,
+        "models": ["claude-sonnet-5", "claude-opus-5", "gpt-5.6"],
+    },
     "gemini": {
         "model_flag": ["-m"],
         "effort": None,
-        "models": ["gemini-2.5-pro", "gemini-2.5-flash"],
+        "models": ["gemini-3.6-pro", "gemini-3.6-flash"],
     },
 }
 
@@ -352,9 +303,44 @@ CLI_TOOL_META: dict[str, dict] = {
 # opencode 真实模型清单缓存（`opencode models` 输出，进程内缓存避免每次调用都起子进程）
 _OPENCODE_MODELS_CACHE: list[str] = []
 
+# 动态清单过滤规则：仅保留最近一代模型（对齐上方各供应商精简后的下拉口径）。
+# 命中任一模式即保留（大小写不敏感）；最终按模型名去重，避免历代残留与跨供应商重复。
+_RECENT_MODEL_PATTERNS = (
+    "opencode/",  # opencode 免费模型（均为在售）
+    "deepseek-v4",
+    "deepseek-chat",
+    "deepseek-reasoner",
+    "qwen3.",
+    "qwen3-coder-plus",
+    "qwen3-coder-next",
+    "qwen3-coder-flash",
+    "kimi-k3",
+    "kimi-k2.6",
+    "kimi-k2.7",
+    "kimi-for-coding",
+    "glm-5",
+    "gpt-5.6",
+    "gpt-5.5",
+    "gpt-5-codex",
+    "gpt-5-mini",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "grok-4",
+    "gemini-3.",
+    "minimax-m3",
+    "minimax-m2.7",
+    "mimo-v2.5",
+    "hy3",
+    "ling-3.0",
+    "laguna-",
+    "north-mini-code",
+)
+
 
 def _opencode_models() -> list[str]:
-    """运行 `opencode models` 拉取本机 opencode 全部可用模型（带进程内缓存）"""
+    """运行 `opencode models` 拉取本机 opencode 全部可用模型（带进程内缓存），
+    只保留最近一代模型并按模型名去重，避免下拉出现历代残留模型。
+    """
     global _OPENCODE_MODELS_CACHE
     if _OPENCODE_MODELS_CACHE:
         return _OPENCODE_MODELS_CACHE
@@ -370,7 +356,18 @@ def _opencode_models() -> list[str]:
             text=True,
             timeout=15,
         )
-        models = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+        models: list[str] = []
+        seen: set[str] = set()
+        for ln in out.stdout.splitlines():
+            name = ln.strip()
+            low = name.lower()
+            if not name or not any(p in low for p in _RECENT_MODEL_PATTERNS):
+                continue
+            base = low.split("/", 1)[-1]
+            if base in seen:
+                continue
+            seen.add(base)
+            models.append(name)
         if models:
             _OPENCODE_MODELS_CACHE = models
         return models

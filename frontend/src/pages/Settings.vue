@@ -112,10 +112,18 @@ const CLI_EFFORT_LEVELS = [
   { k: 'high', label: '高' },
 ]
 // 预置供应商的模型下拉选项（BYOK 无清单，降级手输）
-const modelOptions = computed<SelectOption[]>(() =>
-  (selectedProvider.value?.models ?? []).map((m) => ({ value: m, label: m })),
-)
+// 已保存但不在清单中的模型（如精简清单前选的旧模型）仍追加显示，避免回显空白
+const modelOptions = computed<SelectOption[]>(() => {
+  const list = selectedProvider.value?.models ?? []
+  const opts = list.map((m) => ({ value: m, label: m }))
+  if (form.ai_model && !list.includes(form.ai_model)) {
+    opts.push({ value: form.ai_model, label: `${form.ai_model}（自定义）` })
+  }
+  return opts
+})
 
+// immediate：页面重新挂载时即使配置数据来自 vue-query 缓存（refetch 结果结构相同引用不变），
+// 也能立即回显已保存的配置，避免「设置了但切回来不显示」
 watch(config, (c) => {
   if (!c) return
   form.qmt_path = c.qmt_path ?? ''
@@ -131,7 +139,7 @@ watch(config, (c) => {
   form.factor_service_url = c.factor_service_url ?? ''
   form.backend_port = c.backend_port ?? 8000
   form.frontend_port = c.frontend_port ?? 5173
-})
+}, { immediate: true })
 
 const saveMutation = useMutation({
   mutationFn: async () => {

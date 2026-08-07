@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
-import { Play, Square, GitBranch, ChevronRight, Loader2, Pencil, Activity } from 'lucide-vue-next'
+import { Play, Square, GitBranch, ChevronRight, Loader2, Pencil, Activity, SlidersHorizontal } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { Card, Badge, Button, VChart } from '@/components/ui'
 import { useWorkflows } from '@/composables/useWorkflow'
@@ -202,6 +202,61 @@ function attrColor(v: number): string {
   if (v > 0.005) return '#c62d23'
   if (v < -0.005) return '#1d8a3e'
   return '#646262'
+}
+
+/* ── 回测参数敏感性（网格扫描）：验证策略对参数的稳健性 ── */
+const sensGrid = ref({
+  commission_rate: '',
+  slippage: '',
+  stamp_tax: '',
+  stop_loss: '',
+  take_profit: '',
+})
+const sensRunning = ref(false)
+const sensError = ref<string | null>(null)
+const sensResult = ref<{
+  keys: string[]
+  n_combos: number
+  rows: { params: Record<string, number>; total_return?: number; annual_return?: number; sharpe_ratio?: number; max_drawdown?: number; cost?: number; error?: string }[]
+} | null>(null)
+
+async function runSensitivity() {
+  const id = btDetail.value?.id
+  const params = btDetail.value?.params
+  if (!id || !params) return
+  const grid: Record<string, number[]> = {}
+  for (const [k, v] of Object.entries(sensGrid.value)) {
+    const vals = v
+      .split(',')
+      .map((s) => parseFloat(s.trim()))
+      .filter((x) => Number.isFinite(x))
+    if (vals.length) grid[k] = vals
+  }
+  if (!Object.keys(grid).length) {
+    sensError.value = '请至少填写一个参数的取值列表（逗号分隔）'
+    return
+  }
+  sensRunning.value = true
+  sensError.value = null
+  sensResult.value = null
+  try {
+    const d = await jsonFetch('/api/backtest/sensitivity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        signal_code: String(params.signal_code || ''),
+        stock_pool: Array.isArray(params.stock_pool) ? params.stock_pool : [],
+        start_date: String(params.period_start || ''),
+        end_date: String(params.period_end || ''),
+        param_grid: grid,
+      }),
+    })
+    sensResult.value = d
+  } catch (e) {
+    sensError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    sensRunning.value = false
+  }
 }
 
 async function loadBtRuns() {
@@ -524,6 +579,77 @@ onMounted(loadBtRuns)
               </template>
               <div v-else class="py-3 text-center text-[11px] text-[#9a9898]">
                 点击「运行归因」把这条回测的收益拆成风格贡献 + 纯 alpha
+              </div>
+            </div>
+
+            <!-- 参数敏感性（网格扫描）：策略对参数是否稳健 -->
+            <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3">
+              <div class="mb-2 flex items-center justify-between">
+                <div class="text-xs font-semibold text-[#201d1d]">参数敏感性</div>
+                <Button variant="secondary" size="sm" :loading="sensRunning" @click="runSensitivity">
+                  <SlidersHorizontal :size="12" class="mr-1" />
+                  {{ sensResult ? '重新扫描' : '运行网格扫描' }}
+                </Button>
+              </div>
+              <div class="mb-2 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                <label
+                  v-for="[k, l] in [['commission_rate', '佣金率'], ['slippage', '滑点'], ['stamp_tax', '印花税'], ['stop_loss', '止损'], ['take_profit', '止盈']]"
+                  :key="k"
+                  class="flex flex-col gap-0.5 text-[10px] text-[#646262]"
+                >
+                  {{ l }}
+                  <input
+                    :value="sensGrid[k as keyof typeof sensGrid]"
+                    placeholder="逗号分隔，如 0.001,0.002"
+                    class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-1.5 py-1 font-mono text-[10px] outline-none"
+                    @input="(e: any) => (sensGrid[k as keyof typeof sensGrid] = e.target.value)"
+                  />
+                </label>
+              </div>
+              <div class="mb-1 text-[10px] text-[#9a9898]">
+                信号只计算一次，逐参数组合回测对比；股票池/区间取该回测记录参数
+              </div>
+              <div v-if="sensError" class="rounded-[4px] border border-[#ff9f0a]/40 bg-[#ff9f0a]/8 px-2.5 py-1.5 text-[11px] text-[#8a5a00]">
+                {{ sensError }}
+              </div>
+              <div v-if="sensResult" class="overflow-auto">
+                <table class="w-full min-w-[520px] text-[11px]">
+                  <thead>
+                    <tr class="border-b border-[rgba(15,0,0,0.15)] text-left text-[#646262]">
+                      <th
+                        v-for="h in [...sensResult.keys, '总收益', '年化', '夏普', '最大回撤', '成本']"
+                        :key="h"
+                        class="py-1 pr-2 font-medium"
+                      >
+                        {{ h }}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, i) in sensResult.rows" :key="i" class="border-b border-[rgba(15,0,0,0.06)]">
+                      <template v-if="row.error">
+                        <td v-for="(_, j) in sensResult.keys.length" :key="j" class="py-1 pr-2 font-mono" />
+                        <td colspan="5" class="py-1 font-mono text-[#c62d23]">{{ row.error }}</td>
+                      </template>
+                      <template v-else>
+                        <td
+                          v-for="k in sensResult.keys"
+                          :key="k"
+                          class="py-1 pr-2 font-mono text-[#646262]"
+                        >
+                          {{ row.params[k] }}
+                        </td>
+                        <td class="py-1 pr-2 font-mono" :style="{ color: (row.total_return ?? 0) >= 0 ? '#c62d23' : '#1d8a3e' }">
+                          {{ fmtPct(row.total_return) }}
+                        </td>
+                        <td class="py-1 pr-2 font-mono text-[#646262]">{{ fmtPct(row.annual_return) }}</td>
+                        <td class="py-1 pr-2 font-mono text-[#646262]">{{ fmtNum(row.sharpe_ratio, 2) }}</td>
+                        <td class="py-1 pr-2 font-mono text-[#646262]">{{ fmtPct(row.max_drawdown) }}</td>
+                        <td class="py-1 font-mono text-[#646262]">{{ fmtNum(row.cost, 0) }}</td>
+                      </template>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 

@@ -140,6 +140,49 @@ function toggleExpand(key: string) {
   expanded.value[key] = !expanded.value[key]
 }
 
+/* ── 每日研究简报（/api/ops/briefing 实时聚合） ── */
+interface Briefing {
+  generated_at: number
+  market: {
+    ok: boolean
+    message?: string
+    data_date?: string
+    indices?: { name: string; state: string; mom20: number; mom60: number }[]
+    style_rotation?: { label: string; strength: number; trend: string }[]
+    market_state?: { label: string; n_bull: number; n_bear: number; hv20_avg: number }
+  } | null
+  factors: {
+    pool_n?: number
+    stages?: Record<string, number>
+    n_with_snapshot?: number
+    decaying?: { factor_name: string; stage: string; latest_ic_mean: number; trend_label: string }[]
+    error?: string
+  } | null
+  dividend_events: { code: string; date: string; factor_ratio: number }[]
+  data_freshness: { total: number; latest_date: string | null; stale_count: number; calendar: string } | null
+  recent_jobs: { job_name: string; status: string; trigger: string; detail: string }[]
+}
+const { data: briefing } = useQuery<Briefing>({
+  queryKey: ['research-briefing'],
+  queryFn: () => fetch('/api/ops/briefing').then((r) => r.json()),
+  refetchInterval: 15 * 60 * 1000,
+})
+
+const stageColors: Record<string, string> = {
+  稳定: 'bg-[#30d158]/15 text-[#248a3d]',
+  萌芽: 'bg-[#007aff]/10 text-[#0056b3]',
+  观察: 'bg-[#ff9f0a]/15 text-[#cc7f08]',
+  衰减: 'bg-[#ff9f0a]/25 text-[#a05a00]',
+  失效: 'bg-[#ff3b30]/10 text-[#c62d23]',
+  样本不足: 'bg-[#f1eeee] text-[#9a9898]',
+}
+
+const briefingTime = computed(() => {
+  const ts = briefing.value?.generated_at
+  if (!ts) return ''
+  return new Date(ts * 1000).toLocaleTimeString('zh-CN', { hour12: false })
+})
+
 const mono =
   'Berkeley Mono, IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
 </script>
@@ -180,6 +223,148 @@ const mono =
           <div class="mt-1 text-base font-medium text-[#201d1d]" :style="{ fontFamily: mono }">
             <span :style="{ color: indicatorColor(card.indicator) }">{{ card.value }}</span>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 每日研究简报 ─────────────────────────────────────────── -->
+    <div class="mb-12">
+      <div class="mb-3 flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-[#201d1d]" :style="{ fontFamily: mono }">每日研究简报</h2>
+          <div class="mt-1" style="border-bottom: 1px solid rgba(15, 0, 0, 0.12)" />
+        </div>
+        <span v-if="briefingTime" class="text-[10px] text-[#9a9898]" :style="{ fontFamily: mono }">
+          更新于 {{ briefingTime }} · 15 分钟自动刷新
+        </span>
+      </div>
+
+      <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <!-- 市场状态 -->
+        <div class="rounded-[4px] px-3 py-2.5" style="border: 1px solid rgba(15, 0, 0, 0.12); background-color: #fdfcfc">
+          <div class="mb-1.5 text-[11px] font-medium text-[#646262]" :style="{ fontFamily: mono }">市场环境</div>
+          <template v-if="briefing?.market?.ok">
+            <div class="flex flex-wrap items-center gap-2">
+              <span
+                class="rounded-[3px] px-2 py-0.5 text-[11px] font-semibold"
+                :class="stageColors[briefing.market.market_state?.label ?? ''] ?? 'bg-[#f1eeee] text-[#646262]'"
+              >
+                {{ briefing.market.market_state?.label }}
+              </span>
+              <span class="text-[10px] text-[#646262]">
+                {{ briefing.market.market_state?.n_bull }} 偏多 / {{ briefing.market.market_state?.n_bear }} 偏空 ·
+                HV20 均值 {{ ((briefing.market.market_state?.hv20_avg ?? 0) * 100).toFixed(0) }}% ·
+                数据截至 {{ briefing.market.data_date }}
+              </span>
+            </div>
+            <div class="mt-1.5 flex flex-wrap gap-1">
+              <span
+                v-for="i in briefing.market.indices"
+                :key="i.name"
+                class="rounded-[3px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-1.5 py-0.5 text-[10px] text-[#646262]"
+              >
+                {{ i.name }} {{ i.state }} {{ (i.mom20 * 100).toFixed(1)}}
+              </span>
+              <span
+                v-for="s in briefing.market.style_rotation"
+                :key="s.label"
+                class="rounded-[3px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-1.5 py-0.5 text-[10px]"
+                :style="{ color: s.strength >= 0 ? '#c62d23' : '#1d8a3e' }"
+              >
+                {{ s.label }} {{ s.trend }} {{ (Math.abs(s.strength) * 100).toFixed(1) }}%
+              </span>
+            </div>
+          </template>
+          <div v-else class="py-2 text-[11px] leading-relaxed text-[#cc7f08]">
+            {{ briefing?.market?.message || '加载中...' }}
+          </div>
+        </div>
+
+        <!-- 因子池体检 -->
+        <div class="rounded-[4px] px-3 py-2.5" style="border: 1px solid rgba(15, 0, 0, 0.12); background-color: #fdfcfc">
+          <div class="mb-1.5 text-[11px] font-medium text-[#646262]" :style="{ fontFamily: mono }">
+            因子池体检（{{ briefing?.factors?.pool_n ?? 0 }} 个因子 · {{ briefing?.factors?.n_with_snapshot ?? 0 }} 个有历史快照）
+          </div>
+          <template v-if="briefing?.factors && !briefing.factors.error">
+            <div class="flex flex-wrap items-center gap-1">
+              <span
+                v-for="(n, stage) in briefing.factors.stages ?? {}"
+                :key="String(stage)"
+                class="rounded-[3px] px-1.5 py-0.5 text-[10px] font-medium"
+                :class="stageColors[String(stage)] ?? 'bg-[#f1eeee] text-[#9a9898]'"
+              >
+                {{ String(stage) }} {{ n }}
+              </span>
+            </div>
+            <div v-if="briefing.factors.decaying?.length" class="mt-1.5">
+              <div class="text-[10px] text-[#a05a00]">近期衰减/失效：</div>
+              <div class="mt-0.5 flex flex-wrap gap-1">
+                <span
+                  v-for="d in briefing.factors.decaying"
+                  :key="d.factor_name"
+                  class="rounded-[3px] border border-[rgba(255,159,10,0.3)] bg-[#ff9f0a]/6 px-1.5 py-0.5 text-[10px] text-[#8a5a00]"
+                >
+                  {{ d.factor_name }} {{ d.trend_label }} IC={{ d.latest_ic_mean.toFixed(4) }}
+                </span>
+              </div>
+            </div>
+          </template>
+          <div v-else class="py-2 text-[11px] text-[#9a9898]">{{ briefing?.factors?.error || '加载中...' }}</div>
+        </div>
+
+        <!-- 除权事件 + 数据时效 -->
+        <div class="rounded-[4px] px-3 py-2.5" style="border: 1px solid rgba(15, 0, 0, 0.12); background-color: #fdfcfc">
+          <div class="mb-1.5 text-[11px] font-medium text-[#646262]" :style="{ fontFamily: mono }">
+            近 7 日除权事件（{{ briefing?.dividend_events?.length ?? 0 }} 起）
+          </div>
+          <div v-if="briefing?.dividend_events?.length" class="flex flex-wrap gap-1">
+            <span
+              v-for="e in briefing.dividend_events"
+              :key="`${e.code}-${e.date}`"
+              class="rounded-[3px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-1.5 py-0.5 font-mono text-[10px] text-[#646262]"
+            >
+              {{ e.code }} {{ e.date }} ×{{ e.factor_ratio.toFixed(3) }}
+            </span>
+          </div>
+          <div v-else class="py-1.5 text-[11px] text-[#9a9898]">
+            近 7 日无除权事件（或本地无缓存数据）
+          </div>
+          <div class="mt-2 border-t border-[rgba(15,0,0,0.06)] pt-1.5 text-[10px] text-[#646262]">
+            数据时效：
+            <template v-if="briefing?.data_freshness">
+              最新交易日 {{ briefing.data_freshness.latest_date ?? '无' }} ·
+              {{ briefing.data_freshness.total }} 只缓存 ·
+              滞后标的 {{ briefing.data_freshness.stale_count }} 只
+              <span class="text-[#9a9898]">
+                （{{ briefing.data_freshness.calendar === 'qmt' ? 'QMT 交易日历' : '工作日近似' }}口径）
+              </span>
+            </template>
+            <template v-else>暂无缓存</template>
+          </div>
+        </div>
+
+        <!-- 最近批处理 -->
+        <div class="rounded-[4px] px-3 py-2.5" style="border: 1px solid rgba(15, 0, 0, 0.12); background-color: #fdfcfc">
+          <div class="mb-1.5 text-[11px] font-medium text-[#646262]" :style="{ fontFamily: mono }">最近批处理</div>
+          <div v-if="briefing?.recent_jobs?.length" class="space-y-0.5">
+            <div
+              v-for="(j, i) in briefing.recent_jobs.slice(0, 4)"
+              :key="i"
+              class="flex items-center justify-between gap-2 text-[10px]"
+            >
+              <span class="truncate text-[#201d1d]">{{ j.job_name }}</span>
+              <span class="flex shrink-0 items-center gap-1">
+                <span
+                  class="rounded-[2px] px-1 py-px text-[9px] font-medium"
+                  :class="j.status === 'ok' ? 'bg-[#30d158]/15 text-[#248a3d]' : j.status === 'failed' ? 'bg-[#ff3b30]/10 text-[#c62d23]' : 'bg-[#f1eeee] text-[#9a9898]'"
+                >
+                  {{ j.status }}
+                </span>
+              </span>
+              <span class="max-w-[45%] truncate text-[#9a9898]" :title="j.detail">{{ j.detail }}</span>
+            </div>
+          </div>
+          <div v-else class="py-1.5 text-[11px] text-[#9a9898]">暂无批处理记录</div>
         </div>
       </div>
     </div>

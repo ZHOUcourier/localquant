@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useMutation, useQuery } from '@tanstack/vue-query'
 import { Wifi, WifiOff, Database, Download, ShieldCheck, Loader2, Layers, RefreshCw, CalendarClock } from 'lucide-vue-next'
 import { Card, Button, Input, Select, Badge, Dialog, Table, ScrollArea } from '@/components/ui'
@@ -86,6 +86,34 @@ const qualityMutation = useMutation<QualityResult, Error, void>({
       body: '{}',
     }).then((r) => r.json()),
   onSuccess: () => (qualityOpen.value = true),
+})
+
+/* ── 最近除权事件（adjust_factor 跳变检测） ── */
+interface DividendEvent {
+  code: string
+  date: string
+  factor_ratio: number
+}
+const divEvents = ref<DividendEvent[] | null>(null)
+const divError = ref<string | null>(null)
+
+const { data: divData, isError: divIsError } = useQuery<{ events: DividendEvent[] }>({
+  queryKey: ['dividend-events'],
+  queryFn: () =>
+    fetch('/api/data/dividend-events?days=90').then(async (r) => {
+      const d = await r.json().catch(() => null)
+      if (!r.ok) throw new Error(d?.detail?.message ?? d?.detail ?? `接口错误 (HTTP ${r.status})`)
+      return d
+    }),
+})
+watch([divData, divIsError], ([d, err]) => {
+  if (err) {
+    divEvents.value = []
+    divError.value = '本地无缓存行情数据 — 下载行情后自动检测除权事件'
+  } else {
+    divEvents.value = d?.events ?? []
+    divError.value = null
+  }
 })
 
 // ── 批量下载（SSE 逐只进度） ────────────────────────────
@@ -451,7 +479,7 @@ const provenanceColumns: Column[] = [
       <Card title="数据质量">
         <div class="flex flex-col items-center justify-center py-6 gap-3">
           <ShieldCheck :size="32" class="text-[#64d2ff]" />
-          <p class="text-xs text-[#646262] text-center">运行数据质量检查，验证缓存数据完整性</p>
+          <p class="text-xs text-[#646262] text-center">运行数据质量检查，验证缓存数据完整性<br />（含价格跳变/量能尖峰/疑似停牌退市）</p>
           <Button
             variant="secondary"
             size="sm"
@@ -460,6 +488,36 @@ const provenanceColumns: Column[] = [
           >
             运行检查
           </Button>
+        </div>
+      </Card>
+
+      <!-- 最近除权事件 -->
+      <Card title="最近除权事件（90 天）">
+        <div v-if="divError" class="px-1 py-2 text-[11px] text-[#8a5a00]">
+          除权事件不可用：{{ divError }}
+        </div>
+        <div v-else-if="divEvents === null" class="flex items-center justify-center gap-2 py-6 text-xs text-[#646262]">
+          <Loader2 :size="13" class="animate-spin" />
+          加载中...
+        </div>
+        <div v-else-if="divEvents.length === 0" class="px-1 py-4 text-center text-xs text-[#646262]">
+          近 90 天无除权事件（基于 adjust_factor 跳变检测）
+        </div>
+        <div v-else class="max-h-[220px] overflow-auto pr-1">
+          <div
+            v-for="e in divEvents"
+            :key="`${e.code}-${e.date}`"
+            class="flex items-center justify-between border-b border-[rgba(15,0,0,0.06)] py-1.5 last:border-b-0"
+          >
+            <span class="font-mono text-[11px] text-[#201d1d]">{{ e.code }}</span>
+            <span class="font-mono text-[10px] text-[#646262]">{{ e.date }}</span>
+            <span
+              class="rounded-[3px] px-1.5 py-0.5 font-mono text-[10px] font-medium"
+              :class="e.factor_ratio > 1 ? 'bg-[#ff9f0a]/15 text-[#a05a00]' : 'bg-[#30d158]/15 text-[#248a3d]'"
+            >
+              ×{{ e.factor_ratio.toFixed(4) }}
+            </span>
+          </div>
         </div>
       </Card>
     </div>

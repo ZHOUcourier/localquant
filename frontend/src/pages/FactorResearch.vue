@@ -6,6 +6,7 @@ import { Layers, Trash2 } from 'lucide-vue-next'
 import FactorBuilder from '@/components/factor/FactorBuilder.vue'
 import FactorLibrary from '@/components/factor/FactorLibrary.vue'
 import FactorPool from '@/components/factor/FactorPool.vue'
+import FactorScan from '@/components/factor/FactorScan.vue'
 import SystemResourceMonitor from '@/components/factor/SystemResourceMonitor.vue'
 import ComprehensiveReport from '@/components/factor/ComprehensiveReport.vue'
 import AlphaLensReport from '@/components/factor/AlphaLensReport.vue'
@@ -20,6 +21,7 @@ const pageTabs: TabItem[] = [
 // 因子库子 tab
 const libraryTabs: TabItem[] = [
   { key: 'preset', label: '预置因子' },
+  { key: 'scan', label: '批量扫描' },
   { key: 'pool', label: '因子池' },
   { key: 'custom', label: '自建因子' },
 ]
@@ -251,6 +253,7 @@ const corrOption = computed(() => {
         <Tabs :items="libraryTabs" :active-key="libraryTab" @change="(k) => (libraryTab = k)" />
       </div>
       <FactorLibrary v-if="libraryTab === 'preset'" />
+      <FactorScan v-else-if="libraryTab === 'scan'" />
       <FactorPool v-else-if="libraryTab === 'pool'" />
       <div
         v-else
