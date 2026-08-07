@@ -390,11 +390,19 @@ function typeBadgeClass(t?: string): string {
         <div class="mb-3 flex items-center gap-2 text-xs text-[#646262]">
           <span class="inline-block h-[7px] w-[7px] rounded-full" :style="{ backgroundColor: factor.category_color_hex || '#646262' }" />
           {{ factor.category_name || '未分类' }}
+          <span v-if="factor.category_code === 'INTRADAY'" class="rounded-[3px] bg-[rgba(38,166,154,0.12)] px-1 text-[10px] text-[#26A69A]">日内高频</span>
           <span class="text-[#9a9898]">
             {{ factor.stock_pool ? `· 股票池 ${factor.stock_pool}` : '' }}
             {{ factor.start_date ? ` · ${factor.start_date} 起` : '' }}
             {{ factor.data_date ? ` · 数据截至 ${factor.data_date}` : '' }}
           </span>
+        </div>
+
+        <div
+          v-if="factor.sample_warning"
+          class="mb-3 rounded-[4px] border border-[#ff9f0a] bg-[#ff9f0a]/10 px-3 py-2 text-xs leading-relaxed text-[#9a5b00]"
+        >
+          {{ factor.sample_warning }}
         </div>
 
         <!-- Tab 切换 -->

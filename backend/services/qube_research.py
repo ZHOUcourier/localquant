@@ -450,6 +450,22 @@ async def execute_backtest_run(run_id: str) -> dict:
         stop_loss = float(params.get("stop_loss") or 0.0)
         trailing_stop = float(params.get("trailing_stop") or 0.0)
         normalize = str(params.get("normalize") or "none")
+        # 空头可融券过滤：本地有两融标的池快照时自动应用
+        shortable = None
+        if normalize == "dollar_neutral":
+            try:
+                from backend.services import reference_data
+
+                margin_pool = reference_data.load_universe_pool("margin")
+                if margin_pool:
+                    shortable = pd.DataFrame(
+                        True, index=prices.index, columns=prices.columns
+                    )
+                    for c in prices.columns:
+                        if c not in margin_pool:
+                            shortable[c] = False
+            except Exception:
+                shortable = None
         result = await asyncio.to_thread(
             lambda: backtest_analysis.run_backtest(
                 signals=signals_df,
@@ -460,6 +476,7 @@ async def execute_backtest_run(run_id: str) -> dict:
                 stamp_tax=stamp_tax,
                 normalize=normalize,
                 tradable_mask=reference["tradable_mask"],
+                shortable_mask=shortable,
                 up_limit=reference["up_limit"],
                 down_limit=reference["down_limit"],
                 high=panels.get("high"),

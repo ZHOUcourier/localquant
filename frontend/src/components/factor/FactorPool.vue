@@ -177,7 +177,7 @@ function pfPct(v: number | undefined): string {
           {{ showComparison ? '[−] 收起对比' : '[+] 对比分析' }}
         </button>
         <button
-          v-if="factors.length >= 2"
+          v-if="factors.length >= 1"
           type="button"
           class="flex items-center gap-1 rounded-[4px] bg-[#201d1d] px-3 py-1 text-xs font-medium text-[#fdfcfc] transition-colors hover:bg-[#0f0000] cursor-pointer"
           title="因子池 → 合成 → Top-N 做多 → 回测 → 风格归因（研究主链路一键打通）"
@@ -191,7 +191,7 @@ function pfPct(v: number | undefined): string {
 
     <!-- 组合回测面板 -->
     <div
-      v-if="showPortfolio && factors.length >= 2"
+      v-if="showPortfolio && factors.length >= 1"
       class="mb-3 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3"
     >
       <div class="flex flex-wrap items-center gap-3">

@@ -28,6 +28,12 @@ _CONSTITUENTS_FILE = "index_constituents.parquet"
 _INDUSTRY_FILE = "industry.parquet"
 _CAPITAL_FILE = "capital.parquet"
 _INSTRUMENT_FILE = "instrument.parquet"
+_UNIVERSE_FILE = "universe.parquet"
+
+# 可融资融券标的池候选板块名（QMT 各版本命名可能不同，取并集）
+_MARGIN_SECTORS = ["融资融券标的", "两融标的", "融资融券"]
+# 沪深股通（北向可投资）标的池候选板块名
+_HSGT_SECTORS = ["沪股通", "深股通", "沪深股通"]
 
 
 def _path(name: str):
@@ -172,6 +178,53 @@ def snapshot_instrument(qmt, codes: list[str]) -> int:
     return len(records)
 
 
+# ── 标的池快照（可融券 / 北向）────────────────────────────────
+
+
+def snapshot_universe_pools(qmt) -> dict[str, int]:
+    """记录标的池 as-of 快照（两融标的=可融券池，沪深股通=北向池），返回各池成分数
+
+    用途：回测空头可融券过滤（dollar_neutral 只允许在两融池内做空）、
+    北向池内因子研究。快照为 as-of 形式，早于首次快照的区间用最新池（幸存者偏差，
+    调用方通过 assumptions 明示）。
+    """
+    out: dict[str, int] = {}
+    sectors = qmt.get_sector_list()
+    names = set(sectors)
+    pools: dict[str, list[str]] = {"margin": [], "hsgt": []}
+    for sector in _MARGIN_SECTORS:
+        if sector in names:
+            pools["margin"].extend(qmt.get_sector_stocks(sector))
+    for sector in _HSGT_SECTORS:
+        if sector in names:
+            pools["hsgt"].extend(qmt.get_sector_stocks(sector))
+    today = date.today().isoformat()
+    for pool, codes in pools.items():
+        uniq = sorted(set(codes))
+        if not uniq:
+            continue
+        rows = pd.DataFrame({"date": today, "pool": pool, "code": uniq})
+        _append_dedup(_UNIVERSE_FILE, rows, ["date", "pool", "code"])
+        out[pool] = len(uniq)
+    return out
+
+
+def load_universe_pool(pool: str, as_of: str = "") -> set[str]:
+    """标的池最新（或不晚于 as_of）成分代码集合；无快照返回空集"""
+    df = _read(_UNIVERSE_FILE)
+    if df is None or df.empty:
+        return set()
+    df = df[df["pool"] == pool]
+    if df.empty:
+        return set()
+    if as_of:
+        df = df[df["date"] <= as_of]
+        if df.empty:
+            return set()
+    latest = df.sort_values("date").drop_duplicates("code", keep="last")
+    return set(latest["code"])
+
+
 def _parse_date(value) -> Optional[str]:
     """把 '20240101' / '2024-01-01' / datetime / epoch(ms|s) 解析为 'YYYY-MM-DD'，失败返回 None"""
     if value is None or value == "" or value == 0:
@@ -211,6 +264,7 @@ def reference_status() -> dict:
         ("industry", _INDUSTRY_FILE, "date"),
         ("capital", _CAPITAL_FILE, "date"),
         ("instrument", _INSTRUMENT_FILE, "date"),
+        ("universe_pools", _UNIVERSE_FILE, "date"),
     ]:
         df = _read(name)
         if df is None or df.empty:

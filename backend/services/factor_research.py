@@ -14,6 +14,29 @@ from backend.database import get_db
 
 _FORMULA_MARKERS = ["公式是：", "计算公式：", "公式：", "公式为："]
 
+
+def _sample_window_warning(start_date, data_date) -> str | None:
+    """样本窗口警示：不足 2 年时提示统计量置信度（因子体检同类口径）"""
+    try:
+        if not start_date or not data_date:
+            return None
+        start = pd.to_datetime(start_date)
+        end = pd.to_datetime(data_date)
+        years = (end - start).days / 365.25
+        if years < 1:
+            return (
+                f"样本窗口仅 {years:.2f} 年（{start.date()} ~ {end.date()}）："
+                "IC/ICIR 基于短样本，统计量置信度低，不宜作为长期结论"
+            )
+        if years < 2:
+            return (
+                f"样本窗口 {years:.2f} 年（{start.date()} ~ {end.date()}）："
+                "IC 统计量基于 1-2 年样本，结论需谨慎（2 年以上更可靠）"
+            )
+    except Exception:
+        pass
+    return None
+
 # 函数名 → LaTeX 算子名（小写归一）
 _LATEX_FUNCS = {
     "rank": "rank",
@@ -876,8 +899,15 @@ class FactorResearchService:
         factors: dict[str, pd.DataFrame],
         return_data: pd.DataFrame,
         ic_window: int,
+        as_of=None,
     ) -> dict[str, float]:
-        """按各因子近 ic_window 期 RankIC 均值计算权重：|IC| 归一、符号对齐方向"""
+        """按各因子近 ic_window 期 RankIC 均值计算权重：|IC| 归一、符号对齐方向
+
+        Args:
+            as_of: 仅用 <= as_of 的截面计算权重（点-in-time）；None=用样本尾部。
+                组合回测闭环请传入逐日 as_of（见 _rolling_ic_weights），
+                避免用整段样本的 IC 给区间头部信号加权造成前视。
+        """
         if return_data is None or return_data.empty:
             raise ValueError(
                 "ic_weighted 合成需要 return_data（收益面板） — "
@@ -886,6 +916,8 @@ class FactorResearchService:
         ics: dict[str, float] = {}
         for name, fac in factors.items():
             dates = fac.index
+            if as_of is not None:
+                dates = dates[dates <= as_of]
             # 仅取窗口内最近的截面对，T 日因子 vs T+1 日收益（无前视）
             vals: list[float] = []
             recent = dates[-(ic_window + 1) :] if len(dates) > ic_window else dates
@@ -900,16 +932,66 @@ class FactorResearchService:
                     vals.append(f[common].rank().corr(r[common].rank()))
             ics[name] = float(np.nanmean(vals)) if vals else 0.0
 
+        return self._normalize_ic_weights(ics)
+
+    def _normalize_ic_weights(self, ics: dict[str, float]) -> dict[str, float]:
+        """|IC| 归一为权重、符号对齐方向；全部近 0 时回退等权（合理默认，非静默）"""
         total = sum(abs(v) for v in ics.values())
         if total < 1e-12:
-            # 全部因子 IC 近 0，回退等权（不再是静默退化：这是无信息的合理默认）
-            n = len(factors)
-            return {name: 1.0 / n for name in factors}
-        # 权重 = |IC|/Σ|IC|，符号对齐 IC 方向
+            n = len(ics)
+            return {name: 1.0 / n for name in ics}
         return {
             name: (abs(v) / total) * (1.0 if v >= 0 else -1.0)
             for name, v in ics.items()
         }
+
+    def _rolling_ic_weights(
+        self,
+        factors: dict[str, pd.DataFrame],
+        return_data: pd.DataFrame,
+        ic_window: int,
+        min_window: int = 20,
+    ) -> tuple[dict[str, pd.Series], dict[str, pd.Series]]:
+        """逐日滚动 RankIC 权重（样本外口径）：T 日权重只用 (T-window, T] 的信息
+
+        对每个因子先算逐日 RankIC（T 日因子 vs T+1 日收益），再做滚动均值；
+        T 日截面权重 = |滚动IC| 归一、符号对齐方向；窗口样本不足时权重为 NaN。
+
+        Returns:
+            (weights, ic_series): {name: Series(index=date, 权重)} 与
+            {name: Series(index=date, 滚动 RankIC)}（研究展示用）
+        """
+        if return_data is None or return_data.empty:
+            raise ValueError(
+                "ic_weighted 合成需要 return_data（收益面板） — "
+                "请连线上游因子构建节点的 return_data，或改用等权合成"
+            )
+        ics: dict[str, pd.Series] = {}
+        for name, fac in factors.items():
+            dates = fac.index
+            vals: dict = {}
+            for i in range(len(dates) - 1):
+                f = fac.loc[dates[i]].dropna()
+                nxt = dates[i + 1]
+                if nxt not in return_data.index:
+                    continue
+                r = return_data.loc[nxt].dropna()
+                common = f.index.intersection(r.index)
+                if len(common) > 10:
+                    vals[dates[i]] = f[common].rank().corr(r[common].rank())
+            s = pd.Series(vals).sort_index()
+            ics[name] = s.rolling(ic_window, min_periods=min_window).mean()
+
+        out_w: dict[str, pd.Series] = {}
+        out_ic: dict[str, pd.Series] = {}
+        # 逐日截面：|IC| 矩阵 (date × factor) → 行归一为权重（同日因子间竞争）
+        abs_ic = pd.DataFrame({name: s for name, s in ics.items()}).sort_index()
+        total = abs_ic.abs().sum(axis=1).replace(0, np.nan)
+        w = abs_ic.abs().div(total, axis=0) * np.sign(abs_ic)
+        for name in ics:
+            out_ic[name] = ics[name]
+            out_w[name] = w[name].dropna()
+        return out_w, out_ic
 
     def quantile_analysis_net(
         self,
@@ -1003,6 +1085,10 @@ class FactorResearchService:
             cursor = await db.execute(data_sql, params + [page_size, offset])
             rows = await cursor.fetchall()
             items = [dict(row) for row in rows]
+            for f in items:
+                f["sample_warning"] = _sample_window_warning(
+                    f.get("start_date"), f.get("data_date")
+                )
 
             return {
                 "items": items,
@@ -1044,6 +1130,9 @@ class FactorResearchService:
             )
             factor["factor_type"] = classify_factor(
                 factor.get("category_name"), formula
+            )
+            factor["sample_warning"] = _sample_window_warning(
+                factor.get("start_date"), factor.get("data_date")
             )
             return factor
         finally:
@@ -1308,12 +1397,17 @@ class FactorResearchService:
     ) -> dict:
         """在本地缓存行情面板上对公式求值，返回因子面板与配套研究数据
 
+        自动识别日内高频公式（含 m_ 字段 / ID_ / M_ 算子 / 现成高频函数）并路由
+        到 5m 分钟面板求值（清洗后折叠为日频），否则走日频面板。
+
         Returns:
             {ok, factor_df, return_data, mask, data_date, n_stocks, n_dates, message}
             数据不足或公式报错时 ok=False（message 说明原因，不伪造数据）。
         """
         if not formula:
             return {"ok": False, "message": "无可解析公式，暂不支持本地分析"}
+        if self._is_intraday_formula(formula):
+            return self._eval_intraday_on_local(formula, start_date, end_date)
         try:
             from backend.services import market_data, reference_data
             from backend.services.factor_operators import build_operator_namespace
@@ -1368,6 +1462,79 @@ class FactorResearchService:
         except Exception as e:
             logger.warning(f"公式因子本地求值失败: {e}")
             return {"ok": False, "message": f"本地分析失败: {e}"}
+
+    @staticmethod
+    def _is_intraday_formula(formula: str) -> bool:
+        """分钟语法检测：m_ 字段 / ID_ 聚合 / M_ 序列 / 现成高频函数名"""
+        tokens = [
+            "m_open", "m_high", "m_low", "m_close", "m_volume", "m_amount",
+            "M_OPEN", "M_CLOSE", "M_HIGH", "M_LOW", "M_VOLUME", "M_AMOUNT",
+            "ID_", "M_DELAY", "M_MA", "M_SUM", "M_STD", "M_CUMSUM",
+            "TAIL_RET", "OPEN_RET", "JUMP_DAY", "AMIHUD5", "VWAP_DEV",
+            "VOLUME_CLOCK", "AUC_VOL_RATIO", "LIMIT_UP_TIME",
+            "OVERNIGHT_RET", "INTRADAY_RET", "RV(",
+        ]
+        return any(t in formula for t in tokens)
+
+    def _eval_intraday_on_local(
+        self, formula: str, start_date: str = "", end_date: str = ""
+    ) -> dict:
+        """分钟公式在本地 5m 分钟缓存上求值（清洗 → 求值 → 折叠日频）"""
+        try:
+            from backend.services.intraday_cleaner import load_intraday_panels
+            from backend.services.intraday_operators import (
+                ID_LAST,
+                build_intraday_namespace,
+            )
+
+            codes = market_data.list_cached_codes("5m")
+            if len(codes) < 30:
+                return {
+                    "ok": False,
+                    "message": (
+                        f"本地仅 {len(codes)} 只股票有 5m 分钟缓存，不足以稳定估计 IC"
+                        "（至少 30 只）— 请先在数据管理下载分钟行情"
+                    ),
+                }
+            loaded = load_intraday_panels(
+                codes=codes, period="5m", start_date=start_date, end_date=end_date
+            )
+            panels, meta = loaded["panels"], loaded["meta"]
+            ns = build_intraday_namespace(panels, meta)
+            factor_df = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+            if isinstance(factor_df, pd.Series):
+                factor_df = factor_df.to_frame()
+            if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
+                return {"ok": False, "message": "分钟公式未产出有效因子面板"}
+            idx = pd.to_datetime(factor_df.index)
+            if (idx.normalize() != idx).any():
+                factor_df = ID_LAST(factor_df, 0)
+            factor_df = factor_df.sort_index()
+            close = panels["close"]
+            daily_close = (
+                close.groupby(close.index.normalize()).last().sort_index()
+            )
+            daily_close = daily_close.reindex(factor_df.index, method="ffill").fillna(
+                method="ffill"
+            )
+            return_data = daily_close.pct_change()
+            mask = None
+            return {
+                "ok": True,
+                "factor_df": factor_df,
+                "return_data": return_data,
+                "mask": mask,
+                "panels": panels,
+                "data_date": str(close.index[-1].date()),
+                "n_stocks": len(factor_df.columns),
+                "n_dates": len(factor_df.index),
+                "intraday": True,
+                "period": "5m",
+                "cleaned": loaded["cleaned"],
+            }
+        except Exception as e:
+            logger.warning(f"分钟公式本地求值失败: {e}")
+            return {"ok": False, "message": f"分钟因子本地分析失败: {e}"}
 
     def analyze_formula_on_local(self, formula: str) -> dict:
         """在本地缓存行情面板上对公式因子跑完整分析，返回 {ok, metrics, ...}。
@@ -1503,6 +1670,37 @@ class FactorResearchService:
                                      "message": "所选因子均无可解析公式（仅支持公式型因子）"})
             return
 
+        # 按公式语法分流：日内高频（分钟）公式走 5m 面板，其余走日频面板
+        intraday_targets = [
+            t for t in targets if self._is_intraday_formula(t["formula"])
+        ]
+        daily_targets = [t for t in targets if t not in intraday_targets]
+        intraday_panels = None
+        intraday_ns = None
+        if intraday_targets:
+            try:
+                from backend.services.intraday_cleaner import load_intraday_panels
+                from backend.services.intraday_operators import (
+                    ID_LAST,
+                    build_intraday_namespace,
+                )
+
+                loaded = await asyncio.to_thread(
+                    load_intraday_panels, codes=[], period="5m",
+                    start_date=start_date, end_date=end_date,
+                )
+                if loaded["panels"].get("close") is not None and not loaded["panels"]["close"].empty:
+                    intraday_panels = {
+                        "panels": loaded["panels"],
+                        "meta": loaded["meta"],
+                        "close": loaded["panels"]["close"].groupby(
+                            loaded["panels"]["close"].index.normalize()
+                        ).last().sort_index(),
+                    }
+                    intraday_ns = build_intraday_namespace(loaded["panels"], loaded["meta"])
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"批量扫描：分钟面板加载失败，日内因子将报错: {e}")
+
         # 2. 加载面板（一次）+ 构造求值命名空间
         try:
             panels = await asyncio.to_thread(
@@ -1512,10 +1710,13 @@ class FactorResearchService:
                 end_date=end_date,
             )
         except ValueError as e:
-            yield _sse("scan_done", {"ok_count": 0, "failed": len(targets),
-                                     "failed_names": [t["factor_name"] for t in targets],
-                                     "message": str(e)})
-            return
+            if intraday_panels is not None and intraday_panels.get("close") is not None:
+                panels = {"close": intraday_panels["close"], "volume": None, "amount": None}
+            else:
+                yield _sse("scan_done", {"ok_count": 0, "failed": len(targets),
+                                         "failed_names": [t["factor_name"] for t in targets],
+                                         "message": str(e)})
+                return
 
         from backend.services import reference_data
         from backend.services.factor_operators import build_operator_namespace
@@ -1546,6 +1747,34 @@ class FactorResearchService:
         def _eval_one(item: dict) -> dict:
             t0 = time.perf_counter()
             try:
+                if item in intraday_targets:
+                    if intraday_ns is None:
+                        return {**item, "ok": False, "error": "分钟面板不可用（无 5m 缓存）"}
+                    factor_df = eval(item["formula"], {"__builtins__": {}}, intraday_ns)  # noqa: S307
+                    if isinstance(factor_df, pd.Series):
+                        factor_df = factor_df.to_frame()
+                    if isinstance(factor_df, pd.DataFrame) and not factor_df.empty:
+                        idx = pd.to_datetime(factor_df.index)
+                        if (idx.normalize() != idx).any():
+                            from backend.services.intraday_operators import ID_LAST
+
+                            factor_df = ID_LAST(factor_df, 0)
+                        factor_df = factor_df.sort_index()
+                    if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
+                        return {**item, "ok": False, "error": "分钟公式未产出有效因子面板"}
+                    daily_close = intraday_panels["close"].reindex(
+                        factor_df.index, method="ffill"
+                    ).ffill()
+                    metrics = self._scan_factor_metrics(
+                        factor_df.dropna(how="all"), daily_close.pct_change(), periods, None
+                    )
+                    return {
+                        **item,
+                        "ok": True,
+                        "metrics": metrics,
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                        "intraday": True,
+                    }
                 factor_df = eval(item["formula"], {"__builtins__": {}}, ns)  # noqa: S307
                 if isinstance(factor_df, pd.Series):
                     factor_df = factor_df.to_frame()

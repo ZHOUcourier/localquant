@@ -38,6 +38,8 @@ class RunBacktestRequest(BaseModel):
     take_profit: float = 0.0  # 单仓止盈比例（0=关闭）
     stop_loss: float = 0.0  # 单仓止损比例（0=关闭）
     trailing_stop: float = 0.0  # 移动止损比例（0=关闭）
+    shortable_codes: list[str] = []  # 可融券做空标的（空=全部可做空，不过滤）
+    execute_at: str = "next_close"  # next_close=信号日收盘 / tail=尾盘 / next_open=次日开盘
 
 
 class TearSheetRequest(BaseModel):
@@ -50,6 +52,8 @@ class MonteCarloRequest(BaseModel):
     returns: dict  # {date_str: return_value}
     n_sims: int = 1000
     n_days: int = 252
+    method: str = "block"  # block（块自助，默认）/ gaussian（正态）
+    block_size: int = 20
 
 
 class RunStrategyRequest(BaseModel):
@@ -66,6 +70,7 @@ class RunStrategyRequest(BaseModel):
     take_profit: float = 0.0
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
+    shortable_codes: list[str] = []  # 可融券做空标的（空=不过滤做空）
 
 
 # ── 工具函数 ─────────────────────────────────────────────────
@@ -130,6 +135,13 @@ async def run_strategy(req: RunStrategyRequest):
         reference = await asyncio.to_thread(
             market_data.load_reference_panels, close=prices, volume=panels.get("volume")
         )
+        shortable = None
+        if req.shortable_codes:
+            pool = set(req.shortable_codes)
+            shortable = pd.DataFrame(True, index=prices.index, columns=prices.columns)
+            for c in prices.columns:
+                if c not in pool:
+                    shortable[c] = False
         result = await asyncio.to_thread(
             backtest_analysis.run_backtest,
             signals=signals_df,
@@ -140,6 +152,7 @@ async def run_strategy(req: RunStrategyRequest):
             stamp_tax=req.stamp_tax,
             normalize=req.normalize,
             tradable_mask=reference["tradable_mask"],
+            shortable_mask=shortable,
             up_limit=reference["up_limit"],
             down_limit=reference["down_limit"],
             high=panels.get("high"),
@@ -147,6 +160,8 @@ async def run_strategy(req: RunStrategyRequest):
             take_profit=req.take_profit,
             stop_loss=req.stop_loss,
             trailing_stop=req.trailing_stop,
+            execute_at=req.execute_at,
+            open_prices=panels.get("open") if req.execute_at == "next_open" else None,
         )
         equity_curve = result["equity_curve"]
         strategy_returns = result["strategy_returns"]
@@ -193,6 +208,16 @@ async def run_backtest(req: RunBacktestRequest):
         signals_df = _dict_to_df(req.signals)
         prices_df = _dict_to_df(req.prices)
 
+        shortable = None
+        if req.shortable_codes:
+            pool = set(req.shortable_codes)
+            shortable = pd.DataFrame(
+                True, index=prices_df.index, columns=prices_df.columns
+            )
+            for c in prices_df.columns:
+                if c not in pool:
+                    shortable[c] = False
+
         result = backtest_analysis.run_backtest(
             signals=signals_df,
             prices=prices_df,
@@ -204,6 +229,8 @@ async def run_backtest(req: RunBacktestRequest):
             take_profit=req.take_profit,
             stop_loss=req.stop_loss,
             trailing_stop=req.trailing_stop,
+            shortable_mask=shortable,
+            execute_at=req.execute_at,
         )
 
         # 序列化
@@ -470,6 +497,8 @@ async def monte_carlo(req: MonteCarloRequest):
             returns=returns_series,
             n_sims=req.n_sims,
             n_days=req.n_days,
+            method=req.method,
+            block_size=req.block_size,
         )
 
         return {"status": "ok", **result}
@@ -586,3 +615,54 @@ async def get_run(run_id: str):
         return run_row_to_dict(row, with_detail=True)
     finally:
         await db.close()
+
+
+class WalkForwardRequest(BaseModel):
+    factors: list[dict] = []  # [{factor_name, formula}]
+    stock_pool: list[str] = []
+    start_date: str = ""
+    end_date: str = ""
+    combine_method: str = "equal"  # equal / ic_weighted（训练窗口 RankIC 加权）
+    top_n: int = 20
+    train_days: int = 120
+    test_days: int = 60
+    initial_capital: float = 1_000_000
+    commission_rate: float = 0.001
+    slippage: float = 0.001
+    stamp_tax: float = 0.0005
+    take_profit: float = 0.0
+    stop_loss: float = 0.0
+    trailing_stop: float = 0.0
+
+
+@router.post("/walk-forward")
+async def walk_forward(req: WalkForwardRequest):
+    """组合 walk-forward 回测：滚动锚定训练/测试划分，拼接样本外净值
+
+    防过拟合最后一环：与因子样本外验证（只验 IC）互补，这里是完整组合闭环。
+    返回每折划分、样本外净值/绩效，以及全样本参考（直观展示过拟合差距）。
+    """
+    try:
+        result = await asyncio.to_thread(
+            backtest_analysis.walk_forward_portfolio,
+            factors=req.factors,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            combine_method=req.combine_method,
+            top_n=req.top_n,
+            train_days=req.train_days,
+            test_days=req.test_days,
+            initial_capital=req.initial_capital,
+            commission_rate=req.commission_rate,
+            slippage=req.slippage,
+            stamp_tax=req.stamp_tax,
+            take_profit=req.take_profit,
+            stop_loss=req.stop_loss,
+            trailing_stop=req.trailing_stop,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"walk-forward 回测失败: {e}")
+        raise HTTPException(status_code=400, detail=f"walk-forward 回测失败: {e}")

@@ -13,6 +13,7 @@ import CorrelationMatrix from '@/components/explore/CorrelationMatrix.vue'
 import RiskProfile from '@/components/explore/RiskProfile.vue'
 import PairSpread from '@/components/explore/PairSpread.vue'
 import RollingCorrelation from '@/components/explore/RollingCorrelation.vue'
+import EventStudy from '@/components/explore/EventStudy.vue'
 
 const tabItems = [
   { key: 'overview', label: '数据概览' },
@@ -21,6 +22,7 @@ const tabItems = [
   { key: 'cross', label: '横截面分析' },
   { key: 'anomaly', label: '异常检测' },
   { key: 'risk', label: '风险画像' },
+  { key: 'event', label: '事件研究' },
   { key: 'regression', label: '回归分析' },
   { key: 'rolling', label: '滚动相关/Beta' },
   { key: 'pair', label: '配对价差' },
@@ -44,6 +46,7 @@ const activeTab = ref('overview')
       <CrossSection v-if="activeTab === 'cross'" />
       <AnomalyDetector v-if="activeTab === 'anomaly'" />
       <RiskProfile v-if="activeTab === 'risk'" />
+      <EventStudy v-if="activeTab === 'event'" />
       <RegressionAnalysis v-if="activeTab === 'regression'" />
       <RollingCorrelation v-if="activeTab === 'rolling'" />
       <PairSpread v-if="activeTab === 'pair'" />

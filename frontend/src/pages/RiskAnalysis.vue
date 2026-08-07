@@ -206,6 +206,44 @@ function runStress() {
   })
 }
 
+/** 组合事前风险预测（因子协方差 + 市场模型残差）+ 历史情景回放 */
+const forecastLoading = ref(false)
+const forecast = ref<Record<string, unknown> | null>(null)
+async function runForecast() {
+  forecastLoading.value = true
+  errorMsg.value = ''
+  try {
+    let weights = state.value.weights
+    if (!weights) {
+      const { scores } = buildInputs(parseClose())
+      weights = (await postJson<{ weights: Record<string, number> }>('/api/risk/optimize', { scores })).weights
+      state.value.weights = weights
+    }
+    const q = new URLSearchParams()
+    if (cacheCodes.value.trim()) q.set('codes', cacheCodes.value.trim())
+    if (cacheStart.value) q.set('start_date', cacheStart.value)
+    if (cacheEnd.value) q.set('end_date', cacheEnd.value)
+    const res = await fetch(`/api/risk/forecast-panel?${q.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ weights }),
+    })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(data?.detail ?? `接口错误 (HTTP ${res.status})`)
+    forecast.value = data
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    forecastLoading.value = false
+  }
+}
+
+const historicalScenarios = computed(() => {
+  const v = forecast.value?.historical_scenarios
+  if (!v || typeof v !== 'object') return []
+  return Object.entries(v as Record<string, { cum_return_pct: number | null; max_drawdown_pct: number | null; worst_day_pct: number | null; note?: string }>).map(([name, s]) => ({ name, ...s }))
+})
+
 // ── 图表选项（纯展示） ────────────────────────────────
 
 const exposureChartOption = computed(() => {
@@ -297,6 +335,9 @@ const weightChartOption = computed(() => {
           <Button variant="primary" size="sm" :disabled="!!busy" @click="runMetrics">
             <Scale :size="14" class="mr-1" /> 绩效指标
           </Button>
+          <Button variant="primary" size="sm" :disabled="!!busy" @click="runForecast">
+            <Activity :size="14" class="mr-1" /> 事前风险预测
+          </Button>
           <Button variant="danger" size="sm" :disabled="!!busy" @click="runStress">
             <ShieldAlert :size="14" class="mr-1" /> 压力测试
           </Button>
@@ -341,6 +382,64 @@ const weightChartOption = computed(() => {
       <Card title="压力测试" class="lg:col-span-1">
         <div v-if="!state.stress" class="py-10 text-center text-xs text-[#646262]">点击「压力测试」查看场景冲击</div>
         <pre v-else class="text-[11px] font-mono text-[#201d1d] whitespace-pre-wrap">{{ JSON.stringify(state.stress, null, 2) }}</pre>
+      </Card>
+
+      <!-- 事前风险预测 + 历史情景回放 -->
+      <Card title="组合事前风险预测（因子协方差法）+ 历史情景回放" class="lg:col-span-3">
+        <div v-if="!forecast" class="py-8 text-center text-xs text-[#646262]">
+          先生成组合权重，再点「事前风险预测」：预测组合年化波动、各风格/行业因子风险贡献占比、
+          以及 2015 股灾 / 2018 熊市 / 2024 小微盘流动性危机等真实窗口回放（需缓存覆盖对应历史区间）
+        </div>
+        <template v-else>
+          <div class="mb-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2">
+              <div class="text-[11px] text-[#646262]">预测年化波动</div>
+              <div class="text-base font-bold text-[#201d1d]">{{ ((forecast.forecast_vol_annual as number) * 100).toFixed(1) }}%</div>
+            </div>
+            <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2">
+              <div class="text-[11px] text-[#646262]">个券特异风险占比</div>
+              <div class="text-base font-bold text-[#201d1d]">{{ ((forecast.idiosyncratic_pct as number ?? 0) * 100).toFixed(1) }}%</div>
+            </div>
+            <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2">
+              <div class="text-[11px] text-[#646262]">覆盖股票数</div>
+              <div class="text-base font-bold text-[#201d1d]">{{ forecast.n_stocks }}</div>
+            </div>
+            <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2">
+              <div class="text-[11px] text-[#646262]">样本区间</div>
+              <div class="text-sm font-mono text-[#201d1d]">{{ forecast.data_start }} ~ {{ forecast.data_end }}</div>
+            </div>
+          </div>
+          <div v-if="forecast.note" class="mb-2 text-[11px] text-[#9a9898]">{{ forecast.note }}</div>
+          <div v-if="forecast.factor_risk_contrib && Object.keys(forecast.factor_risk_contrib as object).length" class="mb-4">
+            <div class="mb-1.5 text-[11px] font-medium text-[#646262]">因子风险贡献占比（事前）</div>
+            <div class="flex h-3 w-full overflow-hidden rounded-[3px]">
+              <div
+                v-for="(v, k) in (forecast.factor_risk_contrib as Record<string, number>)"
+                :key="String(k)"
+                :style="{ width: Math.max((v * 100), 0.5) + '%', backgroundColor: ['#007aff', '#ff9f0a', '#30d158', '#bf5af2', '#ff3b30', '#64d2ff'][String(k).length % 6] }"
+              />
+            </div>
+            <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+              <span v-for="(v, k) in (forecast.factor_risk_contrib as Record<string, number>)" :key="String(k)" class="text-[11px] font-mono text-[#646262]">
+                {{ k }}: {{ (v * 100).toFixed(1) }}%
+              </span>
+            </div>
+          </div>
+          <div>
+            <div class="mb-1.5 text-[11px] font-medium text-[#646262]">历史情景回放（真实行情窗口 × 当前权重）</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              <div v-for="s in historicalScenarios" :key="s.name" class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-3 py-2">
+                <div class="text-xs font-medium text-[#201d1d]">{{ s.name }}</div>
+                <div v-if="s.cum_return_pct == null" class="mt-1 text-[11px] text-[#9a9898]">区间内无行情缓存（{{ s.note ?? '' }}）</div>
+                <div v-else class="mt-1 grid grid-cols-3 gap-1 text-center">
+                  <div><div class="text-[10px] text-[#9a9898]">累计</div><div class="text-xs font-mono font-bold" :class="s.cum_return_pct >= 0 ? 'text-[#ff3b30]' : 'text-[#248a3d]'">{{ s.cum_return_pct }}%</div></div>
+                  <div><div class="text-[10px] text-[#9a9898]">最大回撤</div><div class="text-xs font-mono font-bold text-[#248a3d]">{{ s.max_drawdown_pct }}%</div></div>
+                  <div><div class="text-[10px] text-[#9a9898]">最差单日</div><div class="text-xs font-mono font-bold text-[#248a3d]">{{ s.worst_day_pct }}%</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
       </Card>
     </div>
 

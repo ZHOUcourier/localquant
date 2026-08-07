@@ -20,6 +20,7 @@ class BacktestAnalysisService:
         stamp_tax: float = 0.0005,
         normalize: str = "none",
         tradable_mask: pd.DataFrame | None = None,
+        shortable_mask: pd.DataFrame | None = None,
         up_limit: pd.DataFrame | None = None,
         down_limit: pd.DataFrame | None = None,
         high: pd.DataFrame | None = None,
@@ -27,9 +28,11 @@ class BacktestAnalysisService:
         take_profit: float = 0.0,
         stop_loss: float = 0.0,
         trailing_stop: float = 0.0,
+        execute_at: str = "next_close",
+        open_prices: pd.DataFrame | None = None,
     ) -> dict:
         """
-        向量化回测（权重空间，T 日信号 → T+1 持仓）。
+        向量化回测（权重空间，T 日信号 → 执行）。
 
         Parameters
         ----------
@@ -44,6 +47,9 @@ class BacktestAnalysisService:
             dollar_neutral=多空各归一至 ±0.5（总暴露 1）。
         tradable_mask : DataFrame | None
             可交易掩码（False=停牌）：停牌日冻结持仓、不计换手成本。
+        shortable_mask : DataFrame | None
+            可融券掩码（False=不可融券做空）：做空信号仅在可融券标的生效，
+            A 股融券标的是两融池子，不过滤会让多空策略业绩系统性虚高。
         up_limit / down_limit / high / low : DataFrame | None
             涨跌停近似价与高低价：一字涨停禁买入加仓、一字跌停禁卖出减仓。
             未成交的调仓意图不推演挂单顺延（持仓保持不动，该笔调仓丢弃），并在
@@ -52,6 +58,14 @@ class BacktestAnalysisService:
             单仓止盈 / 止损比例（0.08 = +8% 止盈 / -8% 止损）。基于前收盘判定，T 日执行。
         trailing_stop : float（默认 0=关闭）
             移动止损比例：单仓从建仓后最高点回撤达该比例即止（仅作用于盈利仓 r_prev>=1）。
+        execute_at : str
+            next_close=信号日收盘执行（默认，日频 T 信号→当日收盘建仓，等价 T+1 持有）；
+            tail=尾盘执行（信号日收盘建仓，涨跌停判定取信号日；与 next_close 在收盘价
+            口径下收益数学等价，差异在可成交性判定与风控触发日）；
+            next_open=次日开盘执行（需 open_prices，成交日按开→收计收益，更贴近打板/
+            竞价类策略）。
+        open_prices : DataFrame | None
+            开盘价面板（execute_at=next_open 时使用）。
 
         Returns
         -------
@@ -74,8 +88,26 @@ class BacktestAnalysisService:
         if normalize == "none":
             assumptions.append("信号值直接作为权重（未归一，可能含隐性杠杆）")
 
-        # 信号延迟一天执行（T 日信号 → T+1 持仓）
-        targets = weights.shift(1).fillna(0.0)
+        # 信号延迟执行：next_close/tail=当日收盘，next_open=次日开盘
+        if execute_at == "tail":
+            targets = weights.copy()
+            assumptions.append(
+                "尾盘执行（tail）：信号日收盘建仓，涨跌停/可成交性判定取信号日；"
+                "收盘价口径下与 next_close 收益数学等价，差异在可成交判定与风控触发日"
+            )
+        else:
+            targets = weights.shift(1).fillna(0.0)
+            if execute_at == "next_open":
+                if open_prices is None:
+                    assumptions.append(
+                        "next_open 执行未提供开盘价面板，按收盘价近似（等价 next_close）"
+                    )
+                else:
+                    open_prices = open_prices.reindex(
+                        index=common_idx, columns=common_cols
+                    )
+            else:
+                assumptions.append("T 日信号当日收盘执行（next_close，默认）")
 
         # 可交易 / 一字板掩码（对齐到回测面板；缺失处理方式记入 assumptions）
         tradable_arr = self._align_mask(
@@ -83,6 +115,15 @@ class BacktestAnalysisService:
         )
         if tradable_mask is None:
             assumptions.append("无停牌数据，未处理停牌（停牌日仍可交易）")
+
+        shortable_arr = self._align_mask(
+            shortable_mask, common_idx, common_cols, default=True
+        )
+        if shortable_mask is None and normalize == "dollar_neutral":
+            assumptions.append(
+                "无融券池数据，做空信号未过滤（A 股仅两融标的可融券，"
+                "不过滤空头业绩可能虚高）"
+            )
 
         up_board, down_board = self._limit_boards(
             common_idx, common_cols, up_limit, down_limit, high, low, prices
@@ -112,6 +153,12 @@ class BacktestAnalysisService:
 
         for t in range(n_days):
             desired = np.nan_to_num(tgt_arr[t]).copy()
+
+            # 可融券过滤：非两融池标的的做空信号清零（多空策略真实约束）
+            if shortable_arr is not None:
+                not_shortable = ~shortable_arr[t]
+                if not_shortable.any():
+                    desired[not_shortable & (desired < 0)] = 0.0
 
             # 风控锁：退出后保持空仓，直到策略自身信号归零才允许日后重新开仓
             if manage:
@@ -213,8 +260,25 @@ class BacktestAnalysisService:
             costs, commission_costs, slippage_costs, stamp_costs, turnover_series
         )
 
-        # 策略日收益（停牌/缺价日收益按 0 处理，与 pct_change fillna 一致）
-        strategy_returns = (positions * price_returns).sum(axis=1) - costs
+        # 策略日收益：positions 为当日收盘持仓 → 赚次日起的收益（pos 前移一期）
+        if execute_at == "tail":
+            # 尾盘执行：当日收盘建仓，当日无收益（收益从次日起）
+            strategy_returns = (
+                positions.shift(1).fillna(0.0) * price_returns
+            ).sum(axis=1) - costs
+        elif execute_at == "next_open" and open_prices is not None:
+            # 次日开盘执行：T 信号 → T+1 开盘成交，成交日按「开→收」计收益，非成交日按「收→收」
+            op = open_prices.reindex(common_idx).fillna(0.0)
+            intraday = (prices / op.replace(0, np.nan) - 1.0).fillna(0.0)
+            traded = positions.diff().abs() > 1e-12
+            eff = pd.DataFrame(
+                np.where(traded, intraday, price_returns),
+                index=common_idx,
+                columns=common_cols,
+            )
+            strategy_returns = (positions * eff).sum(axis=1) - costs
+        else:
+            strategy_returns = (positions * price_returns).sum(axis=1) - costs
 
         # 净值曲线
         equity_curve = (1 + strategy_returns).cumprod() * initial_capital
@@ -456,6 +520,7 @@ class BacktestAnalysisService:
         take_profit: float = 0.0,
         stop_loss: float = 0.0,
         trailing_stop: float = 0.0,
+        execute_at: str = "next_close",
     ) -> dict:
         """因子池 → 组合回测闭环（研究主链路一键打通）
 
@@ -464,8 +529,9 @@ class BacktestAnalysisService:
 
         Args:
             factors: [{factor_id, factor_name, formula}]
-            combine_method: equal=等权合成 / ic_weighted=按全区间尾部滚动 RankIC
-                加权（研究参考口径：权重来自整段样本，含未来信息，报告中明示）
+            combine_method: equal=等权合成 / ic_weighted=按滚动 RankIC 逐日加权
+                （样本外口径：T 日权重只用 T 之前 120 日的信息，无前视；
+                早期窗口不足的截面不建仓）
             top_n: 每期截面做多只数（0=全部正因子值做多）
 
         Returns:
@@ -511,14 +577,33 @@ class BacktestAnalysisService:
             )
 
         return_data = close.pct_change()
+        combined: pd.DataFrame
         weights: dict[str, float] | None = None
+        weight_series: dict[str, pd.Series] | None = None
         if combine_method == "ic_weighted" and len(factor_frames) >= 2:
-            weights = factor_research._ic_weights(factor_frames, return_data, ic_window=120)
-            combined = factor_research.multi_factor_combine(
-                factor_frames, weights=weights
+            # 样本外口径：T 日权重只用 (T-window, T] 的 RankIC（滚动、无前视）。
+            # 早期窗口不足的截面权重为 NaN → 信号 NaN，回测引擎按 0 权重处理（不建仓）。
+            weight_series, _ = factor_research._rolling_ic_weights(
+                factor_frames, return_data, ic_window=120, min_window=20
             )
+            frames = {n: f.reindex(close.index) for n, f in factor_frames.items()}
+            wdf = pd.DataFrame(weight_series).sort_index()
+            # 逐日截面 z-score 后按当日权重合成
+            zframes = {}
+            for n, f in frames.items():
+                z = (f - f.mean(axis=1)) / f.std(axis=1).replace(0, np.nan)
+                zframes[n] = z
+            parts = []
+            for n in zframes:
+                w_n = wdf[n] if n in wdf.columns else pd.Series(0.0, index=close.index)
+                parts.append(zframes[n].mul(w_n.reindex(zframes[n].index), axis=0))
+            combined = pd.concat(parts).groupby(level=0).sum().reindex(close.index)
+            weights = {
+                n: float(wdf[n].abs().mean()) for n in factor_frames if n in wdf
+            }
         else:
             combined = factor_research.multi_factor_combine(factor_frames, method="equal")
+            weights = {k: 1.0 / len(factor_frames) for k in factor_frames}
 
         # 每日截面 Top-N 做多信号（T 日信号 → 回测引擎 T+1 执行）
         n = int(top_n)
@@ -533,6 +618,21 @@ class BacktestAnalysisService:
         signals = signals.fillna(0.0)
 
         reference = market_data.load_reference_panels(close, panels.get("volume"))
+        # 空头可融券过滤：QMT 两融标的池快照存在时自动应用（A 股仅两融池可做空）
+        shortable = None
+        try:
+            from backend.services import reference_data
+
+            margin_pool = reference_data.load_universe_pool("margin")
+            if margin_pool:
+                shortable = pd.DataFrame(
+                    True, index=close.index, columns=close.columns
+                )
+                for c in close.columns:
+                    if c not in margin_pool:
+                        shortable[c] = False
+        except Exception:
+            shortable = None
         result = self.run_backtest(
             signals=signals,
             prices=close,
@@ -542,6 +642,7 @@ class BacktestAnalysisService:
             stamp_tax=stamp_tax,
             normalize="long_only",
             tradable_mask=reference["tradable_mask"],
+            shortable_mask=shortable,
             up_limit=reference["up_limit"],
             down_limit=reference["down_limit"],
             high=panels.get("high"),
@@ -549,6 +650,8 @@ class BacktestAnalysisService:
             take_profit=take_profit,
             stop_loss=stop_loss,
             trailing_stop=trailing_stop,
+            execute_at=execute_at,
+            open_prices=panels.get("open") if execute_at == "next_open" else None,
         )
         strategy_returns = result["strategy_returns"]
         tear = self.performance_tear_sheet(returns=strategy_returns)
@@ -584,6 +687,11 @@ class BacktestAnalysisService:
             "n_factors": len(factor_frames),
             "factor_names": list(factor_frames.keys()),
             "factor_weights": weights or {k: 1.0 / len(factor_frames) for k in factor_frames},
+            "weight_method": (
+                "样本外滚动加权（T 日权重仅用 T 之前 120 日 RankIC）"
+                if combine_method == "ic_weighted"
+                else "等权"
+            ),
             "failed": failed,
             "equity_curve": {
                 str(k.date() if hasattr(k, "date") else k): float(v)
@@ -605,8 +713,210 @@ class BacktestAnalysisService:
             "data_date": str(close.index[-1])[:10],
         }
 
-    # ── 回测参数敏感性（网格扫描）────────────────────────────
+    # ── 组合 walk-forward 回测（滚动拼接净值，防过拟合最后一环）────────────
 
+
+    def walk_forward_portfolio(
+        self,
+        factors: list[dict],
+        start_date: str = "",
+        end_date: str = "",
+        combine_method: str = "equal",
+        top_n: int = 20,
+        train_days: int = 120,
+        test_days: int = 60,
+        initial_capital: float = 1_000_000,
+        commission_rate: float = 0.001,
+        slippage: float = 0.001,
+        stamp_tax: float = 0.0005,
+        take_profit: float = 0.0,
+        stop_loss: float = 0.0,
+        trailing_stop: float = 0.0,
+        execute_at: str = "next_close",
+    ) -> dict:
+        """组合 walk-forward 回测：训练窗口定权重 → 测试窗口出信号 → 滚动拼接净值
+
+        与 factor_research.walk_forward_validation（只验 IC）互补：这里是完整的
+        「滚动调参 → 组合回测 → 拼接净值」闭环，直接回答「参数在样本外是否稳健」。
+
+        - 测试窗口不重叠、逐折后移（滚动锚定：训练集始终从样本起点开始）；
+        - ic_weighted 时每折权重只用该折训练集（<= train_end）的 RankIC，无前视；
+        - 训练窗口内不建仓（信号置 0），净值只覆盖样本外测试段；
+        - 另附「全样本参考」净值（同一信号不遮罩训练段）作对比，直观展示过拟合差距。
+
+        Returns:
+            {ok, folds, equity_curve, strategy_returns, tear_sheet,
+             drawdown, assumptions, in_sample_reference, failed}
+        """
+        from backend.services import market_data, reference_data
+        from backend.services.factor_operators import build_operator_namespace
+        from backend.services.factor_research import factor_research
+
+        codes = market_data.list_cached_codes("1d")
+        if len(codes) < 30:
+            raise ValueError(
+                f"本地仅 {len(codes)} 只股票缓存，不足以构建组合（至少 30 只）— "
+                "请先在「数据中心」下载行情数据"
+            )
+        panels = market_data.load_price_panels(
+            codes=codes, start_date=start_date, end_date=end_date
+        )
+        close = panels["close"]
+        if close is None or len(close.index) < train_days + test_days + 30:
+            raise ValueError("行情区间不足（需 ≥ 训练窗口 + 测试窗口 + 30 个交易日）")
+
+        ns = build_operator_namespace(
+            panels, industry_map=reference_data.load_industry_map()
+        )
+        factor_frames: dict[str, pd.DataFrame] = {}
+        failed: list[dict] = []
+        for f in factors:
+            try:
+                fd = eval(f["formula"], {"__builtins__": {}}, ns)  # noqa: S307
+                if isinstance(fd, pd.Series):
+                    fd = fd.to_frame()
+                if isinstance(fd, pd.DataFrame) and not fd.empty:
+                    factor_frames[f["factor_name"]] = fd.reindex(index=close.index)
+                else:
+                    failed.append({"factor_name": f["factor_name"], "error": "公式未产出有效面板"})
+            except Exception as e:  # noqa: BLE001
+                failed.append({"factor_name": f["factor_name"], "error": str(e)[:200]})
+        if not factor_frames:
+            raise ValueError(
+                "所选因子均无法求值（" + "；".join(f"{x['factor_name']}: {x['error']}" for x in failed[:3]) + "）"
+            )
+
+        return_data = close.pct_change()
+        dates = close.index
+        n = len(dates)
+
+        def _top_n_signal(combined: pd.DataFrame) -> pd.DataFrame:
+            tn = int(top_n)
+            if tn <= 0:
+                return (combined > 0).astype(float)
+            ranked = combined.rank(axis=1, ascending=False)
+            sig = pd.DataFrame(0.0, index=combined.index, columns=combined.columns)
+            sig[ranked <= tn] = 1.0
+            return sig.fillna(0.0)
+
+        folds: list[dict] = []
+        t = 0
+        signals_oos = pd.DataFrame(
+            0.0, index=dates, columns=close.columns
+        )
+        while t + train_days + test_days <= n:
+            train_end = dates[t + train_days - 1]
+            test_start = dates[t + train_days]
+            test_end = dates[min(t + train_days + test_days - 1, n - 1)]
+            if combine_method == "ic_weighted" and len(factor_frames) >= 2:
+                w = factor_research._ic_weights(
+                    factor_frames, return_data, ic_window=train_days, as_of=train_end
+                )
+                combined = factor_research.multi_factor_combine(factor_frames, weights=w)
+            else:
+                combined = factor_research.multi_factor_combine(
+                    factor_frames, method="equal"
+                )
+            sig_fold = _top_n_signal(combined)
+            mask = (dates >= test_start) & (dates <= test_end)
+            signals_oos.loc[mask] = sig_fold.loc[mask]
+            folds.append(
+                {
+                    "fold": len(folds) + 1,
+                    "train_start": str(dates[0].date()),
+                    "train_end": str(train_end.date()),
+                    "test_start": str(test_start.date()),
+                    "test_end": str(test_end.date()),
+                }
+            )
+            t += test_days
+
+        if not folds:
+            raise ValueError("窗口划分失败：训练+测试窗口超出数据区间")
+
+        # 全样本参考信号：同一合成逻辑覆盖全部区间（含训练段，可交易性不计）——
+        # 与样本外净值对照，直观展示「参数在训练段内拟合出的虚高」差距
+        if combine_method == "ic_weighted" and len(factor_frames) >= 2:
+            combined_full = factor_research.multi_factor_combine(
+                factor_frames,
+                weights=factor_research._ic_weights(
+                    factor_frames, return_data, ic_window=train_days
+                ),
+            )
+        else:
+            combined_full = factor_research.multi_factor_combine(
+                factor_frames, method="equal"
+            )
+        signals_full = _top_n_signal(combined_full)
+
+        reference = market_data.load_reference_panels(close, panels.get("volume"))
+        common_kwargs = dict(
+            prices=close,
+            initial_capital=initial_capital,
+            commission_rate=commission_rate,
+            slippage=slippage,
+            stamp_tax=stamp_tax,
+            normalize="long_only",
+            tradable_mask=reference["tradable_mask"],
+            up_limit=reference["up_limit"],
+            down_limit=reference["down_limit"],
+            high=panels.get("high"),
+            low=panels.get("low"),
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            trailing_stop=trailing_stop,
+            execute_at=execute_at,
+            open_prices=panels.get("open") if execute_at == "next_open" else None,
+        )
+        res = self.run_backtest(signals=signals_oos, **common_kwargs)
+        res_full = self.run_backtest(signals=signals_full, **common_kwargs)
+
+        returns = res["strategy_returns"]
+        tear = self.performance_tear_sheet(returns=returns)
+        dd = self.drawdown_analysis(returns)
+        tear_full = self.performance_tear_sheet(returns=res_full["strategy_returns"])
+
+        return {
+            "ok": True,
+            "n_folds": len(folds),
+            "folds": folds,
+            "combine_method": combine_method,
+            "top_n": int(top_n),
+            "n_factors": len(factor_frames),
+            "factor_names": list(factor_frames.keys()),
+            "failed": failed,
+            "equity_curve": {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in res["equity_curve"].items()
+            },
+            "strategy_returns": {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in returns.items()
+            },
+            "drawdown_series": {
+                str(k.date() if hasattr(k, "date") else k): float(v)
+                for k, v in dd["drawdown_series"].items()
+            },
+            "tear_sheet": {**tear, "max_drawdown": dd["max_drawdown"]},
+            "in_sample_reference": {
+                "total_return": tear_full.get("total_return"),
+                "annual_return": tear_full.get("annual_return"),
+                "sharpe_ratio": tear_full.get("sharpe_ratio"),
+                "max_drawdown": tear_full.get("max_drawdown"),
+                "trading_days": tear_full.get("trading_days"),
+                "note": "全样本参考：同一合成逻辑覆盖全部区间（含训练段建仓，非可交易结果），"
+                "用于对比展示训练段内的拟合虚高",
+            },
+            "assumptions": res["assumptions"]
+            + [
+                "样本外净值仅覆盖各折测试段；训练窗口内不建仓；"
+                "ic_weighted 时权重只含训练窗口 RankIC，无前视",
+            ],
+            "n_stocks": int(close.shape[1]),
+            "data_date": str(close.index[-1])[:10],
+        }
+
+    # ── 回测参数敏感性（网格扫描）────────────────────────────
     def sensitivity_scan(
         self,
         signals: pd.DataFrame,
@@ -845,14 +1155,38 @@ class BacktestAnalysisService:
         returns: pd.Series,
         n_sims: int = 1000,
         n_days: int = 252,
+        method: str = "block",
+        block_size: int = 20,
     ) -> dict:
-        """基于历史收益分布的蒙特卡洛模拟"""
-        returns = returns.dropna()
-        mu = float(returns.mean())
-        sigma = float(returns.std())
+        """蒙特卡洛模拟（可选块自助 / 正态抽样）
 
+        method:
+          - block: 块自助（默认）——从历史收益序列按固定长度块有放回抽样，
+            保留自相关与波动聚集（金融序列的正态假设通常不成立，块自助更贴近尾部）；
+          - gaussian: 正态 iid 抽样（快速参考）。
+        """
+        returns = returns.dropna()
+        if returns.empty:
+            return {"error": "no data"}
         rng = np.random.default_rng(42)
-        sim_returns = rng.normal(mu, sigma, size=(n_sims, n_days))
+        vals = returns.to_numpy(dtype=float)
+        n_hist = len(vals)
+
+        if method == "block":
+            # 固定块自助：随机起点 + 块长截断，拼接至 n_days
+            n_blocks = int(np.ceil(n_days / block_size))
+            sim_returns = np.empty((n_sims, n_days))
+            for s in range(n_sims):
+                blocks = []
+                for _ in range(n_blocks):
+                    start = rng.integers(0, n_hist - block_size + 1)
+                    blocks.append(vals[start : start + block_size])
+                seq = np.concatenate(blocks)[:n_days]
+                sim_returns[s] = seq
+        else:
+            mu = float(returns.mean())
+            sigma = float(returns.std())
+            sim_returns = rng.normal(mu, sigma, size=(n_sims, n_days))
 
         # 累计净值
         cum = np.cumprod(1 + sim_returns, axis=1)
@@ -883,6 +1217,8 @@ class BacktestAnalysisService:
         return {
             "n_sims": n_sims,
             "n_days": n_days,
+            "method": method,
+            "block_size": block_size if method == "block" else None,
             "terminal_percentiles": percentiles,
             "max_drawdown_stats": max_dd_stats,
             "sample_paths": sample_paths,

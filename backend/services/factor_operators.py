@@ -987,8 +987,7 @@ def build_operator_namespace(
         "DIFF": DIFF,
         "MA": MA,
         "SUM": SUM,
-        "SUMAC": SUMAC,
-        "PRODUCT": PRODUCT,
+        "SUMAC": SUMAC,        "PRODUCT": PRODUCT,
         "STD": STD,
         "STDDEV": STDDEV,
         "VAR": VAR,
@@ -1116,3 +1115,20 @@ def build_operator_namespace(
         ns[name.lower()] = fn  # 小写别名（Alpha191 公式多为小写）
 
     return ns
+
+
+# 日频算子注册表（模块级）：供分钟公式命名空间合并使用（RANK/MA/DELAY 等）
+_DAILY_OPERATORS: dict = {}
+
+
+def get_daily_operators() -> dict:
+    """返回日频算子注册表 {大写名: fn}；首次调用时从 build_operator_namespace 构建"""
+    global _DAILY_OPERATORS
+    if not _DAILY_OPERATORS:
+        ns = build_operator_namespace({})
+        _DAILY_OPERATORS = {
+            k: v
+            for k, v in ns.items()
+            if callable(v) and not k.startswith("_") and k == k.upper()
+        }
+    return _DAILY_OPERATORS

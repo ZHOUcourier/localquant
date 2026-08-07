@@ -244,6 +244,105 @@ def strategy_attribution(
     }
 
 
+# ── 行业暴露与行业因子收益（Barra 风格，均值偏离编码）────────────────────────
+
+
+def build_industry_exposures(
+    trade_dates: pd.DatetimeIndex,
+    industry_map: dict[str, str] | None,
+    top_k: int = 25,
+) -> pd.DataFrame:
+    """行业暴露面板 {index=date, columns=code}（均值偏离编码，逐股单值）
+
+    每只股票的值为「其所属行业列在均值偏离编码下的取值」= 1 - 行业覆盖率
+    （列内去均值：1 - freq_j/N）。截面回归时配合全部行业哑变量使用；
+    组合级行业暴露 = Σ 权重 × 该值（近似，不含非本行业列的 -freq_j/N 项，
+    报告时明示）。行业数超过 top_k 时小行业归入「其他」。
+
+    Returns:
+        DataFrame(index=trade_dates, columns=code)；无行业映射返回空 DataFrame。
+    """
+    if not industry_map:
+        return pd.DataFrame()
+    counts = pd.Series(industry_map).value_counts()
+    if len(counts) > top_k:
+        top = set(counts.head(top_k - 1).index)
+        ind_of = {c: (ind if ind in top else "其他") for c, ind in industry_map.items()}
+    else:
+        ind_of = dict(industry_map)
+    codes = sorted(ind_of.keys())
+    n = len(codes)
+    freq = pd.Series(ind_of).value_counts()
+    values = {c: 1.0 - freq[ind_of[c]] / n for c in codes}
+    return pd.DataFrame(
+        {c: pd.Series(v, index=trade_dates) for c, v in values.items()},
+        index=trade_dates,
+        columns=codes,
+    )
+
+
+def industry_factor_returns(
+    returns: pd.DataFrame,
+    industry_map: dict[str, str] | None,
+    min_stocks: int = 10,
+) -> dict[str, dict]:
+    """行业因子收益：每日截面回归 收益 = α + Σ 行业哑变量×行业收益 + 残差
+
+    行业哑变量按行去均值（均值偏离编码）：行业因子收益解释为「该行业相对
+    全市场平均的日超额收益」。
+
+    Returns:
+        {"factor_returns": {IND_行业: {date: fac_ret}}, "summary": [...]}
+    """
+    if not industry_map:
+        return {"factor_returns": {}, "summary": []}
+    inds = sorted({industry_map[c] for c in industry_map})
+    flows: dict[str, dict] = {f"IND_{ind}": {} for ind in inds}
+
+    for date, r in returns.iterrows():
+        r_valid = r.dropna()
+        if len(r_valid) < min_stocks:
+            continue
+        stocks = [c for c in r_valid.index if industry_map.get(c) in inds]
+        if len(stocks) < min_stocks:
+            continue
+        y = r_valid.reindex(stocks).to_numpy(dtype=float)
+        X = np.zeros((len(stocks), len(inds)))
+        for j, ind in enumerate(inds):
+            X[:, j] = [1.0 if industry_map[c] == ind else 0.0 for c in stocks]
+        X = X - X.mean(axis=0)  # 均值偏离编码
+        Xa = np.column_stack([np.ones(len(y)), X])
+        try:
+            coef, _, _, _ = np.linalg.lstsq(Xa, y, rcond=None)
+        except Exception:
+            continue
+        for j, ind in enumerate(inds):
+            flows[f"IND_{ind}"][date] = float(coef[j + 1])
+
+    summary = []
+    for name, d in flows.items():
+        ser = pd.Series(d).dropna()
+        if ser.empty:
+            summary.append(
+                {"style": name, "mean": 0.0, "std": 0.0, "t": 0.0, "ir": 0.0, "cumulative": 0.0}
+            )
+            continue
+        v = ser.to_numpy(dtype=float)
+        m = float(v.mean())
+        sd = float(v.std())
+        summary.append(
+            {
+                "style": name,
+                "mean": m,
+                "std": sd,
+                "t": (m / (sd / np.sqrt(len(v)))) if sd > 0 else 0.0,
+                "ir": (m / sd * np.sqrt(252)) if sd > 0 else 0.0,
+                "cumulative": _cumprod_ret(v),
+            }
+        )
+    return {"factor_returns": flows, "summary": summary}
+
+
 # ── 组合权重优化（带约束）─────────────────────────────────────────────────
 
 
@@ -434,6 +533,167 @@ def covariance_estimator(
     diag = np.diag(np.diag(sigma))
     shrink = shrinkage * diag + (1 - shrinkage) * sigma
     return pd.DataFrame(shrink, index=sigma.index, columns=sigma.columns)
+
+
+# ── 组合事前风险预测（因子协方差法） ────────────────────────────────────────
+
+
+def risk_forecast(
+    weights: pd.Series,
+    factor_returns: dict[str, dict],
+    portfolio_exposures: dict[str, pd.Series] | None = None,
+    factor_cov: pd.DataFrame | None = None,
+    returns: pd.DataFrame | None = None,
+) -> dict:
+    """组合事前风险预测：σ_port² = e' Σ_f e + Σ w_i² σ_resid,i²
+
+    用风格/行业因子日收益协方差（年化）+ 个券残差方差预测组合未来波动，
+    并把组合风险分解到每个因子与个券特异项（边际贡献占比）。
+
+    Args:
+        weights: 当前组合权重 Series(index=asset)
+        factor_returns: {factor: {date: ret}}（来自 style_factor_returns 等）
+        portfolio_exposures: {factor: Series(index=date, 组合暴露)}，缺省则
+            按 0 处理（调用方应传组合暴露面板）
+        factor_cov: 因子年化协方差（有则直接用；无则从 factor_returns 估算）
+        returns: 个股收益面板（用于市场模型残差方差估计）
+
+    Returns:
+        {forecast_vol_annual, factor_risk_contrib: {factor: pct},
+         idiosyncratic_pct, n_factors, n_assets, note}
+    """
+    if weights is None or weights.dropna().empty:
+        return {"forecast_vol_annual": 0.0, "factor_risk_contrib": {}, "idiosyncratic_pct": 0.0, "n_factors": 0, "n_assets": 0, "note": "无权重数据，无法预测"}
+    w = weights.dropna()
+    assets = list(w.index)
+    n_assets = len(assets)
+
+    if factor_cov is None:
+        frame = pd.DataFrame(factor_returns or {}).sort_index()
+        if frame.shape[0] < 3 or frame.shape[1] < 1:
+            return {"forecast_vol_annual": 0.0, "factor_risk_contrib": {}, "idiosyncratic_pct": 0.0, "n_factors": 0, "n_assets": n_assets, "note": "因子收益样本不足，无法估计协方差"}
+        frame = frame.dropna(how="all")
+        factor_cov = frame.cov() * 252
+    if factor_cov.empty:
+        return {"forecast_vol_annual": 0.0, "factor_risk_contrib": {}, "idiosyncratic_pct": 0.0, "n_factors": 0, "n_assets": n_assets, "note": "因子协方差为空"}
+
+    factors = list(factor_cov.columns)
+    n_factors = len(factors)
+    # 组合对各因子的暴露（无面板时按近端暴露近似为 0——调用方应传 portfolio_exposures）
+    e = np.zeros(n_factors)
+    if portfolio_exposures:
+        for j, f in enumerate(factors):
+            s = portfolio_exposures.get(f)
+            if s is not None and len(s):
+                e[j] = float(s.iloc[-1])
+    var_f = float(e @ factor_cov.to_numpy() @ e) if n_factors else 0.0
+
+    # 个券特异风险：市场模型残差方差（r_i = α + β·市场 + resid，var(resid) 年化），
+    # 权重平方加权（独立残差的组合贡献 Σ w_i² σ_i²）
+    resid_var = 0.0
+    try:
+        ret = returns.reindex(columns=assets).dropna(how="all") if returns is not None else pd.DataFrame()
+        if not ret.empty and len(ret) > 20:
+            market = ret.mean(axis=1)
+            resid_vars: list[float] = []
+            for a in assets:
+                s = ret[a].dropna()
+                if len(s) < 20:
+                    continue
+                m = market.reindex(s.index).dropna()
+                common_idx = s.index.intersection(m.index)
+                if len(common_idx) < 20:
+                    continue
+                x = m.reindex(common_idx).to_numpy()
+                y = s.reindex(common_idx).to_numpy()
+                beta = float(np.cov(x, y, ddof=1)[0, 1] / np.var(x)) if np.var(x) > 0 else 0.0
+                resid = y - (beta * x)
+                resid_vars.append(float(np.var(resid, ddof=1) * 252))
+            w_arr = w.reindex(assets).fillna(0.0).to_numpy()
+            if resid_vars:
+                resid_var = float(sum((w_arr[i] ** 2) * resid_vars[i] for i in range(len(resid_vars))))
+    except Exception:
+        resid_var = 0.0
+    total_var = var_f + resid_var
+    vol = float(np.sqrt(max(total_var, 0.0)))
+
+    contrib: dict[str, float] = {}
+    if var_f > 1e-14 and n_factors:
+        marginal = factor_cov.to_numpy() @ e
+        for j, f in enumerate(factors):
+            contrib[f] = round(float(e[j] * marginal[j] / total_var), 4)
+    idio_pct = round(float(resid_var / total_var), 4) if total_var > 0 else 0.0
+
+    return {
+        "forecast_vol_annual": round(vol, 4),
+        "factor_risk_contrib": contrib,
+        "idiosyncratic_pct": idio_pct,
+        "n_factors": n_factors,
+        "n_assets": n_assets,
+        "note": (
+            "事前预测口径：σ_port² = 组合暴露'×因子协方差×暴露 + Σ w_i²×市场模型残差方差；"
+            "因子边际贡献占比按 e_j×(Σe)_j/总方差"
+        ),
+    }
+
+
+# ── 历史情景压力测试（真实行情窗口回放） ────────────────────────────────────
+
+
+HISTORICAL_SCENARIOS: dict[str, tuple[str, str]] = {
+    "2015股灾": ("2015-06-15", "2015-09-15"),
+    "2016熔断": ("2016-01-04", "2016-02-29"),
+    "2018熊市": ("2018-01-29", "2018-12-28"),
+    "2020疫情冲击": ("2020-01-20", "2020-03-31"),
+    "2024小微盘流动性危机": ("2024-01-02", "2024-02-08"),
+}
+
+
+def historical_scenario_stress(
+    returns: pd.DataFrame,
+    weights: pd.Series,
+    scenario_windows: dict[str, tuple[str, str]] | None = None,
+) -> dict:
+    """历史情景回放：把真实危机窗口的逐日收益按当前权重累计到组合
+
+    比正态模拟更有参考价值：直接使用真实市场当时的量价行为（流动性枯竭、
+    涨跌停无法卖出等尾部表现已内含在收益序列中）。
+
+    Args:
+        returns: 历史收益面板 DataFrame(index=date, columns=asset)
+        weights: 当前组合权重 Series(index=asset)
+
+    Returns:
+        {scenario: {start, end, n_days, cum_return_pct, max_drawdown_pct, worst_day_pct}}
+    """
+    if scenario_windows is None:
+        scenario_windows = HISTORICAL_SCENARIOS
+    common = weights.dropna().index
+    w = weights.reindex(common)
+    wsum = float(w.sum()) or 1.0
+    w = w / wsum
+
+    out: dict[str, dict] = {}
+    for name, (start, end) in scenario_windows.items():
+        win = returns.loc[returns.index >= pd.Timestamp(start)]
+        win = win.loc[win.index <= pd.Timestamp(end)]
+        if win.empty:
+            out[name] = {"start": start, "end": end, "n_days": 0, "cum_return_pct": None, "max_drawdown_pct": None, "worst_day_pct": None, "note": "区间内无行情缓存"}
+            continue
+        port = win.reindex(columns=common).fillna(0.0)
+        daily = (port.to_numpy() * w.to_numpy()[None, :]).sum(axis=1)
+        cum = float(_cumprod_ret(daily) - 1.0)
+        eq = np.cumprod(1 + daily)
+        dd = float((eq / np.maximum.accumulate(eq) - 1.0).min())
+        out[name] = {
+            "start": start,
+            "end": end,
+            "n_days": int(len(win)),
+            "cum_return_pct": round(cum * 100, 2),
+            "max_drawdown_pct": round(dd * 100, 2),
+            "worst_day_pct": round(float(np.min(daily)) * 100, 2),
+        }
+    return out
 
 
 # ── 回测策略收益归因（回归法：不需要持仓权重，用风格因子日收益回归）──────────

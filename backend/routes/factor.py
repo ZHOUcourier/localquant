@@ -766,3 +766,231 @@ async def factor_health(category_code: str = "", min_snapshots: int = 2):
 async def factor_crowding():
     """因子池拥挤度：池内因子两两截面相关（均值 |ρ|，TTL 6h 缓存）"""
     return await factor_research.pool_crowding()
+
+
+# ── 日内高频（分钟级）因子研究 ─────────────────────────────────────────
+
+
+class IntradayComputeRequest(BaseModel):
+    formula: str = ""
+    stock_pool: list[str] = []
+    start_date: str = ""
+    end_date: str = ""
+    period: str = "5m"  # 1m/5m/15m/30m/60m
+
+
+@router.post("/intraday/compute")
+async def intraday_compute(req: IntradayComputeRequest):
+    """分钟因子计算：分钟面板 →（清洗）→ 公式求值 → 自动折叠为日频因子面板
+
+    公式环境：m_close/m_volume 等分钟字段 + ID_* 聚合算子（ID_LAST/ID_MEAN/
+    ID_SLICE...）+ M_* 分钟序列算子 + 现成高频因子（TAIL_RET/RV/JUMP_DAY/
+    AMIHUD5/VWAP_DEV/VOLUME_CLOCK/AUC_VOL_RATIO/LIMIT_UP_TIME/OVERNIGHT_RET/
+    INTRADAY_RET）。结果为分钟级时自动 ID_LAST 折叠到日。
+    """
+    from backend.services.intraday_cleaner import load_intraday_panels
+    from backend.services.intraday_operators import (
+        ID_LAST,
+        build_intraday_namespace,
+    )
+
+    formula = (req.formula or "").strip()
+    if not formula:
+        raise HTTPException(status_code=400, detail="分钟因子公式为空")
+
+    try:
+        loaded = load_intraday_panels(
+            codes=req.stock_pool,
+            period=req.period,
+            start_date=req.start_date,
+            end_date=req.end_date,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    panels, meta = loaded["panels"], loaded["meta"]
+    ns = build_intraday_namespace(panels, meta)
+    lines = [
+        ln
+        for ln in formula.splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    try:
+        if len(lines) > 1:
+            exec("\n".join(lines[:-1]), {"__builtins__": {}}, ns)  # noqa: S102
+            factor = eval(lines[-1], {"__builtins__": {}}, ns)  # noqa: S307
+        else:
+            factor = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"分钟因子公式计算失败: {e}")
+
+    if isinstance(factor, pd.Series):
+        factor = factor.to_frame(name="factor")
+    if not isinstance(factor, pd.DataFrame) or factor.empty:
+        raise HTTPException(status_code=400, detail="分钟公式未产出有效面板")
+
+    # 结果仍为分钟级（datetime index 含时间）→ 自动折叠为日频
+    collapsed = False
+    idx = pd.to_datetime(factor.index)
+    if (idx.normalize() != idx).any():
+        factor = ID_LAST(factor, 0)
+        collapsed = True
+        idx = pd.to_datetime(factor.index)
+
+    factor = factor.sort_index()
+    close = panels["close"]
+    daily_close = close.groupby(close.index.normalize()).last().sort_index()
+    daily_close = daily_close.reindex(factor.index, method="ffill").ffill()
+    return_data = daily_close.pct_change()
+
+    # 面板健康提示：一字/半日占比
+    n_stocks = len(factor.columns)
+    one_line_pct = half_pct = None
+    if meta:
+        one_lines = 0
+        halfs = 0
+        total = 0
+        for code, m in meta.items():
+            if code not in factor.columns:
+                continue
+            total += len(m)
+            one_lines += int(m["one_line"].fillna(False).sum()) if "one_line" in m.columns else 0
+            halfs += int(m["is_half"].fillna(False).sum()) if "is_half" in m.columns else 0
+        if total:
+            one_line_pct = round(one_lines / total, 4)
+            half_pct = round(halfs / total, 4)
+
+    return {
+        "ok": True,
+        "period": loaded["period"],
+        "cleaned": loaded["cleaned"],
+        "n_stocks": n_stocks,
+        "start": str(factor.index[0].date()),
+        "end": str(factor.index[-1].date()),
+        "n_days": len(factor.index),
+        "collapsed_to_daily": collapsed,
+        "one_line_pct": one_line_pct,
+        "half_day_pct": half_pct,
+        "missing": loaded["missing"],
+        "factor_data": market_data.panel_to_dict(factor),
+        "return_data": market_data.panel_to_dict(return_data),
+        "note": (
+            "分钟面板已清洗（竞价 bar 剔除/半日标记/一字板标记）；因子为日频口径，"
+            "下游 IC/分层/回测与日频因子完全同构"
+        ),
+    }
+
+
+_DEFAULT_IC_TIMES = ["09:45", "10:30", "11:15", "14:00", "14:45", "14:55"]
+
+
+class IntradayIcByTimeRequest(BaseModel):
+    formula: str = ""
+    stock_pool: list[str] = []
+    start_date: str = ""
+    end_date: str = ""
+    period: str = "5m"
+    times: list[str] = []  # 采样时刻 HH:MM；空=默认 6 时刻
+
+
+@router.post("/intraday/ic-by-time")
+async def intraday_ic_by_time(req: IntradayIcByTimeRequest):
+    """时刻 IC 曲线：同一公式在不同日内时刻采截面，对同一次日收益算 RankIC
+
+    回答「该因子的信息在一天里哪个时点最强」——直接指导执行时点选择
+    （如尾盘动量在 14:45 的 IC 显著高于 10:30，则回测应选尾盘执行）。
+    每时刻 = 仅用该时刻前（含）的分钟 bar 求因子 → 折叠到日 → RankIC。
+    """
+    from backend.services.intraday_cleaner import load_intraday_panels
+    from backend.services.intraday_operators import (
+        ID_LAST,
+        build_intraday_namespace,
+    )
+
+    formula = (req.formula or "").strip()
+    if not formula:
+        raise HTTPException(status_code=400, detail="分钟因子公式为空")
+    times = req.times or _DEFAULT_IC_TIMES
+    times = sorted(set(times))
+
+    try:
+        loaded = load_intraday_panels(
+            codes=req.stock_pool,
+            period=req.period,
+            start_date=req.start_date,
+            end_date=req.end_date,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    panels, meta = loaded["panels"], loaded["meta"]
+
+    full_close = panels["close"]
+    daily_close = full_close.groupby(full_close.index.normalize()).last().sort_index()
+    return_data = daily_close.pct_change()
+
+    out: list[dict] = []
+    for t in times:
+        t_panels = {
+            f: p[p.index.strftime("%H:%M") <= t] for f, p in panels.items()
+        }
+        if t_panels.get("close") is None or t_panels["close"].empty:
+            out.append({"time": t, "ic": None, "rank_ic": None, "n_days": 0, "note": "该时刻前无分钟 bar"})
+            continue
+        ns = build_intraday_namespace(t_panels, meta)
+        try:
+            factor = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+        except Exception as e:
+            raise HTTPException(
+                status_code=400, detail=f"时刻 {t} 公式计算失败: {e}"
+            )
+        if isinstance(factor, pd.Series):
+            factor = factor.to_frame(name="factor")
+        if not isinstance(factor, pd.DataFrame) or factor.empty:
+            continue
+        idx = pd.to_datetime(factor.index)
+        if (idx.normalize() != idx).any():
+            factor = ID_LAST(factor, 0)
+        factor = factor.sort_index()
+
+        ics: list[float] = []
+        dates = factor.index
+        for i in range(len(dates) - 1):
+            f = factor.loc[dates[i]].dropna()
+            nxt = dates[i + 1]
+            if nxt not in return_data.index:
+                continue
+            r = return_data.loc[nxt].dropna()
+            common = f.index.intersection(r.index)
+            if len(common) > 10:
+                ics.append(f[common].rank().corr(r[common].rank()))
+        v = np.array([x for x in ics if x is not None and not np.isnan(x)])
+        if len(v) == 0:
+            out.append({"time": t, "ic": None, "rank_ic": None, "n_days": 0, "note": "截面样本不足"})
+            continue
+        out.append(
+            {
+                "time": t,
+                "ic": round(float(v.mean()), 5),
+                "rank_ic": round(float(v.mean()), 5),
+                "icir": round(float(v.mean() / v.std(ddof=1)), 3)
+                if len(v) > 1 and v.std(ddof=1) > 0
+                else 0.0,
+                "positive_ratio": round(float((v > 0).mean()), 4),
+                "n_days": int(len(v)),
+            }
+        )
+
+    return {
+        "ok": True,
+        "period": loaded["period"],
+        "formula": formula,
+        "times": out,
+        "n_stocks": int(len(panels["close"].columns)),
+        "data_start": str(daily_close.index[0].date()),
+        "data_end": str(daily_close.index[-1].date()),
+        "note": (
+            "每个时刻的因子值只用该时刻前（含）的分钟 bar 计算（meta 类因子如 "
+            "AUC_VOL_RATIO/LIMIT_UP_TIME 使用全日 meta，与时刻无关）；"
+            "收益口径统一为次日收益（T 因子 vs T+1 收益），时刻间可比"
+        ),
+    }

@@ -10,11 +10,13 @@ import FactorScan from '@/components/factor/FactorScan.vue'
 import SystemResourceMonitor from '@/components/factor/SystemResourceMonitor.vue'
 import ComprehensiveReport from '@/components/factor/ComprehensiveReport.vue'
 import AlphaLensReport from '@/components/factor/AlphaLensReport.vue'
+import IntradayFactor from '@/components/factor/IntradayFactor.vue'
 import type { FactorResult, FactorReport, AlphaLensReport as AlphaLensReportT } from '@/components/factor/types'
 
 // 页级主 tab：因子研究 | 因子库
 const pageTabs: TabItem[] = [
   { key: 'research', label: '因子研究' },
+  { key: 'intraday', label: '分钟因子 · 日内高频' },
   { key: 'library', label: '因子库' },
 ]
 
@@ -243,9 +245,14 @@ const corrOption = computed(() => {
       <Tabs :items="pageTabs" :active-key="pageTab" @change="(k) => (pageTab = k)" />
     </div>
 
+    <!-- ============ 分钟因子 · 日内高频 ============ -->
+    <div v-if="pageTab === 'intraday'">
+      <IntradayFactor />
+    </div>
+
     <!-- ============ 因子库 ============ -->
     <div
-      v-if="pageTab === 'library'"
+      v-else-if="pageTab === 'library'"
       class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-4"
     >
       <div class="mb-3 flex items-center justify-between">

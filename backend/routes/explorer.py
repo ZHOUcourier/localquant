@@ -817,3 +817,83 @@ async def rolling_corr(body: RollingCorrRequest):
         "corr": [round(float(v), 3) for v in out["corr"]],
         "beta": [round(float(v), 3) for v in out["beta"]],
     }
+
+
+# ── 事件研究（CAR/BHAR） ───────────────────────────────────────────────
+
+
+class EventStudyRequest(BaseModel):
+    event_type: str = "limit_up"  # limit_up / limit_down / volume_spike / dividend / custom
+    codes: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    window_before: int = 10
+    window_after: int = 10
+    min_events: int = 5
+    volume_k: float = 3.0
+    events: list[dict] = []  # 手工事件 [{date, code}]（event_type=custom 时使用）
+    period: str = "1d"
+
+
+@router.post("/event-study")
+async def event_study(body: EventStudyRequest):
+    """事件研究：事件窗口 CAR/BHAR + t 值 + 正值占比
+
+    内置事件源（全部来自本地 QMT 缓存）：
+      limit_up / limit_down  一字涨停/跌停（high==low 且收盘触及涨跌停近似价）
+      volume_spike           放量（量 > k× 前 20 日均量）
+      dividend               除权除息（adjust_factor 跳变）
+      custom                 手工事件列表
+    基准默认当日全市场截面均值；事件日=0。
+    """
+    from backend.services.event_study import build_event_frame, event_study_analysis
+
+    pool = [c.strip() for c in body.codes.split(",") if c.strip()]
+    try:
+        panels = market_data.load_price_panels(
+            codes=pool, start_date=body.start_date, end_date=body.end_date
+        )
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    close = panels["close"]
+    volume = panels.get("volume")
+    high = panels.get("high")
+    low = panels.get("low")
+    rets = close.pct_change()
+
+    up = down = None
+    if body.event_type in ("limit_up", "limit_down"):
+        reference = market_data.load_reference_panels(close, volume)
+        up, down = reference["up_limit"], reference["down_limit"]
+
+    dividend = None
+    if body.event_type == "dividend":
+        dividend = market_data.dividend_events(
+            period=body.period, codes=list(close.columns), days=3650, limit=100000
+        )
+
+    events = build_event_frame(
+        event_type=body.event_type,
+        close=close,
+        volume=volume,
+        high=high,
+        low=low,
+        up_limit=up,
+        down_limit=down,
+        dividend_events=dividend,
+        manual_events=body.events or None,
+        volume_k=body.volume_k,
+    )
+    result = event_study_analysis(
+        rets,
+        events,
+        window_before=body.window_before,
+        window_after=body.window_after,
+        min_events=body.min_events,
+    )
+    result["event_type"] = body.event_type
+    result["n_detected"] = len(events)
+    result["n_stocks"] = int(close.shape[1])
+    result["data_start"] = str(close.index[0])[:10]
+    result["data_end"] = str(close.index[-1])[:10]
+    return result

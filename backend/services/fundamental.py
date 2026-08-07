@@ -27,7 +27,46 @@ FUND_FIELDS = [
     "revenue",
     "total_assets",
     "total_liab",
+    # 现金流（Cashflow 表；2026-08 起快照拉取该表，供现金流/质量因子使用）
+    "operating_cashflow",
+    "total_cashflow",
 ]
+
+# QMT 各报表字段名到统一字段的别名映射（小写匹配；xtquant 版本间命名不一致）
+FIELD_ALIASES = {
+    "eps": ["basiceps", "epsbasics", "earningspershare"],
+    "roe": ["returnonequity", "netprofitratio"],
+    "pb": ["pricebookratio", "pbratio"],
+    "net_profit": ["netprofit", "profitaftertax"],
+    "revenue": ["operatingrevenue", "revenue_operate"],
+    "total_assets": ["totalasset", "totalassetss"],
+    "total_liab": ["totalliabilities", "totaldebt"],
+    "operating_cashflow": [
+        "operatingnetcashflow",
+        "netcashflowfromoperating",
+        "cashflowfromoperatingactivities",
+        "netoperatingcashflow",
+        "cfo",
+    ],
+    "total_cashflow": [
+        "totalnetcashflow",
+        "netincreaseincash",
+        "netincreasecashflow",
+        "netchangeincash",
+    ],
+}
+
+
+def _canonical_field(col: str) -> str | None:
+    """列名 → 统一字段名（先精确匹配 FUND_FIELDS，再按别名表归一），无则 None"""
+    lower = str(col).lower()
+    for f in FUND_FIELDS:
+        if lower == f:
+            return f
+    for field, aliases in FIELD_ALIASES.items():
+        if lower in aliases:
+            return field
+    return None
 
 
 def snapshot_status() -> dict:
@@ -51,7 +90,7 @@ def snapshot_fundamental(qmt, codes: list[str]) -> int:
         return 0
     _ensure_dir()
     records = 0
-    tables = ["Pershareindex", "Income", "Balance", "CostCapital"]
+    tables = ["Pershareindex", "Income", "Balance", "CostCapital", "Cashflow"]
     for code in codes:
         try:
             data = qmt.get_financial(
@@ -94,15 +133,18 @@ def _merge_frames(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
         if ann is None:
             continue
         keep = set()
+        rename_map: dict[str, str] = {}
         for c in df.columns:
-            if str(c).lower() in {f.lower() for f in FUND_FIELDS}:
+            canon = _canonical_field(c)
+            if canon is not None:
                 keep.add(c)
+                rename_map[c] = canon
         if not keep:
             continue
         ren = {}
         if ann != "anntime":
             ren[ann] = "anntime"
-        sub = df[list(keep | {ann})].copy().rename(columns=ren)
+        sub = df[list(keep | {ann})].copy().rename(columns={**ren, **rename_map})
         sub["_table"] = order.get(table, 99)
         parts.append(sub)
     if not parts:

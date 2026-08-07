@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -177,6 +178,133 @@ async def stress(req: StressReq):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class StressHistoricalReq(BaseModel):
+    codes: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    weights: dict = {}
+
+
+@router.post("/stress-historical")
+async def stress_historical(req: StressHistoricalReq):
+    """历史情景回放：真实危机窗口（2015股灾/2018熊市/2024小微盘…）按当前权重累计
+
+    需要本地行情缓存（股票池 + 区间覆盖对应历史年份）；未覆盖返回 null 并提示。
+    """
+    try:
+        pool = [c.strip() for c in req.codes.split(",") if c.strip()]
+        panels = market_data.load_price_panels(
+            codes=pool, start_date=req.start_date, end_date=req.end_date
+        )
+        close = panels["close"]
+        ret = close.pct_change()
+        out = risk_svc.historical_scenario_stress(
+            ret, pd.Series(req.weights) if req.weights else pd.Series(dtype=float)
+        )
+        out["n_stocks"] = int(close.shape[1])
+        out["data_start"] = str(close.index[0])[:10]
+        out["data_end"] = str(close.index[-1])[:10]
+        return out
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class RiskForecastReq(BaseModel):
+    weights: dict = {}
+    factor_returns: dict = {}
+    portfolio_exposures: dict = {}
+    returns: dict = {}
+
+
+@router.post("/forecast")
+async def forecast(req: RiskForecastReq):
+    """组合事前风险预测：因子协方差 + 市场模型残差，分解因子风险贡献"""
+    try:
+        fr = {k: pd.Series(v) for k, v in req.factor_returns.items()}
+        pe = {k: pd.Series(v) for k, v in req.portfolio_exposures.items()}
+        ret = _df(req.returns) if req.returns else pd.DataFrame()
+        return risk_svc.risk_forecast(
+            pd.Series(req.weights) if req.weights else pd.Series(dtype=float),
+            factor_returns=fr,
+            portfolio_exposures=pe if pe else None,
+            returns=ret,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class RiskForecastPanelReq(BaseModel):
+    codes: str = ""
+    start_date: str = ""
+    end_date: str = ""
+    weights: dict = {}
+
+
+@router.post("/forecast-panel")
+async def forecast_panel(req: RiskForecastPanelReq):
+    """组合事前风险（一键）：从本地行情缓存取面板 → 风格暴露 → 因子收益
+    → 组合暴露 → 协方差预测 + 风险贡献分解；另附行业因子与历史情景回放"""
+    try:
+        pool = [c.strip() for c in req.codes.split(",") if c.strip()]
+        panels = market_data.load_price_panels(
+            codes=pool, start_date=req.start_date, end_date=req.end_date
+        )
+        close = panels["close"]
+        ret = close.pct_change()
+        w = pd.Series(req.weights) if req.weights else pd.Series(dtype=float)
+        w = w[w.index.isin(close.columns)]
+        if w.empty:
+            raise HTTPException(status_code=400, detail="权重与缓存股票池无交集")
+
+        styles = risk_svc.build_style_exposures(
+            close,
+            volume=panels.get("volume"),
+            amount=panels.get("amount"),
+        )
+        sres = risk_svc.style_factor_returns(ret, styles)
+        wf = pd.DataFrame(
+            np.tile(w.reindex(close.columns).fillna(0.0).to_numpy(), (len(close.index), 1)),
+            index=close.index,
+            columns=close.columns,
+        )
+        pstyles = risk_svc.portfolio_style_exposure(wf, styles)
+        fr = dict(sres["factor_returns"])
+
+        # 行业因子（均值偏离编码）
+        try:
+            from backend.services import reference_data
+
+            ind_map = reference_data.load_industry_map(
+                as_of=str(close.index[0])[:10]
+            )
+            if ind_map:
+                ires = risk_svc.industry_factor_returns(ret, ind_map)
+                fr.update(ires["factor_returns"])
+                sres["summary"].extend(ires["summary"])
+        except Exception:
+            pass
+
+        forecast = risk_svc.risk_forecast(
+            w,
+            factor_returns=fr,
+            portfolio_exposures=pstyles,
+            returns=ret,
+        )
+        hist = risk_svc.historical_scenario_stress(ret, w)
+        return {
+            **forecast,
+            "n_stocks": int(close.shape[1]),
+            "data_start": str(close.index[0])[:10],
+            "data_end": str(close.index[-1])[:10],
+            "style_factor_summary": sres["summary"],
+            "historical_scenarios": hist,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/panel")
 async def risk_panel(
     codes: str = "",
@@ -266,9 +394,28 @@ async def attribution_run(req: AttributionRunRequest):
         volume=panels.get("volume"),
         amount=panels.get("amount"),
     )
-    style_res = risk_svc.style_factor_returns(close.pct_change(), styles)
+    ret = close.pct_change()
+    style_res = risk_svc.style_factor_returns(ret, styles)
+    factor_returns = dict(style_res["factor_returns"])
+    industry_note = ""
+    # 行业因子收益（均值偏离编码）：回答「超额来自哪个行业」
+    try:
+        from backend.services import reference_data
+
+        ind_map = reference_data.load_industry_map(as_of=str(close.index[0])[:10])
+        if ind_map:
+            ind_res = risk_svc.industry_factor_returns(ret, ind_map)
+            if ind_res["factor_returns"]:
+                factor_returns.update(ind_res["factor_returns"])
+                style_res["summary"].extend(ind_res["summary"])
+                industry_note = (
+                    f"含 {len(ind_res['factor_returns'])} 个行业因子（均值偏离编码，"
+                    "相对全市场平均行业的超额）"
+                )
+    except Exception:
+        industry_note = "行业映射不可用，归因仅含风格因子"
     result = risk_svc.strategy_regression_attribution(
-        strategy_returns, style_res["factor_returns"]
+        strategy_returns, factor_returns
     )
     result["status"] = "ok"
     result["run_id"] = req.run_id
@@ -276,4 +423,5 @@ async def attribution_run(req: AttributionRunRequest):
     result["n_stocks"] = int(close.shape[1])
     result["data_date"] = str(close.index[-1])[:10]
     result["style_factor_summary"] = style_res["summary"]
+    result["industry_note"] = industry_note
     return result

@@ -42,6 +42,8 @@ export interface PresetFactorDetail extends PresetFactor {
   factor_type?: 'formula' | 'data_field' | 'indicator'
   recalc_mode?: string
   recalc_message?: string
+  /** 样本窗口警示（不足 2 年时提示 IC 统计量置信度） */
+  sample_warning?: string | null
 }
 
 /** IC 指标历史快照（重算覆盖前自动留存） */

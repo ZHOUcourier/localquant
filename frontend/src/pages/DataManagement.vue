@@ -36,11 +36,11 @@ interface ReferenceStatus {
 
 const periodOptions = [
   { value: '1d', label: '日线' },
-  { value: '1m', label: '1分钟' },
-  { value: '5m', label: '5分钟' },
-  { value: '15m', label: '15分钟' },
-  { value: '30m', label: '30分钟' },
-  { value: '60m', label: '60分钟' },
+  { value: '1m', label: '1分钟 · 日内高频' },
+  { value: '5m', label: '5分钟 · 日内高频（推荐）' },
+  { value: '15m', label: '15分钟 · 日内高频' },
+  { value: '30m', label: '30分钟 · 日内高频' },
+  { value: '60m', label: '60分钟 · 日内高频' },
   { value: 'tick', label: 'Tick' },
 ]
 
@@ -301,7 +301,19 @@ const referenceLabels: Record<string, string> = {
   industry: '行业分类',
   capital: '股本记录',
   instrument: '合约详情',
+  universe_pools: '标的池（两融/北向）',
 }
+
+/* ── 分钟缓存覆盖度（日内高频研究前提） ── */
+const minuteCoverage = ref<Record<string, { files: number; size_bytes: number }> | null>(null)
+watch(status, (v) => {
+  if (!v?.by_period) return
+  minuteCoverage.value = Object.fromEntries(
+    Object.entries(v.by_period as Record<string, { files: number; size_bytes: number }>).filter(
+      ([k]) => k !== '1d' && k !== 'tick',
+    ),
+  )
+})
 
 // ── 每日批处理调度 ─────────────────────────────────────
 
@@ -701,8 +713,24 @@ const provenanceColumns: Column[] = [
             </div>
           </div>
           <p class="text-xs text-[#646262] leading-relaxed pt-1">
-            参考数据随批量下载自动快照；指数历史成分从首次快照日起逐日积累，更早区间仍为当前成分（存在幸存者偏差）。
+            参考数据随批量下载自动快照；指数历史成分从首次快照日起逐日积累，更早区间仍为当前成分（存在幸存者偏差）。标的池（两融=可融券做空过滤、北向=沪深股通）亦随批量下载快照。
           </p>
+          <div v-if="minuteCoverage && Object.keys(minuteCoverage).length" class="pt-2 border-t border-[#e3e0e0]">
+            <div class="text-xs font-medium text-[#646262] mb-1.5">分钟缓存 · 日内高频</div>
+            <div
+              v-for="(info, per) in minuteCoverage"
+              :key="per"
+              class="flex items-center justify-between py-0.5"
+            >
+              <span class="text-sm text-[#201d1d]">{{ per }}（{{ info.files }} 只）</span>
+              <span class="text-xs font-mono text-[#007aff]">
+                {{ (info.size_bytes / 1024 / 1024).toFixed(1) }} MB
+              </span>
+            </div>
+            <p class="text-[11px] text-[#9a9898] leading-relaxed pt-1">
+              5m 全市场一年约 2-3GB（1m 约 5 倍）；「因子研究 → 分钟因子」页直接消费分钟缓存做日内高频因子。
+            </p>
+          </div>
         </div>
       </Card>
     </div>

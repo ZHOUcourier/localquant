@@ -18,6 +18,7 @@ def load_all_nodes():
         "backend.plugins.builtin.indicators",
         "backend.plugins.builtin.feature_engineering",
         "backend.plugins.builtin.factor_build",
+        "backend.plugins.builtin.intraday_factor",
         "backend.plugins.builtin.factor_analysis",
         "backend.plugins.builtin.backtest",
         "backend.plugins.builtin.output",

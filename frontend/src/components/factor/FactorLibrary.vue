@@ -358,6 +358,10 @@ function cardPerfMetrics(f: PresetFactor) {
       >
         <span class="inline-block h-[6px] w-[6px] rounded-full" :style="{ backgroundColor: cat.color_hex || '#646262' }" />
         {{ cat.category_name }}·{{ cat.factor_count }}
+        <span
+          v-if="cat.category_code === 'INTRADAY'"
+          class="rounded-[3px] bg-[rgba(38,166,154,0.12)] px-1 text-[10px] text-[#26A69A]"
+        >日内高频</span>
       </button>
     </div>
 
