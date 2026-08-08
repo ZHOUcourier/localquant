@@ -103,7 +103,8 @@ def event_study_analysis(
     Args:
         returns: 日收益面板 DataFrame(index=date, columns=code)
         events: DataFrame [date, code]（date 为 pd.Timestamp 或可解析字符串）
-        window_before / window_after: 事件前后窗口天数（相对事件日，含事件日）
+        window_before / window_after: 事件前/后窗口天数（正数，如 10/10 =
+            相对日 [-10, +10]，事件日=0，含事件日）
         market_returns: 基准日收益 Series；None 时用当日全市场截面均值
         min_events: 有效事件数下限，不足时给出提示（统计不可靠）
 
@@ -136,7 +137,9 @@ def event_study_analysis(
     else:
         market = market_returns.reindex(idx).fillna(returns.mean(axis=1))
 
-    rel_days = list(range(window_before, window_after + 1))
+    # 窗口语义：window_before/window_after 为正的天数（事件前/后），
+    # rel_days = 相对事件日的偏移（事件日=0）。
+    rel_days = list(range(-window_before, window_after + 1))
     car_curves: dict[int, list[float]] = {d: [] for d in rel_days}
     per_event: list[dict] = []
 
@@ -154,13 +157,16 @@ def event_study_analysis(
         if len(series) < 2:
             continue
         # 异常收益 = 个股 - 基准；BHAR = Π(1+r_i)/Π(1+r_m) - 1
-        r_arr = np.array([series[d] for d in rel_days if d in series])
-        m_arr = np.array([market.loc[idx[i0 + d]] for d in rel_days if d in series])
+        # 注意：窗口在面板边界被截断时（事件靠近区间头部/尾部），
+        # series 只含窗口内实际存在的相对日——cum 下标必须与「实际存在的
+        # 相对日序列」对齐，而非枚举全部 rel_days（旧实现会对不齐且越界）
+        present = [d for d in rel_days if d in series]
+        r_arr = np.array([series[d] for d in present])
+        m_arr = np.array([market.loc[idx[i0 + d]] for d in present])
         ab = np.nan_to_num(r_arr) - np.nan_to_num(m_arr)
         cum = np.cumsum(ab)
-        for k, d in enumerate(rel_days):
-            if d in series:
-                car_curves[d].append(float(cum[k]))
+        for k, d in enumerate(present):
+            car_curves[d].append(float(cum[k]))
         bhar = float(np.prod(1 + np.nan_to_num(r_arr)) / np.prod(1 + np.nan_to_num(m_arr)) - 1)
         per_event.append({"code": code, "date": str(date.date()), "bhar": bhar})
 

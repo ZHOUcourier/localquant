@@ -859,7 +859,8 @@ async def event_study(body: EventStudyRequest):
     volume = panels.get("volume")
     high = panels.get("high")
     low = panels.get("low")
-    rets = close.pct_change()
+    # 前向填充口径：停牌日收益 0、复牌日跳空入账（与回测/因子研究一致）
+    rets = market_data.build_return_panel(close)
 
     up = down = None
     if body.event_type in ("limit_up", "limit_down"):

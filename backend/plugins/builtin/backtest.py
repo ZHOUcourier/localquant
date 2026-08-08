@@ -70,6 +70,7 @@ class BacktestOutput(BaseModel):
     monthly_returns: dict = {}  # 月度收益
     benchmark_curve: dict = {}  # 基准净值曲线（如提供基准）
     assumptions: list = []  # 未能处理的假设清单（停牌/涨跌停等）
+    delisting_events: list = []  # 数据提前截止标的的强制清算明细（退市/缓存截断）
     report: dict = {}  # 回测综合报告（供工作流内弹窗可视化，与因子分析同构）
     initial_capital: float = 0.0
 
@@ -184,6 +185,7 @@ class BacktestNode(BaseWorkNode):
             "top_drawdowns": dd.get("top_drawdowns", []),
             "benchmark": metrics.get("benchmark"),
             "assumptions": assumptions,
+            "delisting_events": result.get("delisting_events", []),
             "initial_capital": init_cap,
             "trading_days": metrics.get("trading_days", 0),
         }
@@ -202,6 +204,7 @@ class BacktestNode(BaseWorkNode):
             monthly_returns=monthly_returns,
             benchmark_curve=benchmark_curve,
             assumptions=assumptions,
+            delisting_events=result.get("delisting_events", []),
             report=report,
             initial_capital=result["initial_capital"],
         )

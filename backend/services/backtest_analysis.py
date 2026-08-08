@@ -30,6 +30,7 @@ class BacktestAnalysisService:
         trailing_stop: float = 0.0,
         execute_at: str = "next_close",
         open_prices: pd.DataFrame | None = None,
+        delisting_loss: float = 0.0,
     ) -> dict:
         """
         向量化回测（权重空间，T 日信号 → 执行）。
@@ -66,11 +67,17 @@ class BacktestAnalysisService:
             竞价类策略）。
         open_prices : DataFrame | None
             开盘价面板（execute_at=next_open 时使用）。
+        delisting_loss : float（默认 0.0）
+            数据在回测区间内提前截止的标的（退市或缓存截断）按强制清算处理：
+            截止后首个交易日按末日价 ×(1-delisting_loss) 变现并释放权重，不计交易
+            费用；delisting_loss=0 表示按末日价全额变现（保守上界）。真实退市损失
+            依赖缓存覆盖完整退市整理期价格（可经「退市/历史代码清单」下载）。
 
         Returns
         -------
         dict 含 strategy_returns / equity_curve / positions / trades / costs /
-        assumptions（未能处理的假设清单，报告展示用）。
+        assumptions（未能处理的假设清单，报告展示用）/
+        delisting_events（强制清算事件清单）。
         """
         # 对齐
         common_idx = signals.index.intersection(prices.index)
@@ -80,8 +87,23 @@ class BacktestAnalysisService:
 
         assumptions: list[str] = []
 
-        # 收益率
-        price_returns = prices.pct_change().fillna(0.0)
+        # 收益率：先用最近可用收盘价前向填充再算 pct_change。
+        # 原始 pct_change 在停牌/数据缺口处产生 NaN，fillna(0) 会丢失复牌日的
+        # 跳空涨跌（停牌期间积累的信息整段消失），系统性低估波动与损失。
+        price_returns = prices.ffill().pct_change().fillna(0.0)
+
+        # 数据提前截止检测：每只股票最后一个有效价格日之后的日期标记为「已退市」
+        # （数据截止可能是退市，也可能是缓存截断——两种情况都必须强制清算，
+        # 否则持仓会以最后价格永久冻结，退市损失与权重泄漏都不被记录）。
+        valid_price = prices.notna().to_numpy(dtype=bool)
+        n_days, n_assets = valid_price.shape
+        last_ok = np.where(
+            valid_price.any(axis=0),
+            n_days - 1 - np.argmax(valid_price[::-1], axis=0),
+            -1,
+        )
+        day_idx = np.arange(n_days)[:, None]
+        dead_arr = day_idx > last_ok[None, :]  # (n_days, n_assets) True=数据已截止
 
         # 权重归一（按日截面）
         weights = self._normalize_weights(signals, normalize)
@@ -142,6 +164,8 @@ class BacktestAnalysisService:
         sell_arr = np.zeros_like(tgt_arr)
         prev = np.zeros(n_assets)
         risk_exits = 0
+        delisting_pnl = np.zeros(n_days)
+        delisting_events: list[dict] = []
 
         # 风控开启时，逐仓维护「建仓以来累计收益」r_prev 与「持仓期最高」peak_prev
         # （基准 1.0；按当日收盘更新 → 于当日收盘判定、次日 T+1 触发卖出，避免用当日盘中价前视）
@@ -153,6 +177,9 @@ class BacktestAnalysisService:
 
         for t in range(n_days):
             desired = np.nan_to_num(tgt_arr[t]).copy()
+
+            # 数据已截止的标的（退市/缓存截断）：永不建仓（信号清零，杜绝"死股复活"）
+            desired[dead_arr[t]] = 0.0
 
             # 可融券过滤：非两融池标的的做空信号清零（多空策略真实约束）
             if shortable_arr is not None:
@@ -190,9 +217,29 @@ class BacktestAnalysisService:
             actual[buy_blocked] = prev[buy_blocked]
             sell_blocked = down_board[t] & (desired < prev)
             actual[sell_blocked] = prev[sell_blocked]
+            # 数据截止（退市/缓存截断）：截止后首个交易日强制清算，
+            # 按末日价 ×(1-delisting_loss) 变现，不计交易费用（非市场交易）
+            forced = dead_arr[t]
+            if forced.any():
+                forced_held = forced & was_held
+                if forced_held.any():
+                    loss_rate = float(delisting_loss)
+                    delisting_pnl[t] = -loss_rate * float(prev[forced_held].sum())
+                    for c_idx in np.nonzero(forced_held)[0]:
+                        delisting_events.append(
+                            {
+                                "date": str(pd.Timestamp(common_idx[t]).date()),
+                                "code": str(common_cols[c_idx]),
+                                "weight": float(prev[c_idx]),
+                                "loss_rate": loss_rate,
+                            }
+                        )
+                actual[forced] = 0.0
             if (buy_blocked | sell_blocked).any():
                 blocked_trades += int((buy_blocked | sell_blocked).sum())
             trade = actual - prev
+            # 强制清算不是市场交易：不计入换手与成本（损失已由 delisting_pnl 单独入账）
+            trade[dead_arr[t]] = 0.0
             buy_arr[t] = np.clip(trade, 0.0, None)
             sell_arr[t] = np.clip(-trade, 0.0, None)
             pos_arr[t] = actual
@@ -231,6 +278,17 @@ class BacktestAnalysisService:
                 f"当期持仓保持不动、该笔调仓意图不保留（不做挂单顺延推演）"
             )
 
+        n_dead = int(dead_arr.any(axis=0).sum())
+        if n_dead:
+            held_dead = sum(1 for e in delisting_events if e["weight"] != 0.0)
+            assumptions.append(
+                f"{n_dead} 只股票数据在回测区间内提前截止（退市或缓存截断）："
+                f"截止后首日按末日价 ×(1-{float(delisting_loss):.0%}) 强制清算"
+                f"（{held_dead} 只有实际持仓被清算，不计交易费用），"
+                "剩余未实现退市损失风险由该假设承担 — 请用「退市/历史代码清单」"
+                "补齐退市整理期行情使损失如实入账"
+            )
+
         if manage:
             notes = []
             if stop_loss > 0:
@@ -261,11 +319,12 @@ class BacktestAnalysisService:
         )
 
         # 策略日收益：positions 为当日收盘持仓 → 赚次日起的收益（pos 前移一期）
+        # 强制清算损失 delisting_pnl 计入清算当日（末日价 ×(1-loss) 变现于当日收盘）
         if execute_at == "tail":
             # 尾盘执行：当日收盘建仓，当日无收益（收益从次日起）
             strategy_returns = (
                 positions.shift(1).fillna(0.0) * price_returns
-            ).sum(axis=1) - costs
+            ).sum(axis=1) - costs + pd.Series(delisting_pnl, index=common_idx)
         elif execute_at == "next_open" and open_prices is not None:
             # 次日开盘执行：T 信号 → T+1 开盘成交，成交日按「开→收」计收益，非成交日按「收→收」
             op = open_prices.reindex(common_idx).fillna(0.0)
@@ -276,9 +335,15 @@ class BacktestAnalysisService:
                 index=common_idx,
                 columns=common_cols,
             )
-            strategy_returns = (positions * eff).sum(axis=1) - costs
+            strategy_returns = (
+                (positions * eff).sum(axis=1) - costs
+                + pd.Series(delisting_pnl, index=common_idx)
+            )
         else:
-            strategy_returns = (positions * price_returns).sum(axis=1) - costs
+            strategy_returns = (
+                (positions * price_returns).sum(axis=1) - costs
+                + pd.Series(delisting_pnl, index=common_idx)
+            )
 
         # 净值曲线
         equity_curve = (1 + strategy_returns).cumprod() * initial_capital
@@ -294,6 +359,8 @@ class BacktestAnalysisService:
             "stamp_costs": stamp_costs,
             "cost_summary": cost_summary,
             "assumptions": assumptions,
+            "delisting_events": delisting_events,
+            "delisting_pnl": pd.Series(delisting_pnl, index=common_idx),
             "initial_capital": initial_capital,
         }
 
@@ -576,7 +643,7 @@ class BacktestAnalysisService:
                 "所选因子均无法求值（" + "；".join(f"{x['factor_name']}: {x['error']}" for x in failed[:3]) + "）"
             )
 
-        return_data = close.pct_change()
+        return_data = market_data.build_return_panel(close)
         combined: pd.DataFrame
         weights: dict[str, float] | None = None
         weight_series: dict[str, pd.Series] | None = None
@@ -618,19 +685,42 @@ class BacktestAnalysisService:
         signals = signals.fillna(0.0)
 
         reference = market_data.load_reference_panels(close, panels.get("volume"))
-        # 空头可融券过滤：QMT 两融标的池快照存在时自动应用（A 股仅两融池可做空）
+        # 空头可融券过滤：两融标的池逐日 as-of 快照存在时应用（A 股仅两融池可做空）；
+        # 只有最新快照时用最新池回填全部区间并在 assumptions 明示幸存者偏差
         shortable = None
+        shortable_assumption: str | None = None
         try:
             from backend.services import reference_data
 
-            margin_pool = reference_data.load_universe_pool("margin")
-            if margin_pool:
-                shortable = pd.DataFrame(
-                    True, index=close.index, columns=close.columns
+            pool_mask = reference_data.load_universe_pool_mask(
+                "margin", close.index
+            )
+            if pool_mask is not None:
+                # 早于首次快照的日期用首次快照成分（as-of 口径下最合理的回退）
+                known = pool_mask.ffill()
+                if known.notna().any().any():
+                    first_known_row = known[known.notna().any(axis=1)].iloc[0]
+                    pool_mask = known.fillna(first_known_row).astype(bool)
+                shortable = pool_mask.reindex(
+                    index=close.index, columns=close.columns
+                ).fillna(False)
+                shortable_assumption = (
+                    "空头可融券过滤：两融池按逐日 as-of 快照（早于首次快照的区间"
+                    "回退到首次快照成分，成分变更历史仍可能缺失）"
                 )
-                for c in close.columns:
-                    if c not in margin_pool:
-                        shortable[c] = False
+            else:
+                margin_pool = reference_data.load_universe_pool("margin")
+                if margin_pool:
+                    shortable = pd.DataFrame(
+                        True, index=close.index, columns=close.columns
+                    )
+                    for c in close.columns:
+                        if c not in margin_pool:
+                            shortable[c] = False
+                    shortable_assumption = (
+                        "空头可融券过滤：两融池为最新快照回填全部区间（幸存者偏差："
+                        "早于快照日的成分可能不同，请导入历史两融快照消除）"
+                    )
         except Exception:
             shortable = None
         result = self.run_backtest(
@@ -656,6 +746,12 @@ class BacktestAnalysisService:
         strategy_returns = result["strategy_returns"]
         tear = self.performance_tear_sheet(returns=strategy_returns)
         dd = self.drawdown_analysis(strategy_returns)
+
+        # 两融池口径假设并入 assumptions（若本次回测未触发）
+        if shortable_assumption and not any(
+            "空头可融券过滤" in a for a in result["assumptions"]
+        ):
+            result["assumptions"].append(shortable_assumption)
 
         # 风格归因（失败不阻断主结果）
         attribution: dict | None = None
@@ -709,6 +805,7 @@ class BacktestAnalysisService:
             "cost_summary": result["cost_summary"],
             "attribution": attribution,
             "assumptions": result["assumptions"],
+            "delisting_events": result.get("delisting_events", []),
             "n_stocks": int(close.shape[1]),
             "data_date": str(close.index[-1])[:10],
         }
@@ -786,7 +883,7 @@ class BacktestAnalysisService:
                 "所选因子均无法求值（" + "；".join(f"{x['factor_name']}: {x['error']}" for x in failed[:3]) + "）"
             )
 
-        return_data = close.pct_change()
+        return_data = market_data.build_return_panel(close)
         dates = close.index
         n = len(dates)
 

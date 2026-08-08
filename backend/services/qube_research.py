@@ -14,6 +14,7 @@ import json
 import time
 import uuid
 
+import pandas as pd
 from loguru import logger
 
 from backend.database import get_db
@@ -216,9 +217,13 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
 
         factor = await asyncio.to_thread(_eval_factor)
 
-        # 4 → 5. returns：远期收益
+        # 4 → 5. returns：远期收益（前向填充口径：复牌跳空收益计入）
         await stage(4)
-        returns = await asyncio.to_thread(lambda: close.pct_change())
+        from backend.services import market_data
+
+        returns = await asyncio.to_thread(
+            lambda: market_data.build_return_panel(close)
+        )
 
         # 5 → 6. grouping → 7. analysis → 8. summary：完整分析
         await stage(5)
@@ -340,6 +345,7 @@ DEFAULT_BACKTEST_PARAMS = {
     "trailing_stop": 0.0,
     "frequency": "1d",
     "stock_pool": [],
+    "delisting_loss": 0.0,  # 数据提前截止标的的强制清算折价（0=按末日价全额变现）
 }
 
 
@@ -450,20 +456,33 @@ async def execute_backtest_run(run_id: str) -> dict:
         stop_loss = float(params.get("stop_loss") or 0.0)
         trailing_stop = float(params.get("trailing_stop") or 0.0)
         normalize = str(params.get("normalize") or "none")
-        # 空头可融券过滤：本地有两融标的池快照时自动应用
+        delisting_loss = float(params.get("delisting_loss") or 0.0)
+        # 空头可融券过滤：两融标的池逐日 as-of 快照存在时应用（A 股仅两融池可做空）
         shortable = None
         if normalize == "dollar_neutral":
             try:
                 from backend.services import reference_data
 
-                margin_pool = reference_data.load_universe_pool("margin")
-                if margin_pool:
-                    shortable = pd.DataFrame(
-                        True, index=prices.index, columns=prices.columns
-                    )
-                    for c in prices.columns:
-                        if c not in margin_pool:
-                            shortable[c] = False
+                pool_mask = reference_data.load_universe_pool_mask(
+                    "margin", prices.index
+                )
+                if pool_mask is not None:
+                    known = pool_mask.ffill()
+                    if known.notna().any().any():
+                        first_known_row = known[known.notna().any(axis=1)].iloc[0]
+                        pool_mask = known.fillna(first_known_row).astype(bool)
+                    shortable = pool_mask.reindex(
+                        index=prices.index, columns=prices.columns
+                    ).fillna(False)
+                else:
+                    margin_pool = reference_data.load_universe_pool("margin")
+                    if margin_pool:
+                        shortable = pd.DataFrame(
+                            True, index=prices.index, columns=prices.columns
+                        )
+                        for c in prices.columns:
+                            if c not in margin_pool:
+                                shortable[c] = False
             except Exception:
                 shortable = None
         result = await asyncio.to_thread(
@@ -484,6 +503,7 @@ async def execute_backtest_run(run_id: str) -> dict:
                 take_profit=take_profit,
                 stop_loss=stop_loss,
                 trailing_stop=trailing_stop,
+                delisting_loss=delisting_loss,
             )
         )
         for a in result.get("assumptions", []):
@@ -536,6 +556,8 @@ async def execute_backtest_run(run_id: str) -> dict:
                 "trade_count": len(trades),
                 "final_equity": float(equity.iloc[-1]) if len(equity) else init_balance,
                 "cost_summary": result.get("cost_summary", {}),
+                "delisting_events": result.get("delisting_events", []),
+                "n_delisting": len(result.get("delisting_events", [])),
             }
             # 明细数据量受限时只保留尾部，并显式标注截断，避免 trade_count 与明细不一致
             _TRADE_TAIL = 1000
@@ -551,6 +573,11 @@ async def execute_backtest_run(run_id: str) -> dict:
             f"夏普 {metrics.get('sharpe_ratio', 0):.2f} · "
             f"最大回撤 {metrics.get('max_drawdown', 0) * 100:.2f}% · {len(trades)} 笔交易"
         )
+        n_del = metrics.get("n_delisting") or 0
+        if n_del:
+            log_lines.append(
+                f"[WARN] {n_del} 笔持仓因数据截止被强制清算（详见 metrics.delisting_events）"
+            )
 
         # 7. complete
         await _update(

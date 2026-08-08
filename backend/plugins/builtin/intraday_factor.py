@@ -122,13 +122,16 @@ class IntradayFactorNode(BaseWorkNode):
         if input.direction == "负向":
             factor = -factor
 
-        # 日频收益面板（对次日/未来收益的 IC 口径与日频一致）
+        # 日频收益面板（对次日/未来收益的 IC 口径与日频一致；
+        # 前向填充口径：复牌日跳空收益计入）
         close = panels["close"]
         daily_close = close.groupby(close.index.normalize()).last().sort_index()
         daily_close = daily_close.reindex(factor.index, method="ffill").fillna(
             method="ffill"
         )
-        return_data = daily_close.pct_change()
+        from backend.services.market_data import build_return_panel
+
+        return_data = build_return_panel(daily_close)
 
         return IntradayFactorOutput(
             factor_data=factor,

@@ -150,7 +150,10 @@ class FactorFormulaNode(BaseWorkNode):
             )
 
         factor = _apply_direction(factor.dropna(how="all"), input.direction)
-        return_data = close.pct_change() if close is not None else None
+        # 前向填充口径（与因子研究页/回测一致）：复牌日跳空收益计入
+        return_data = (
+            market_data.build_return_panel(close) if close is not None else None
+        )
         return FactorFormulaOutput(factor_data=factor, return_data=return_data)
 
 
@@ -266,7 +269,10 @@ class FactorCodeNode(BaseWorkNode):
             )
 
         factor = _apply_direction(factor.dropna(how="all"), input.direction)
-        return_data = close.pct_change() if close is not None else None
+        # 前向填充口径（与因子研究页/回测一致）：复牌日跳空收益计入
+        return_data = (
+            market_data.build_return_panel(close) if close is not None else None
+        )
         return FactorCodeOutput(factor_data=factor, return_data=return_data)
 
 

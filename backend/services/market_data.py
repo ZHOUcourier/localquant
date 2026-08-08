@@ -7,12 +7,14 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
+from backend.config import settings
 from backend.data.cache import DataCache
 from backend.data.converter import normalize_kline_fields, normalize_timestamp
 from backend.data.qmt_client import QMTClient
@@ -156,6 +158,57 @@ def list_cached_codes(period: str = "1d") -> list[str]:
         else:
             codes.append(stem)
     return codes
+
+
+# ── 退市 / 历史代码清单 ─────────────────────────────────────
+#
+# QMT 的「沪深A股」板块只含当前在册成分，退市股从不会进入批量下载，
+# 全市场研究链路（因子 IC / 回测）因此存在系统性幸存者偏差。
+# 本清单让研究员手工维护「退市/历史代码」，批量下载时自动并入，
+# 使退市股历史行情进入缓存与后续研究。QMT 对多数退市代码仍保留历史 K 线。
+
+DELISTED_FILE = settings.cache_dir / "delisted_codes.json"
+
+
+def load_delisted_codes() -> list[str]:
+    """读取本地维护的「退市/历史代码清单」（JSON: {"codes": [...], "updated_at": ...}）"""
+    if not DELISTED_FILE.exists():
+        return []
+    try:
+        data = json.loads(DELISTED_FILE.read_text("utf-8"))
+        return sorted({str(c).strip() for c in data.get("codes", []) if str(c).strip()})
+    except Exception as e:
+        logger.warning(f"读取退市代码清单失败 {DELISTED_FILE}: {e}")
+        return []
+
+
+def save_delisted_codes(codes: list[str]) -> list[str]:
+    """保存「退市/历史代码清单」，返回归一化后的代码列表"""
+    cleaned = sorted({str(c).strip() for c in codes if str(c).strip()})
+    import time as _time
+
+    DELISTED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DELISTED_FILE.write_text(
+        json.dumps(
+            {"codes": cleaned, "updated_at": _time.strftime("%Y-%m-%d %H:%M:%S")},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        "utf-8",
+    )
+    logger.info(f"退市/历史代码清单已保存：{len(cleaned)} 只")
+    return cleaned
+
+
+def merge_delisted_codes(codes: list[str]) -> list[str]:
+    """把「退市/历史代码清单」并入待下载列表（去重保序）"""
+    seen = set(codes)
+    merged = list(codes)
+    for c in load_delisted_codes():
+        if c not in seen:
+            merged.append(c)
+            seen.add(c)
+    return merged
 
 
 def _load_single(code: str, period: str, adjust: str = "qfq") -> pd.DataFrame | None:
@@ -337,6 +390,17 @@ def panel_to_dict(panel: pd.DataFrame) -> dict:
     return result
 
 
+def build_return_panel(close: pd.DataFrame) -> pd.DataFrame:
+    """基于最近可用收盘价前向填充的日收益面板（index=日期, columns=股票）
+
+    原始 `close.pct_change()` 在停牌/数据缺口处产生 NaN，若直接 fillna(0)，
+    复牌/恢复交易日的跳空涨跌（停牌期间积累的信息）会被整段丢弃，
+    回测与 IC 会系统性低估波动与损失。先用最近可用收盘价前向填充再算收益：
+    停牌期间收益为 0（持仓冻结，正确），复牌日计入跳空（真实 P&L）。
+    """
+    return close.ffill().pct_change().fillna(0.0)
+
+
 def build_cross_section_mask(
     panels: dict,
     min_list_days: int = 20,
@@ -345,9 +409,11 @@ def build_cross_section_mask(
     """构建每日「可交易」掩码（True=可交易），供因子 IC/分层截面过滤。
 
     规则组合（任一为 False 即排除）:
-      - 停牌: 成交量=0 / 缺数据
-      - ST: 最新合约名称含 ST（referrence instrument 快照）
-      - 次新股: 上市日距今 < min_list_days（缺 instrument 时不排除）
+      - 停牌: 成交量=0 / 缺数据（逐日判定）
+      - ST: 逐日 as-of 状态（instrument 快照从快照日起生效并前向填充；
+            早于首次快照的日期无 ST 信息 → 不排除，避免把「现在的 ST」套到历史截面）
+      - 次新股: 逐日判定（T 距上市日 < min_list_days 的截面剔除，
+            而非按面板末日一刀切；早于上市日的日期天然缺数据，无需处理）
 
     Returns:
         DataFrame(index=date, columns=code)，无可判定信息时返回 None
@@ -355,7 +421,7 @@ def build_cross_section_mask(
     close = panels.get("close")
     if close is None or close.empty:
         return None
-    mask = pd.DataFrame(True, index=close.index, columns=close.columns, dtype=float)
+    mask = pd.DataFrame(True, index=close.index, columns=close.columns, dtype=bool)
 
     # 停牌（成交量>0 才可交易）
     volume = panels.get("volume")
@@ -367,13 +433,9 @@ def build_cross_section_mask(
         try:
             from backend.services import reference_data
 
-            inst = reference_data.load_instrument_frame()
-            if inst is not None and not inst.empty:
-                names = inst["name"].fillna("").str.upper()
-                st_codes = set(names[names.str.contains("ST")].index)
-                for c in st_codes:
-                    if c in mask.columns:
-                        mask[c] = False
+            st_status = reference_data.build_st_status(close.index, close.columns)
+            if st_status is not None:
+                mask = mask & ~st_status
         except Exception:
             pass
 
@@ -383,17 +445,26 @@ def build_cross_section_mask(
 
             inst = reference_data.load_instrument_frame()
             if inst is not None and "list_date" in inst.columns:
-                now = close.index[-1]
-                for code, row in inst.iterrows():
-                    ld = row.get("list_date")
-                    if not ld or code not in mask.columns:
-                        continue
-                    try:
-                        ld = pd.to_datetime(str(ld))
-                        if (now - ld).days < min_list_days:
-                            mask[code] = False
-                    except Exception:
-                        continue
+                lds = {
+                    c: pd.to_datetime(str(v)).date()
+                    for c, v in inst["list_date"].dropna().items()
+                    if c in mask.columns
+                }
+                if lds:
+                    cols = list(lds.keys())
+                    day_arr = close.index.values.astype("datetime64[D]")[:, None]
+                    ld_arr = np.array(
+                        [np.datetime64(lds[c]) for c in cols], dtype="datetime64[D]"
+                    )[None, :]
+                    since_days = (day_arr - ld_arr).astype("int64")
+                    newborn = pd.DataFrame(
+                        since_days < min_list_days, index=close.index, columns=cols
+                    )
+                    # 补齐全列（无上市日信息的股票不参与次新判定，保持可交易）
+                    newborn = newborn.reindex(
+                        index=close.index, columns=mask.columns, fill_value=False
+                    )
+                    mask = mask & ~newborn
         except Exception:
             pass
 

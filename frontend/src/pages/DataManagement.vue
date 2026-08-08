@@ -274,6 +274,57 @@ async function runUpdateCached() {
   }
 }
 
+// ── 退市/历史代码清单（消除全市场研究幸存者偏差） ────────
+
+const delistedText = ref('')
+const delistedCount = ref(0)
+const delistedSaved = ref(false)
+const delistedError = ref('')
+
+const { data: delistedData } = useQuery<{ codes: string[]; count: number }>({
+  queryKey: ['data-delisted'],
+  queryFn: () => fetch('/api/data/delisted').then((r) => r.json()),
+  staleTime: 60_000,
+})
+watch(
+  delistedData,
+  (d) => {
+    if (d) {
+      delistedText.value = d.codes.join(', ')
+      delistedCount.value = d.count
+    }
+  },
+  { immediate: true },
+)
+
+const delistedMutation = useMutation({
+  mutationFn: async () => {
+    const codes = delistedText.value
+      .split(/[\s,，;；]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const res = await fetch('/api/data/delisted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codes }),
+    })
+    const body = await res.json().catch(() => null)
+    if (!res.ok) {
+      throw new Error(body?.detail?.message ?? body?.detail ?? `接口错误 (HTTP ${res.status})`)
+    }
+    return body as { codes: string[]; count: number }
+  },
+  onSuccess: (d) => {
+    delistedCount.value = d.count
+    delistedSaved.value = true
+    delistedError.value = ''
+    setTimeout(() => (delistedSaved.value = false), 3000)
+  },
+  onError: (e) => {
+    delistedError.value = e instanceof Error ? e.message : '保存失败'
+  },
+})
+
 // ── 覆盖度与参考数据 ──────────────────────────────────
 
 const { data: coverageData, refetch: refetchCoverage } = useQuery<{
@@ -673,6 +724,31 @@ const provenanceColumns: Column[] = [
           >
             {{ batch.error }}
           </div>
+        </div>
+      </Card>
+    </div>
+
+    <!-- 退市/历史代码清单（消除幸存者偏差） -->
+    <div class="mt-4">
+      <Card title="退市 / 历史代码清单">
+        <p class="mb-2 text-xs text-[#646262]">
+          QMT 的「沪深A股」板块只含<b class="text-[#ff9f0a]">当前在册成分</b>——退市股不会出现在板块里，
+          全市场因子 IC / 回测因此系统性偏向「今天还活着的股票」。在此维护退市/历史代码，
+          批量下载全市场板块时<b>自动并入</b>；QMT 对多数退市代码仍保留历史 K 线，
+          补齐后回测对数据提前截止的持仓按强制清算处理（末日价 ×(1-delisting_loss)）。
+          已维护 {{ delistedCount }} 只。
+        </p>
+        <Input
+          v-model="delistedText"
+          placeholder="600005.SH, 000013.SZ, 300372.SZ …（逗号/空格/换行分隔）"
+        />
+        <div class="mt-2 flex items-center gap-3">
+          <Button variant="primary" size="sm" :disabled="delistedMutation.isPending.value" @click="delistedMutation.mutate()">
+            <Database :size="14" class="mr-1" />
+            保存清单
+          </Button>
+          <span v-if="delistedSaved" class="text-xs text-[#30d158]">已保存，下次全市场批量下载自动并入</span>
+          <span v-if="delistedError" class="text-xs text-[#ff3b30] font-mono">{{ delistedError }}</span>
         </div>
       </Card>
     </div>

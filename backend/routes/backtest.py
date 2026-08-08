@@ -1,6 +1,7 @@
 """回测路由（含回测记录 backtest_runs：8 阶段进度落库，画板/回测中心共用）"""
 
 import asyncio
+import json
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -28,8 +29,8 @@ def _backtest_sem() -> asyncio.Semaphore:
 
 
 class RunBacktestRequest(BaseModel):
-    signals: dict  # {date_str: {code: signal_value}}
-    prices: dict  # {date_str: {code: price}}
+    signals: dict  # {code: {date_str: value}}（列优先，与面板转 dict 一致）
+    prices: dict  # {code: {date_str: price}}
     initial_capital: float = 1_000_000
     commission_rate: float = 0.001
     slippage: float = 0.001
@@ -40,6 +41,7 @@ class RunBacktestRequest(BaseModel):
     trailing_stop: float = 0.0  # 移动止损比例（0=关闭）
     shortable_codes: list[str] = []  # 可融券做空标的（空=全部可做空，不过滤）
     execute_at: str = "next_close"  # next_close=信号日收盘 / tail=尾盘 / next_open=次日开盘
+    delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
 class TearSheetRequest(BaseModel):
@@ -71,6 +73,7 @@ class RunStrategyRequest(BaseModel):
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
     shortable_codes: list[str] = []  # 可融券做空标的（空=不过滤做空）
+    delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
 # ── 工具函数 ─────────────────────────────────────────────────
@@ -162,6 +165,7 @@ async def run_strategy(req: RunStrategyRequest):
             trailing_stop=req.trailing_stop,
             execute_at=req.execute_at,
             open_prices=panels.get("open") if req.execute_at == "next_open" else None,
+            delisting_loss=req.delisting_loss,
         )
         equity_curve = result["equity_curve"]
         strategy_returns = result["strategy_returns"]
@@ -191,6 +195,7 @@ async def run_strategy(req: RunStrategyRequest):
             "tear_sheet": {**tear, "max_drawdown": dd["max_drawdown"]},
             "cost_summary": result["cost_summary"],
             "assumptions": result["assumptions"],
+            "delisting_events": result.get("delisting_events", []),
         }
     except HTTPException:
         raise
@@ -231,6 +236,7 @@ async def run_backtest(req: RunBacktestRequest):
             trailing_stop=req.trailing_stop,
             shortable_mask=shortable,
             execute_at=req.execute_at,
+            delisting_loss=req.delisting_loss,
         )
 
         # 序列化
@@ -257,6 +263,7 @@ async def run_backtest(req: RunBacktestRequest):
             "initial_capital": req.initial_capital,
             "cost_summary": result["cost_summary"],
             "assumptions": result["assumptions"],
+            "delisting_events": result.get("delisting_events", []),
         }
     except Exception as e:
         logger.error(f"回测执行失败: {e}")
@@ -311,14 +318,13 @@ class PortfolioRequest(BaseModel):
     take_profit: float = 0.0
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
+    delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
 @router.post("/portfolio")
 async def portfolio_backtest(req: PortfolioRequest):
     """因子池 → 组合回测闭环：因子求值 → 合成（等权/IC加权）→ Top-N 做多 →
     回测 → 绩效 → 风格归因（研究主链路一键打通）"""
-    import json
-
     from backend.services.factor_research import extract_formula, factor_research
 
     db = await get_db()
@@ -364,6 +370,7 @@ async def portfolio_backtest(req: PortfolioRequest):
             take_profit=req.take_profit,
             stop_loss=req.stop_loss,
             trailing_stop=req.trailing_stop,
+            delisting_loss=req.delisting_loss,
         )
         # 溯源
         try:
@@ -526,6 +533,7 @@ class CreateRunRequest(BaseModel):
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
     stock_pool: list[str] = []
+    delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
 @router.post("/runs")
@@ -617,6 +625,71 @@ async def get_run(run_id: str):
         await db.close()
 
 
+@router.get("/runs/{run_id}/export")
+async def export_run(run_id: str, part: str = "equity"):
+    """导出回测结果 CSV（equity=净值曲线 / returns=日收益 / trades=交易明细 / log=日志）
+
+    研究交付与离线复核：明细数据可直接导入外部工具做二次分析。
+    """
+    from fastapi.responses import StreamingResponse
+
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM backtest_runs WHERE id = ?", (run_id,))
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="回测记录不存在")
+    if row["status"] != "done":
+        raise HTTPException(status_code=400, detail="回测尚未完成，无结果可导出")
+
+    import io
+
+    import pandas as pd
+
+    if part == "equity":
+        data = json.loads(row["equity_json"] or "[]")
+        df = pd.DataFrame(data).set_index("ts") if data else pd.DataFrame()
+        fname = f"{run_id[:8]}_equity.csv"
+    elif part == "returns":
+        eq = json.loads(row["equity_json"] or "[]")
+        if not eq:
+            df = pd.DataFrame()
+        else:
+            df = pd.DataFrame(eq).set_index("ts")
+            df["equity"] = df["equity"].astype(float)
+            df["returns"] = df["equity"].pct_change().fillna(0.0)
+        fname = f"{run_id[:8]}_returns.csv"
+    elif part == "trades":
+        data = json.loads(row["trades_json"] or "[]")
+        df = pd.DataFrame(data) if data else pd.DataFrame()
+        fname = f"{run_id[:8]}_trades.csv"
+    elif part == "log":
+        return StreamingResponse(
+            iter([(row["log_text"] or "") + "\n"]),
+            media_type="text/plain; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{run_id[:8]}_log.txt"'
+            },
+        )
+    else:
+        raise HTTPException(
+            status_code=400, detail="part 可选 equity / returns / trades / log"
+        )
+
+    def _generate():
+        buf = io.StringIO()
+        df.to_csv(buf)
+        yield buf.getvalue()
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 class WalkForwardRequest(BaseModel):
     factors: list[dict] = []  # [{factor_name, formula}]
     stock_pool: list[str] = []
@@ -633,6 +706,7 @@ class WalkForwardRequest(BaseModel):
     take_profit: float = 0.0
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
+    delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
 @router.post("/walk-forward")
@@ -659,6 +733,7 @@ async def walk_forward(req: WalkForwardRequest):
             take_profit=req.take_profit,
             stop_loss=req.stop_loss,
             trailing_stop=req.trailing_stop,
+            delisting_loss=req.delisting_loss,
         )
         return result
     except ValueError as e:

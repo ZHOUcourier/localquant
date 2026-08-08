@@ -66,6 +66,51 @@ def _append_dedup(name: str, new_rows: pd.DataFrame, keys: list[str]):
     combined.to_parquet(_path(name), index=False)
 
 
+def import_reference_snapshot(kind: str, snapshot_date: str, df: pd.DataFrame) -> int:
+    """导入历史参考数据快照（as-of 指定日期），追加去重落盘
+
+    用途：QMT 只能给「当前」成分/行业/名称/两融池，历史 as-of 状态（如
+    2015 年沪深300 成分、历史上曾 ST 的名称）无法从行情源回溯。研究员可从
+    其他已核验来源整理历史快照并在此导入，使 as-of 研究链路（指数成分重建、
+    ST 逐日过滤、两融池逐日掩码）能覆盖历史区间。
+
+    Args:
+        kind: constituents（列 index_name, code）| industry（code, industry）|
+              instrument（code, name[, list_date]）| margin（code[, pool]）
+        snapshot_date: 该快照对应的 as-of 日期（YYYY-MM-DD）
+        df: 快照内容（含列头）
+
+    Returns:
+        落盘行数
+    """
+    ds = str(pd.Timestamp(snapshot_date).date())
+    if kind == "constituents":
+        rows = df[["index_name", "code"]].copy()
+        rows["date"] = ds
+        _append_dedup(_CONSTITUENTS_FILE, rows, ["date", "index_name", "code"])
+    elif kind == "industry":
+        rows = df[["code", "industry"]].copy()
+        rows["date"] = ds
+        _append_dedup(_INDUSTRY_FILE, rows, ["date", "code"])
+    elif kind == "instrument":
+        rows = df[["code", "name"]].copy()
+        for col in ("list_date", "up_stop", "down_stop"):
+            if col in df.columns:
+                rows[col] = df[col]
+        rows["date"] = ds
+        _append_dedup(_INSTRUMENT_FILE, rows, ["date", "code"])
+    elif kind == "margin":
+        rows = df[["code"]].copy()
+        rows["pool"] = df["pool"] if "pool" in df.columns else "margin"
+        rows["date"] = ds
+        _append_dedup(_UNIVERSE_FILE, rows, ["date", "pool", "code"])
+    else:
+        raise ValueError(
+            f"未知快照类型 {kind}（可选 constituents/industry/instrument/margin）"
+        )
+    return len(rows)
+
+
 # ── 快照采集（需要 QMT 连接，仅 Windows） ─────────────────────────
 
 
@@ -225,6 +270,30 @@ def load_universe_pool(pool: str, as_of: str = "") -> set[str]:
     return set(latest["code"])
 
 
+def load_universe_pool_mask(
+    pool: str, dates
+) -> Optional[pd.DataFrame]:
+    """标的池逐日 as-of 成分掩码：True=池内（index=日期, columns=代码）
+
+    基于 universe 快照（date, pool, code）：从快照日起生效并前向填充；
+    早于首次快照的日期 → NaN（调用方决定回退策略，不得向后借用未来快照）。
+    """
+    df = _read(_UNIVERSE_FILE)
+    if df is None or df.empty:
+        return None
+    df = df[df["pool"] == pool]
+    if df.empty:
+        return None
+    snap_dates = pd.to_datetime(df["date"]).dt.normalize()
+    pivot = df.pivot_table(
+        index=snap_dates, columns="code", values="pool", aggfunc="count"
+    )
+    pivot = pivot > 0
+    target = pd.DatetimeIndex(pd.to_datetime(dates)).normalize()
+    all_dates = pd.DatetimeIndex(sorted(set(pivot.index) | set(target)))
+    aligned = pivot.reindex(all_dates).ffill().reindex(target)
+    return aligned
+
 def _parse_date(value) -> Optional[str]:
     """把 '20240101' / '2024-01-01' / datetime / epoch(ms|s) 解析为 'YYYY-MM-DD'，失败返回 None"""
     if value is None or value == "" or value == 0:
@@ -373,12 +442,43 @@ def build_turnover_panel(volume_panel, close_panel) -> Optional[pd.DataFrame]:
 
 
 def load_instrument_frame() -> Optional[pd.DataFrame]:
-    """最新合约详情：DataFrame(index=code, columns=[name, list_date, up_stop, down_stop])"""
+    """最新合约详情：DataFrame(index=code, columns=[name, list_date, up_stop, down_stop])
+
+    仅取实际存在的列（导入的历史快照可能缺 up_stop/down_stop）。
+    """
     df = _read(_INSTRUMENT_FILE)
     if df is None or df.empty:
         return None
     latest = df.sort_values("date").drop_duplicates("code", keep="last")
-    return latest.set_index("code")[["name", "list_date", "up_stop", "down_stop"]]
+    keep = [c for c in ("name", "list_date", "up_stop", "down_stop") if c in latest.columns]
+    return latest.set_index("code")[keep]
+
+
+def build_st_status(dates, codes) -> Optional[pd.DataFrame]:
+    """逐日 as-of ST 状态：True=ST（index=日期, columns=代码）
+
+    基于 instrument 快照（date, code, name）：ST 状态从「含 ST 名称的快照日」起
+    生效并前向填充——今天才快照到的 *ST 名称不会倒灌到 2015 年截面（避免用未来
+    信息）；早于首次快照的日期无 ST 信息 → False（不排除，调用方用 assumptions
+    明示该局限）。代码从未出现于快照 → False。
+    """
+    df = _read(_INSTRUMENT_FILE)
+    if df is None or df.empty or "name" not in df.columns:
+        return None
+    snap = df[["date", "code", "name"]].copy()
+    snap["is_st"] = snap["name"].fillna("").str.upper().str.contains("ST")
+    snap_dates = pd.to_datetime(snap["date"]).dt.normalize()
+    pivot = snap.pivot_table(
+        index=snap_dates, columns="code", values="is_st", aggfunc="any"
+    )
+    if pivot.empty:
+        return None
+    pivot = pivot.reindex(columns=codes)
+    target = pd.DatetimeIndex(pd.to_datetime(dates)).normalize()
+    all_dates = pd.DatetimeIndex(sorted(set(pivot.index) | set(target)))
+    aligned = pivot.reindex(all_dates).ffill().reindex(target)
+    # nullable boolean 填充：避免 object dtype 隐式 downcast 警告
+    return aligned.astype("boolean").fillna(False).astype(bool)
 
 
 # ── 派生面板（可交易掩码 / 涨跌停近似价） ─────────────────────────
@@ -406,15 +506,23 @@ def build_limit_prices(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """涨跌停近似价：昨收 ×(1±板块幅度)，四舍五入至分
 
-    历史涨跌停价 QMT 不提供，按板归类近似；ST 状态取自最新合约名称快照，
-    历史上曾 ST 的区间无法还原（作为 assumption 明示）。
+    幅度：ST 5%（逐日 as-of 状态，instrument 快照生效日起）、创业/科创 20%、
+    北交所 30%、主板 10%。历史涨跌停价 QMT 不提供，按板归类近似；
+    早于首次快照的区间无 ST 状态 → 按非 ST 幅度（调用方以 assumptions 明示）。
     """
-    inst = load_instrument_frame()
-    names = inst["name"].to_dict() if inst is not None else {}
-    prev_close = close_panel.shift(1)
-    pcts = pd.Series(
-        {c: limit_pct_for_code(c, names.get(c, "")) for c in close_panel.columns}
+    base_pcts = pd.Series(
+        {c: limit_pct_for_code(c, "") for c in close_panel.columns}
     )
+    pcts = pd.DataFrame(
+        np.tile(base_pcts.to_numpy(), (len(close_panel), 1)),
+        index=close_panel.index,
+        columns=close_panel.columns,
+        dtype=float,
+    )
+    st_status = build_st_status(close_panel.index, close_panel.columns)
+    if st_status is not None:
+        pcts[st_status] = 0.05
+    prev_close = close_panel.shift(1)
     up = (prev_close * (1 + pcts)).round(2)
     down = (prev_close * (1 - pcts)).round(2)
     return up, down

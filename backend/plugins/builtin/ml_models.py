@@ -131,7 +131,9 @@ def _build_factor_panel(
             index=date_col, columns=code_col, values="close", aggfunc="last"
         )
         close.index = pd.to_datetime(close.index)
-        return_data = close.sort_index().pct_change()
+        from backend.services.market_data import build_return_panel
+
+        return_data = build_return_panel(close.sort_index())
     return panel, return_data
 
 

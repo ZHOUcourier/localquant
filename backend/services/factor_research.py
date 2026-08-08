@@ -952,14 +952,18 @@ class FactorResearchService:
         ic_window: int,
         min_window: int = 20,
     ) -> tuple[dict[str, pd.Series], dict[str, pd.Series]]:
-        """逐日滚动 RankIC 权重（样本外口径）：T 日权重只用 (T-window, T] 的信息
+        """逐日滚动 RankIC 权重（样本外口径，无前视）：T 日权重只用 (T-window, T) 的信息
 
         对每个因子先算逐日 RankIC（T 日因子 vs T+1 日收益），再做滚动均值；
+        **IC[T] 需要 T+1 日收益才能算出，因此在 T 日不可得**——权重必须用
+        IC 序列 shift(1) 后的滚动均值（只用 ≤ T-1 的 IC），否则当日权重会用上
+        自己即将赚到的收益（1 日前视，组合收益虚高）。
         T 日截面权重 = |滚动IC| 归一、符号对齐方向；窗口样本不足时权重为 NaN。
 
         Returns:
             (weights, ic_series): {name: Series(index=date, 权重)} 与
-            {name: Series(index=date, 滚动 RankIC)}（研究展示用）
+            {name: Series(index=date, 滚动 RankIC, 仅展示用——含当日 IC，
+            为样本内诊断量，不等同于可用权重)}
         """
         if return_data is None or return_data.empty:
             raise ValueError(
@@ -980,7 +984,10 @@ class FactorResearchService:
                 if len(common) > 10:
                     vals[dates[i]] = f[common].rank().corr(r[common].rank())
             s = pd.Series(vals).sort_index()
-            ics[name] = s.rolling(ic_window, min_periods=min_window).mean()
+            # 关键：shift(1) 剔除当日 IC（当日 IC 需要次日收益，T 日不可得）
+            ics[name] = s.shift(1).rolling(
+                ic_window, min_periods=min_window
+            ).mean()
 
         out_w: dict[str, pd.Series] = {}
         out_ic: dict[str, pd.Series] = {}
@@ -1310,7 +1317,7 @@ class FactorResearchService:
                 factor_df = factor_df.to_frame()
             if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
                 return {"ok": False, "message": "公式未产出有效因子面板"}
-            return_data = close.pct_change()
+            return_data = market_data.build_return_panel(close)
             mask = None
             try:
                 from backend.services.market_data import build_cross_section_mask
@@ -1441,7 +1448,7 @@ class FactorResearchService:
                 factor_df = factor_df.to_frame()
             if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
                 return {"ok": False, "message": "公式未产出有效因子面板"}
-            return_data = close.pct_change()
+            return_data = market_data.build_return_panel(close)
             mask = None
             try:
                 from backend.services.market_data import build_cross_section_mask
@@ -1481,6 +1488,7 @@ class FactorResearchService:
     ) -> dict:
         """分钟公式在本地 5m 分钟缓存上求值（清洗 → 求值 → 折叠日频）"""
         try:
+            from backend.services import market_data
             from backend.services.intraday_cleaner import load_intraday_panels
             from backend.services.intraday_operators import (
                 ID_LAST,
@@ -1517,7 +1525,7 @@ class FactorResearchService:
             daily_close = daily_close.reindex(factor_df.index, method="ffill").fillna(
                 method="ffill"
             )
-            return_data = daily_close.pct_change()
+            return_data = market_data.build_return_panel(daily_close)
             mask = None
             return {
                 "ok": True,
@@ -1735,7 +1743,7 @@ class FactorResearchService:
                 ns.update({f"FUND_{f.upper()}": p for f, p in fund.items()})
         except Exception:
             pass
-        return_data = panels["close"].pct_change()
+        return_data = market_data.build_return_panel(panels["close"])
         mask = None
         try:
             mask = market_data.build_cross_section_mask(panels)
@@ -1766,7 +1774,10 @@ class FactorResearchService:
                         factor_df.index, method="ffill"
                     ).ffill()
                     metrics = self._scan_factor_metrics(
-                        factor_df.dropna(how="all"), daily_close.pct_change(), periods, None
+                        factor_df.dropna(how="all"),
+                        market_data.build_return_panel(daily_close),
+                        periods,
+                        None,
                     )
                     return {
                         **item,

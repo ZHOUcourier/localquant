@@ -4,6 +4,7 @@ import time
 from typing import Optional
 
 import httpx
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
@@ -45,6 +46,31 @@ class FundamentalSnapshotRequest(BaseModel):
     """财务数据快照（公告日点位，防前视）"""
 
     codes: list[str] = []  # 空=自动取已缓存品种
+
+
+class DelistedCodesRequest(BaseModel):
+    """退市/历史代码清单（保存即覆盖）"""
+
+    codes: list[str] = []
+
+
+class ReferenceImportRequest(BaseModel):
+    """历史参考快照导入（as-of 指定日期，追加去重）
+
+    QMT 只能提供「当前」成分/行业/名称/两融池，历史 as-of 状态（2015 年
+    沪深300 成分、历史上曾 ST 的名称等）无法从行情源回溯。研究员可从已核验
+    来源整理历史快照后导入，使 as-of 研究链路覆盖历史区间。
+
+    csv 列约定（含列头）:
+      constituents: index_name, code
+      industry:     code, industry
+      instrument:   code, name(, list_date)
+      margin:       code(, pool)
+    """
+
+    kind: str
+    date: str
+    csv: str
 
 
 @router.post("/snapshot-fundamental")
@@ -202,6 +228,10 @@ _SSE_HEADERS = {
 async def download_batch(req: BatchDownloadRequest):
     """批量下载行情（SSE 逐只进度）：板块/指数展开或代码列表
 
+    若目标为全市场板块（如「沪深A股」），自动并入本地「退市/历史代码清单」
+    （QMT 板块只含当前在册成分，退市股需手工维护清单才进得了缓存，
+    否则全市场研究存在系统性幸存者偏差）。
+
     SSE 事件：batch_start / symbol_complete / symbol_failed /
             reference_saved / batch_complete / batch_failed
     """
@@ -215,9 +245,16 @@ async def download_batch(req: BatchDownloadRequest):
     if not codes:
         raise HTTPException(status_code=400, detail="未指定板块或代码列表")
 
+    merged = market_data.merge_delisted_codes(codes)
+    if len(merged) > len(codes):
+        logger.info(
+            f"批量下载并入退市/历史代码清单：{len(merged) - len(codes)} 只"
+            f"（{', '.join(merged[len(codes):][:5])}{'…' if len(merged) > len(codes) + 5 else ''}）"
+        )
+
     return StreamingResponse(
         data_download.batch_download_stream(
-            codes,
+            merged,
             period=req.period,
             start_date=req.start_date,
             end_date=req.end_date,
@@ -226,6 +263,47 @@ async def download_batch(req: BatchDownloadRequest):
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
+
+
+@router.get("/delisted")
+async def get_delisted():
+    """读取本地「退市/历史代码清单」（供研究员维护，全市场下载自动并入）"""
+    codes = market_data.load_delisted_codes()
+    return {"codes": codes, "count": len(codes)}
+
+
+@router.post("/delisted")
+async def set_delisted(req: DelistedCodesRequest):
+    """保存「退市/历史代码清单」（整体覆盖）；批量下载全市场板块时自动并入"""
+    cleaned = market_data.save_delisted_codes(req.codes)
+    return {"codes": cleaned, "count": len(cleaned)}
+
+
+@router.post("/import-reference")
+async def import_reference(req: ReferenceImportRequest):
+    """导入历史参考快照（as-of 日期），供指数成分重建/ST 逐日过滤/两融池逐日掩码
+
+    参考数据是「管理性元数据」（成分归属/名称/行业/两融池），非行情来源：
+    行情数据仍只来自 QMT。返回本次落盘行数。
+    """
+    import io
+
+    try:
+        df = pd.read_csv(io.StringIO(req.csv), dtype=str)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"CSV 解析失败: {e}")
+    if df.empty:
+        raise HTTPException(status_code=400, detail="CSV 内容为空")
+    try:
+        rows = await run_in_threadpool(
+            reference_data.import_reference_snapshot, req.kind, req.date, df
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"参考快照导入失败: {e}")
+        raise HTTPException(status_code=500, detail=f"参考快照导入失败: {e}")
+    return {"ok": True, "kind": req.kind, "date": req.date, "rows": rows}
 
 
 @router.post("/update-cached")

@@ -1110,6 +1110,22 @@ def build_operator_namespace(
         "KDJ_J": KDJ_J,
         "OBV": OBV,
     }
+    # 线程安全：INDUSTRY_NEUTRALIZE 捕获本次命名空间的行业映射，不依赖模块级
+    # 全局 _ACTIVE_INDUSTRY_MAP（并发批量扫描/工作流各用各的行业映射，互相污染
+    # 会导致行业中性化静默用错分类）；无行业数据时显式报错而非回退共享全局
+    captured_map = industry_map
+
+    def _neutralize_captured(x, industry_map=None):
+        if industry_map is None:
+            if captured_map is None:
+                raise ValueError(
+                    "INDUSTRY_NEUTRALIZE 需要行业分类数据 — "
+                    "请先在「数据管理」页下载数据以采集行业快照"
+                )
+            industry_map = captured_map
+        return INDUSTRY_NEUTRALIZE(x, industry_map)
+
+    operators["INDUSTRY_NEUTRALIZE"] = _neutralize_captured
     for name, fn in operators.items():
         ns[name] = fn
         ns[name.lower()] = fn  # 小写别名（Alpha191 公式多为小写）

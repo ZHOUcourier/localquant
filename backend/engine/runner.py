@@ -52,6 +52,35 @@ def _consume_cancel(run_id: str) -> bool:
 # 节点级输出缓存（对标 ComfyUI 输出复用）
 # ---------------------------------------------------------------------------
 
+# 数据缓存版本（TTL 内复用，避免每节点 rglob 全量扫描）：下载/更新行情或
+# 参考数据后，节点缓存必须失效——否则「因子构建/回测」节点会命中旧数据的
+# 缓存结果，研究员以为在跑新数据、实际在看旧结果
+_data_version_cache: dict = {"ts": 0.0, "version": ""}
+_DATA_VERSION_TTL = 30.0
+
+
+def _data_cache_version(ttl: float = _DATA_VERSION_TTL) -> str:
+    """本地数据缓存版本：最新 parquet mtime + 文件数（含 reference 参考数据）"""
+    now = time.time()
+    if ttl > 0 and now - _data_version_cache["ts"] < ttl:
+        return _data_version_cache["version"]
+    cache_dir = settings.cache_dir
+    latest = 0.0
+    count = 0
+    try:
+        for p in cache_dir.rglob("*.parquet"):
+            count += 1
+            try:
+                latest = max(latest, p.stat().st_mtime)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    version = f"v{int(latest)}-{count}"
+    _data_version_cache["ts"] = now
+    _data_version_cache["version"] = version
+    return version
+
 
 def _stable_hash(obj: Any) -> str:
     """对任意对象求稳定哈希：优先 JSON（顺序无关），回退 pickle"""
@@ -67,12 +96,15 @@ def _stable_hash(obj: Any) -> str:
 
 
 def _compute_cache_key(node_name: str, merged_input: dict[str, Any]) -> str:
-    """节点缓存键 = 节点类名 + 合并输入（含静态参数与上游输出）的内容哈希
+    """节点缓存键 = 节点类名 + 合并输入（含静态参数与上游输出）的内容哈希 + 数据版本
 
     合并输入已包含代码/公式文本（在 static_input_data 中）与上游输出内容，
-    故代码类节点改代码即失效、上游变化即失效。
+    故代码类节点改代码即失效、上游变化即失效；**数据版本**（行情/参考数据
+    缓存的最新 mtime + 文件数）保证重新下载/更新数据后节点缓存自动失效，
+    不会把旧数据的计算结果当成新结果。
     """
     parts: list[str] = [node_name]
+    parts.append(f"__data__={_data_cache_version()}")
     for key in sorted(merged_input.keys()):
         val = merged_input[key]
         if hasattr(val, "to_parquet"):  # DataFrame/Series：按内容 pickle 哈希

@@ -754,6 +754,108 @@ async def walk_forward(req: WalkForwardRequest):
 # ── 因子生命周期 / 拥挤度（P2）──────────────────────────────
 
 
+class ExportPanelRequest(BaseModel):
+    """因子面板导出（研究交付：离线复核/交付同事）"""
+
+    formula: str = ""
+    factor_id: int = 0  # 与 formula 二选一（优先 formula）
+    start_date: str = ""
+    end_date: str = ""
+    stock_pool: list[str] = []
+
+
+@router.post("/export-panel")
+async def export_factor_panel(req: ExportPanelRequest):
+    """导出因子值面板 CSV（index=日期, columns=股票）与前瞻收益面板
+
+    在本地缓存行情上重算因子并返回两份 CSV（factor_values.csv / return_data.csv），
+    供离线复核、交付验证与外部工具分析。返回 JSON 的 data_urls 为可直接
+    curl/浏览器下载的链接（GET /api/factor/export-file/{token}）。
+    """
+    import secrets
+
+    from backend.services.factor_research import extract_formula
+
+    formula = (req.formula or "").strip()
+    if not formula and req.factor_id:
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT description FROM preset_factors WHERE id = ?", (req.factor_id,)
+            )
+            row = await cursor.fetchone()
+        finally:
+            await db.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="因子不存在")
+        formula = extract_formula(row["description"])
+    if not formula:
+        raise HTTPException(status_code=400, detail="无可解析公式（请提供 formula 或有效的 factor_id）")
+
+    codes = req.stock_pool or market_data.list_cached_codes("1d")
+    if not codes:
+        raise HTTPException(status_code=404, detail=market_data.no_cache_error_detail("因子导出"))
+    res = await asyncio.to_thread(
+        factor_research.eval_formula_on_local, formula, req.start_date, req.end_date
+    )
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("message", "公式求值失败"))
+    factor_df = res["factor_df"]
+    return_data = res["return_data"]
+
+    token = secrets.token_hex(8)
+    from backend.services.market_data import panel_to_dict
+
+    _EXPORT_BUCKET[token] = {
+        "factor_values": panel_to_dict(factor_df),
+        "return_data": panel_to_dict(return_data),
+        "data_date": res.get("data_date"),
+        "n_stocks": int(factor_df.shape[1]),
+        "n_dates": int(factor_df.shape[0]),
+    }
+    return {
+        "ok": True,
+        "factor_id": req.factor_id,
+        "data_date": res.get("data_date"),
+        "n_stocks": int(factor_df.shape[1]),
+        "n_dates": int(factor_df.shape[0]),
+        "data_urls": {
+            "factor_values": f"/api/factor/export-file/{token}?part=factor_values",
+            "return_data": f"/api/factor/export-file/{token}?part=return_data",
+        },
+    }
+
+
+_EXPORT_BUCKET: dict[str, dict] = {}
+
+
+@router.get("/export-file/{token}")
+async def export_file(token: str, part: str = "factor_values"):
+    """下载导出的 CSV 数据（token 由 /export-panel 生成，内存暂存）"""
+    from fastapi.responses import StreamingResponse
+
+    payload = _EXPORT_BUCKET.get(token)
+    if not payload or part not in ("factor_values", "return_data"):
+        raise HTTPException(status_code=404, detail="导出数据不存在或已过期")
+    import io
+
+    df = pd.DataFrame(payload[part])
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    def _generate():
+        buf = io.StringIO()
+        df.to_csv(buf)
+        yield buf.getvalue()
+
+    fname = f"{part}.csv"
+    return StreamingResponse(
+        _generate(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @router.get("/health")
 async def factor_health(category_code: str = "", min_snapshots: int = 2):
     """因子体检：基于 IC 历史快照的生命周期阶段与 IC 趋势"""
