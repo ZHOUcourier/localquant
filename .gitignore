@@ -13,7 +13,8 @@ frontend/dist/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-# 注：.qoder/ 为故意纳管（含计划/截图），不忽略
+
+# 注：.qoder/ ,.ai-artifacts/ 为 AI 写作的中间产物，不忽略
 
 .vscode
 .opencode
