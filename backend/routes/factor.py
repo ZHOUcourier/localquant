@@ -9,7 +9,6 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel
-from pydantic import BaseModel
 
 from backend.database import get_db
 from backend.models.factor import (
@@ -20,7 +19,7 @@ from backend.models.factor import (
     NeutralizeRequest,
     QuantileRequest,
 )
-from backend.services import market_data
+from backend.services import market_data, tasks
 from backend.services.factor_research import factor_research
 
 router = APIRouter()
@@ -31,17 +30,44 @@ async def _spawn_provenance(
     entity_name: str,
     params: dict,
     metrics: dict | None = None,
+    entity_id: str = "",
+    notes: str = "",
+    source: str = "research_local",
 ):
     """后台异步落一条溯源记录，失败不阻断主请求"""
     try:
         from backend.services.provenance import record_provenance
 
         await record_provenance(
-            kind=kind, entity_name=entity_name, params=params or {}, metrics=metrics,
-            source="research_local",
+            kind=kind,
+            entity_id=entity_id,
+            entity_name=entity_name,
+            params=params or {},
+            metrics=metrics,
+            notes=notes,
+            source=source,
         )
     except Exception:
         logger.debug("因子研究溯源记录失败（非致命）", exc_info=True)
+
+
+def _align_factor_return(
+    factor_df: pd.DataFrame, return_df: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """把因子与收益面板对齐到共同的日期与股票上。
+
+    因子/收益面板可能来自不同来源（compute 接口、工作流节点、手工构造），
+    日期索引错位时 IC/分层会把「未来日期」当 NaN 匹配，产生 500/空结果。
+    统一在入口对齐：共同日期、共同股票，按日期升序。
+    """
+    common_dates = factor_df.index.intersection(return_df.index).sort_values()
+    common_codes = factor_df.columns.intersection(return_df.columns)
+    if len(common_dates) == 0 or len(common_codes) == 0:
+        raise ValueError("因子与收益面板无共同日期或共同股票，请检查输入面板")
+    return (
+        factor_df.loc[common_dates, common_codes].sort_index(),
+        return_df.loc[common_dates, common_codes].sort_index(),
+    )
 
 
 # 因子编写参考（字段 + 算子）— 供前端「变量参考」面板展示，与求值环境对齐
@@ -182,7 +208,8 @@ async def compute_factor(req: FactorComputeRequest):
     """基于本地行情数据计算因子值，同时返回远期收益供 IC/分层分析使用"""
     try:
         panels = market_data.load_price_panels(
-            codes=req.stock_pool,
+            codes=req.stock_pool
+            or market_data.list_cached_codes("1d", exclude_indices=True),
             start_date=req.start_date,
             end_date=req.end_date,
         )
@@ -276,8 +303,11 @@ async def compute_factor(req: FactorComputeRequest):
             status_code=400, detail="因子计算结果为空（可能回看期超过数据长度）"
         )
 
-    # 次日收益（T 日因子对齐 T+1 收益由 IC 分析接口内部处理）
-    returns = close.pct_change()
+    # 收益面板统一为前向填充口径（与因子研究页/工作流节点一致）：
+    # 停牌/缺口期间收益为 0，复牌日跳空收益计入。build_return_panel 保留完整
+    # 日期索引（首日为 0），再与因子面板对齐，避免日期错位产生 NaN 截面。
+    returns = market_data.build_return_panel(close)
+    factor, returns = _align_factor_return(factor, returns)
 
     return {
         "dates": [str(d.date()) for d in factor.index],
@@ -294,8 +324,9 @@ async def ic_analysis(req: ICAnalysisRequest):
         return_df = _dict_to_df(req.return_data)
         factor_df.index = pd.to_datetime(factor_df.index)
         return_df.index = pd.to_datetime(return_df.index)
+        factor_df, return_df = _align_factor_return(factor_df, return_df)
         result = factor_research.ic_analysis(factor_df, return_df, req.periods)
-        asyncio.create_task(
+        tasks.spawn(
             _spawn_provenance(
                 "factor_ic",
                 f"IC分析·periods={req.periods}",
@@ -320,8 +351,9 @@ async def quantile_analysis(req: QuantileRequest):
         return_df = _dict_to_df(req.return_data)
         factor_df.index = pd.to_datetime(factor_df.index)
         return_df.index = pd.to_datetime(return_df.index)
+        factor_df, return_df = _align_factor_return(factor_df, return_df)
         result = factor_research.quantile_analysis(factor_df, return_df, req.n_groups)
-        asyncio.create_task(
+        tasks.spawn(
             _spawn_provenance(
                 "factor_quantile",
                 f"分层分析·groups={req.n_groups}",
@@ -347,6 +379,7 @@ async def factor_decay(req: ICAnalysisRequest):
         return_df = _dict_to_df(req.return_data)
         factor_df.index = pd.to_datetime(factor_df.index)
         return_df.index = pd.to_datetime(return_df.index)
+        factor_df, return_df = _align_factor_return(factor_df, return_df)
         max_period = max(req.periods) if req.periods else 20
         return factor_research.factor_decay(factor_df, return_df, max_period)
     except Exception as e:
@@ -378,10 +411,11 @@ async def full_analysis(req: QuantileRequest):
         return_df = _dict_to_df(req.return_data)
         factor_df.index = pd.to_datetime(factor_df.index)
         return_df.index = pd.to_datetime(return_df.index)
+        factor_df, return_df = _align_factor_return(factor_df, return_df)
         res = factor_research.full_factor_analysis(
             factor_df, return_df, n_groups=req.n_groups
         )
-        asyncio.create_task(
+        tasks.spawn(
             _spawn_provenance(
                 "factor_full",
                 f"完整因子分析·groups={req.n_groups}",
@@ -650,6 +684,7 @@ class FactorScanRequest(BaseModel):
     end_date: str = ""
     periods: list[int] = [1, 5, 10, 20]
     max_workers: int = 4
+    stock_pool: list[str] = []  # 留空=全部本地股票缓存；内存不足时可分块扫描
 
 
 @router.post("/scan")
@@ -674,6 +709,7 @@ async def scan_factors(req: FactorScanRequest):
             end_date=req.end_date,
             periods=req.periods,
             max_workers=req.max_workers,
+            stock_pool=req.stock_pool,
         ),
         media_type="text/event-stream",
         headers={
@@ -792,7 +828,7 @@ async def export_factor_panel(req: ExportPanelRequest):
     if not formula:
         raise HTTPException(status_code=400, detail="无可解析公式（请提供 formula 或有效的 factor_id）")
 
-    codes = req.stock_pool or market_data.list_cached_codes("1d")
+    codes = req.stock_pool or market_data.list_cached_codes("1d", exclude_indices=True)
     if not codes:
         raise HTTPException(status_code=404, detail=market_data.no_cache_error_detail("因子导出"))
     res = await asyncio.to_thread(

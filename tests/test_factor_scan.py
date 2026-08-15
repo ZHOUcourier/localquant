@@ -145,6 +145,9 @@ class TestScanFactors:
         done = json.loads(events[-1].split("\n")[1].replace("data: ", ""))
         assert done["ok_count"] == 2
         assert done["failed"] == 0
+        # 小样本扫描必须显式给出置信度警示，而不是让用户把玩具样本当全市场结论
+        assert done.get("warnings")
+        assert any("股票" in w for w in done["warnings"])
 
         # 库内指标已覆盖更新
         conn = sqlite3.connect(db_path)

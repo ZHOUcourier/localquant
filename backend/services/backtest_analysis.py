@@ -5,6 +5,14 @@ import pandas as pd
 from loguru import logger
 
 
+def _default_equity_codes(market_data) -> list[str]:
+    """默认股票池：优先排除指数缓存；兼容测试/插件对 list_cached_codes 的 monkeypatch"""
+    try:
+        return market_data.list_cached_codes("1d", exclude_indices=True)
+    except TypeError:
+        return market_data.list_cached_codes("1d")
+
+
 class BacktestAnalysisService:
     """向量化回测与绩效分析服务"""
 
@@ -458,6 +466,8 @@ class BacktestAnalysisService:
         normalize: str = "long_only",
         participation_rate: float = 0.1,
         capital_levels: list[float] | None = None,
+        adv_window: int = 20,
+        lot_size: int = 100,
     ) -> dict:
         """容量分析：信号在给定参与率约束下可容纳的资金规模
 
@@ -500,8 +510,8 @@ class BacktestAnalysisService:
         targets = weights.shift(1).fillna(0.0)
         turnover = targets.diff().abs().fillna(0.0)  # |Δw|（首日按建仓）
 
-        # 滚动 20 日平均成交额（ADV，单位元）
-        adv = amount.rolling(20, min_periods=5).mean()
+        # 滚动平均成交额（ADV，单位元）；窗口可调，样本不足时用较短窗口
+        adv = amount.rolling(adv_window, min_periods=max(5, adv_window // 4)).mean()
 
         levels_out: list[dict] = []
         for cap in capital_levels or [1e8, 5e8, 1e9, 5e9, 1e10]:
@@ -514,8 +524,17 @@ class BacktestAnalysisService:
                 (share.any(axis=1)).mean() if len(share) else 0.0
             )
             constrained_stocks = int((exceed_days > 0).sum())
-            pvals = participation[valid].to_numpy() if valid.any().any() else None
-            mean_participation = float(pvals.mean()) if pvals is not None and pvals.size else 0.0
+            # 布尔 DataFrame 索引会保留原形状并把无效位置填 NaN（pandas 语义），
+            # 必须先取出 numpy 掩码再取值，否则 mean 恒为 NaN。
+            pvals = (
+                participation.to_numpy()[valid.to_numpy()]
+                if valid.any().any()
+                else None
+            )
+            pvals = pvals[np.isfinite(pvals)] if pvals is not None else None
+            mean_participation = (
+                float(pvals.mean()) if pvals is not None and pvals.size else 0.0
+            )
             p95 = (
                 float(np.nanpercentile(pvals, 95))
                 if pvals is not None and pvals.size
@@ -540,8 +559,19 @@ class BacktestAnalysisService:
         base_cap = 1e8
         traded_base = turnover * base_cap
         participation_base = traded_base / adv.replace(0, float("nan"))
-        pvals_base = participation_base[valid].to_numpy() if valid.any().any() else None
-        max_ratio = float(pvals_base.max()) if pvals_base is not None and pvals_base.size else 0.0
+        pvals_base = (
+            participation_base.to_numpy()[valid.to_numpy()]
+            if valid.any().any()
+            else None
+        )
+        pvals_base = (
+            pvals_base[np.isfinite(pvals_base)] if pvals_base is not None else None
+        )
+        max_ratio = (
+            float(pvals_base.max())
+            if pvals_base is not None and pvals_base.size
+            else 0.0
+        )
         # max_ratio=0 意味着基准确样本无流动性约束（如极低换手），给一个名义上限（1000 亿）
         suggested = (
             base_cap * participation_rate / max_ratio
@@ -550,12 +580,15 @@ class BacktestAnalysisService:
         )
 
         assumptions.append(
-            f"容量分析按参与率 ≤ {participation_rate:.0%} 约束，ADV 取滚动 20 日均值；"
-            "未模拟冲击成本非线性与下单执行细节"
+            f"容量分析按参与率 ≤ {participation_rate:.0%} 约束，ADV 取滚动 {adv_window} 日均值；"
+            f"A 股按 {lot_size} 股/手整手交易假设，未模拟涨跌停不可成交、"
+            "冲击成本非线性、订单簿深度与下单算法执行细节"
         )
         return {
             "ok": True,
             "participation_rate": participation_rate,
+            "adv_window": int(adv_window),
+            "lot_size": int(lot_size),
             "levels": levels_out,
             "suggested_capacity": float(suggested),
             "suggested_label": self._format_capital(float(suggested)),
@@ -576,6 +609,7 @@ class BacktestAnalysisService:
     def portfolio_backtest(
         self,
         factors: list[dict],
+        stock_pool: list[str] | None = None,
         start_date: str = "",
         end_date: str = "",
         combine_method: str = "equal",
@@ -588,6 +622,7 @@ class BacktestAnalysisService:
         stop_loss: float = 0.0,
         trailing_stop: float = 0.0,
         execute_at: str = "next_close",
+        delisting_loss: float = 0.0,
     ) -> dict:
         """因子池 → 组合回测闭环（研究主链路一键打通）
 
@@ -609,7 +644,7 @@ class BacktestAnalysisService:
         from backend.services.factor_operators import build_operator_namespace
         from backend.services.factor_research import factor_research
 
-        codes = market_data.list_cached_codes("1d")
+        codes = stock_pool or _default_equity_codes(market_data)
         if len(codes) < 30:
             raise ValueError(
                 f"本地仅 {len(codes)} 只股票缓存，不足以构建组合（至少 30 只）— "
@@ -742,6 +777,7 @@ class BacktestAnalysisService:
             trailing_stop=trailing_stop,
             execute_at=execute_at,
             open_prices=panels.get("open") if execute_at == "next_open" else None,
+            delisting_loss=delisting_loss,
         )
         strategy_returns = result["strategy_returns"]
         tear = self.performance_tear_sheet(returns=strategy_returns)
@@ -816,6 +852,7 @@ class BacktestAnalysisService:
     def walk_forward_portfolio(
         self,
         factors: list[dict],
+        stock_pool: list[str] | None = None,
         start_date: str = "",
         end_date: str = "",
         combine_method: str = "equal",
@@ -830,6 +867,7 @@ class BacktestAnalysisService:
         stop_loss: float = 0.0,
         trailing_stop: float = 0.0,
         execute_at: str = "next_close",
+        delisting_loss: float = 0.0,
     ) -> dict:
         """组合 walk-forward 回测：训练窗口定权重 → 测试窗口出信号 → 滚动拼接净值
 
@@ -849,7 +887,7 @@ class BacktestAnalysisService:
         from backend.services.factor_operators import build_operator_namespace
         from backend.services.factor_research import factor_research
 
-        codes = market_data.list_cached_codes("1d")
+        codes = stock_pool or _default_equity_codes(market_data)
         if len(codes) < 30:
             raise ValueError(
                 f"本地仅 {len(codes)} 只股票缓存，不足以构建组合（至少 30 只）— "
@@ -964,6 +1002,7 @@ class BacktestAnalysisService:
             trailing_stop=trailing_stop,
             execute_at=execute_at,
             open_prices=panels.get("open") if execute_at == "next_open" else None,
+            delisting_loss=delisting_loss,
         )
         res = self.run_backtest(signals=signals_oos, **common_kwargs)
         res_full = self.run_backtest(signals=signals_full, **common_kwargs)

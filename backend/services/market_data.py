@@ -143,8 +143,13 @@ def no_cache_error_detail(scope: str = "") -> dict:
     return {"code": "no_cached_data", "message": msg, "hint": _CACHE_GUIDE}
 
 
-def list_cached_codes(period: str = "1d") -> list[str]:
-    """列出本地缓存中指定周期的全部股票代码"""
+def list_cached_codes(period: str = "1d", exclude_indices: bool = False) -> list[str]:
+    """列出本地缓存中指定周期的全部股票代码
+
+    exclude_indices=True 时，尽量只保留股票/退市历史代码（剔除宽基指数等
+    非个股缓存）。优先以 reference/instrument.parquet 的标的清单判定；
+    快照不存在时保持原样返回（宁多勿少，避免误删可研究标的）。
+    """
     period_dir = _cache._cache_dir / period
     if not period_dir.exists():
         return []
@@ -157,7 +162,48 @@ def list_cached_codes(period: str = "1d") -> list[str]:
             codes.append(f"{code}.{market}")
         else:
             codes.append(stem)
-    return codes
+    if not exclude_indices or not codes:
+        return codes
+
+    def _is_index_like(code: str) -> bool:
+        """按代码形态识别常见宽基指数缓存（不依赖快照，宁少勿多）。
+
+        上证指数均为 000xxx.SH；深证指数为 399xxx.SZ；北证指数为 899xxx.BJ。
+        股票代码不会落在这些段位（沪市 6xx/688，深市 000/001/002/003/300/301）。
+        """
+        if code.endswith(".SH"):
+            return code.startswith("000")
+        if code.endswith(".SZ"):
+            return code.startswith("399")
+        if code.endswith(".BJ"):
+            return code.startswith("899")
+        return False
+
+    try:
+        from backend.services import reference_data
+
+        inst = reference_data.load_instrument_frame()
+        if inst is not None and not inst.empty:
+            # load_instrument_frame 返回 index=code 的 DataFrame；
+            # 历史导入文件列结构可能不同，两种形态都兼容。
+            code_values = (
+                inst.index.astype(str)
+                if "code" not in inst.columns
+                else inst["code"].astype(str)
+            )
+            known = {str(c).strip() for c in code_values.dropna()}
+            known.update(load_delisted_codes())
+            # 快照内标的肯定保留；快照外标的只剔除「代码形态可判定」的指数，
+            # 未知代码保留（可能是未维护进 instrument 快照的退市/历史标的），
+            # 避免默认股票池重新引入幸存者偏差。
+            filtered = [c for c in codes if c in known or not _is_index_like(c)]
+            if filtered:
+                return filtered
+    except Exception as e:
+        logger.debug(f"按 instrument 快照过滤股票池失败，保留全部缓存代码: {e}")
+
+    # instrument 快照缺失：仅按代码形态剔除明确指数，其余全部保留
+    return [c for c in codes if not _is_index_like(c)]
 
 
 # ── 退市 / 历史代码清单 ─────────────────────────────────────

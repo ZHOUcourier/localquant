@@ -89,6 +89,7 @@ async def research_briefing():
         "factors": None,
         "dividend_events": [],
         "data_freshness": None,
+        "research_readiness": None,
         "recent_jobs": [],
     }
 
@@ -130,6 +131,73 @@ async def research_briefing():
         briefing["data_freshness"] = market_data.data_freshness()
     except Exception:
         pass
+
+    # 4.5 研究数据就绪度：把「样本/历史/参考快照/财务/分钟」一次性讲清楚，
+    # 研究员不会拿 100 只股票的样本当成全市场结论。
+    try:
+        from backend.config import settings
+        from backend.services import fundamental, reference_data
+
+        equity_codes = market_data.list_cached_codes("1d", exclude_indices=True)
+        coverage = {
+            e["code"]: e for e in market_data.cache_coverage("1d")
+        }
+        equity_rows = [coverage[c] for c in equity_codes if c in coverage]
+        data_start = min((e["start"] for e in equity_rows if e.get("start")), default=None)
+        data_end = max((e["end"] for e in equity_rows if e.get("end")), default=None)
+        n_days = max((int(e.get("rows") or 0) for e in equity_rows), default=0)
+        ref = reference_data.reference_status()
+        ref_dates = [v["latest"] for v in ref.values() if v.get("latest")]
+        ref_latest = max(ref_dates) if ref_dates else None
+
+        blockers: list[str] = []
+        warnings: list[str] = []
+        if len(equity_codes) < 300:
+            blockers.append(
+                f"股票样本仅 {len(equity_codes)} 只（建议 ≥300），IC/分层/组合结果仅用于方法验证"
+            )
+        elif len(equity_codes) < 1000:
+            warnings.append(
+                f"股票样本 {len(equity_codes)} 只，建议全市场（≥1000）后再做正式因子筛选"
+            )
+        if n_days < 504:
+            blockers.append(
+                f"历史区间约 {n_days} 个交易日（建议 ≥504/2 年），尚不足以覆盖完整牛熊"
+            )
+        elif n_days < 756:
+            warnings.append(f"历史区间约 {n_days} 个交易日，建议补充到 3 年以上")
+        if ref_latest is None:
+            blockers.append("无参考元数据快照（行业/成分/合约），中性化与 as-of 过滤不可用")
+        elif data_end and ref_latest < str(data_end):
+            warnings.append(
+                f"参考快照最新日期 {ref_latest}，早于行情末日 {data_end}；"
+                "历史行业/成分/ST/两融状态存在静态回填偏差"
+            )
+        fund = fundamental.snapshot_status()
+        if not fund.get("ready"):
+            warnings.append("财务快照为空，fund_* 基本面因子当前不可用")
+        minute_dir = settings.cache_dir / "5m"
+        minute_files = list(minute_dir.glob("*.parquet")) if minute_dir.exists() else []
+        if not minute_files:
+            warnings.append("无分钟缓存，日内高频因子（m_*/ID_*/M_*）不可用")
+        if not market_data._qmt.connected:
+            warnings.append("QMT 未连接，行情/快照无法增量更新（仅 Windows + QMT 客户端可用）")
+
+        briefing["research_readiness"] = {
+            "ready": not blockers,
+            "n_stocks": len(equity_codes),
+            "n_days": n_days,
+            "data_start": data_start,
+            "data_end": data_end,
+            "reference_latest": ref_latest,
+            "fundamental_ready": bool(fund.get("ready")),
+            "minute_ready": bool(minute_files),
+            "qmt_connected": bool(market_data._qmt.connected),
+            "blockers": blockers,
+            "warnings": warnings,
+        }
+    except Exception:
+        briefing["research_readiness"] = {"error": "研究数据就绪度评估不可用"}
 
     # 5. 最近批处理任务
     try:

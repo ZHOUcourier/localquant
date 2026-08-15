@@ -16,6 +16,7 @@ from datetime import datetime
 from loguru import logger
 
 from backend.config import settings
+from backend.services import tasks
 
 
 def _now_ms() -> int:
@@ -182,11 +183,11 @@ async def scheduler_loop():
         if step == "market" and day not in _fired_update:
             _fired_update.add(day)
             logger.info("调度触发: 收盘行情更新")
-            asyncio.create_task(run_jobs(trigger="schedule", steps=["market"]))
+            tasks.spawn(run_jobs(trigger="schedule", steps=["market"]))
         elif step == "recalc" and day not in _fired_recalc:
             _fired_recalc.add(day)
             logger.info("调度触发: 因子池重算")
-            asyncio.create_task(run_jobs(trigger="schedule", steps=["recalc"]))
+            tasks.spawn(run_jobs(trigger="schedule", steps=["recalc"]))
         # 跨半夜清空当日标记
         if now.hour == 0 and now.minute == 0:
             day0 = datetime.now().date().isoformat()

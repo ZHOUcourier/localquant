@@ -163,9 +163,11 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
         await stage(2)
         from backend.services import market_data
 
+        pool = list(params.get("stock_pool") or [])
+        codes = pool or market_data.list_cached_codes("1d", exclude_indices=True)
         panels = await asyncio.to_thread(
             market_data.load_price_panels,
-            list(params.get("stock_pool") or []),
+            codes,
             str(params.get("period_start") or ""),
             str(params.get("period_end") or ""),
         )
@@ -345,6 +347,7 @@ DEFAULT_BACKTEST_PARAMS = {
     "trailing_stop": 0.0,
     "frequency": "1d",
     "stock_pool": [],
+    "execute_at": "next_close",  # next_close / tail / next_open（开→收计收益）
     "delisting_loss": 0.0,  # 数据提前截止标的的强制清算折价（0=按末日价全额变现）
 }
 
@@ -422,9 +425,11 @@ async def execute_backtest_run(run_id: str) -> dict:
         await stage(4)
         from backend.services import market_data
 
+        pool = list(params.get("stock_pool") or [])
+        codes = pool or market_data.list_cached_codes("1d", exclude_indices=True)
         panels = await asyncio.to_thread(
             market_data.load_price_panels,
-            list(params.get("stock_pool") or []),
+            codes,
             str(params.get("period_start") or ""),
             str(params.get("period_end") or ""),
         )
@@ -455,6 +460,7 @@ async def execute_backtest_run(run_id: str) -> dict:
         take_profit = float(params.get("take_profit") or 0.0)
         stop_loss = float(params.get("stop_loss") or 0.0)
         trailing_stop = float(params.get("trailing_stop") or 0.0)
+        execute_at = str(params.get("execute_at") or "next_close")
         normalize = str(params.get("normalize") or "none")
         delisting_loss = float(params.get("delisting_loss") or 0.0)
         # 空头可融券过滤：两融标的池逐日 as-of 快照存在时应用（A 股仅两融池可做空）
@@ -503,6 +509,10 @@ async def execute_backtest_run(run_id: str) -> dict:
                 take_profit=take_profit,
                 stop_loss=stop_loss,
                 trailing_stop=trailing_stop,
+                execute_at=execute_at,
+                open_prices=(
+                    panels.get("open") if execute_at == "next_open" else None
+                ),
                 delisting_loss=delisting_loss,
             )
         )

@@ -73,13 +73,20 @@ async def sql_query(body: SQLQueryRequest):
     """DuckDB SQL 查询本地 Parquet 数据（仅允许 SELECT）"""
     sql = body.sql.strip().rstrip(";")
     if not sql:
-        return {"columns": [], "data": [], "row_count": 0, "error": "SQL 为空"}
+        return {
+            "columns": [],
+            "data": [],
+            "row_count": 0,
+            "error": "SQL 为空",
+            "code": "invalid_query",
+        }
     if not sql.lower().lstrip("(").startswith(("select", "with", "describe", "show")):
         return {
             "columns": [],
             "data": [],
             "row_count": 0,
             "error": "仅支持 SELECT / WITH / DESCRIBE 查询",
+            "code": "invalid_query",
         }
     if _SQL_FORBIDDEN.search(sql):
         return {
@@ -87,8 +94,12 @@ async def sql_query(body: SQLQueryRequest):
             "data": [],
             "row_count": 0,
             "error": "SQL 中包含不允许的写操作关键字",
+            "code": "invalid_query",
         }
-    return duckdb_service.query_local(sql)
+    result = duckdb_service.query_local(sql)
+    if isinstance(result, dict) and result.get("error"):
+        result.setdefault("code", "query_error")
+    return result
 
 
 @router.get("/tables")
@@ -165,6 +176,7 @@ async def market_scan(body: ScanRequest):
                 "data": [],
                 "row_count": 0,
                 "error": f"条件格式不支持: {cond}（示例: close > 10）",
+                "code": "invalid_request",
             }
         col, op, val = m.group(1), m.group(2), float(m.group(3))
         parsed.append((col, "==" if op == "=" else op, val))
@@ -172,7 +184,13 @@ async def market_scan(body: ScanRequest):
     try:
         target = pd.to_datetime(body.date)
     except Exception:
-        return {"columns": [], "data": [], "row_count": 0, "error": "日期格式不合法"}
+        return {
+            "columns": [],
+            "data": [],
+            "row_count": 0,
+            "error": "日期格式不合法",
+            "code": "invalid_request",
+        }
 
     rows = []
     columns: list[str] = []
@@ -238,7 +256,7 @@ async def cross_section(body: CrossSectionRequest):
     try:
         target = pd.to_datetime(body.date)
     except Exception:
-        return {"error": "日期格式不合法"}
+        return {"error": "日期格式不合法", "code": "invalid_request"}
 
     values = []
     for path in files:
@@ -254,7 +272,8 @@ async def cross_section(body: CrossSectionRequest):
 
     if not values:
         return {
-            "error": f"该日期无 {body.field} 数据（检查日期是否为交易日、数据是否已缓存）"
+            "error": f"该日期无 {body.field} 数据（检查日期是否为交易日、数据是否已缓存）",
+            "code": "no_data",
         }
 
     s = pd.Series(values)
@@ -299,11 +318,14 @@ async def anomaly_detection(body: AnomalyRequest):
     safe_code = body.code.strip().replace(".", "_")
     path = settings.cache_dir / body.period / f"{safe_code}.parquet"
     if not path.exists():
-        return {"error": f"未找到 {body.code} 的本地缓存数据，请先到「数据中心」下载"}
+        return {
+            "error": f"未找到 {body.code} 的本地缓存数据，请先到「数据中心」下载",
+            "code": "no_cached_data",
+        }
 
     df = _load_stock(path)
     if df is None or df.empty or body.field not in df.columns:
-        return {"error": f"数据为空或缺少字段 {body.field}"}
+        return {"error": f"数据为空或缺少字段 {body.field}", "code": "invalid_field"}
 
     s = df[body.field].astype(float)
     window = max(int(body.window), 2)
@@ -849,6 +871,8 @@ async def event_study(body: EventStudyRequest):
     from backend.services.event_study import build_event_frame, event_study_analysis
 
     pool = [c.strip() for c in body.codes.split(",") if c.strip()]
+    if not pool:
+        pool = market_data.list_cached_codes("1d", exclude_indices=True)
     try:
         panels = market_data.load_price_panels(
             codes=pool, start_date=body.start_date, end_date=body.end_date

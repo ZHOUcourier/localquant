@@ -40,7 +40,8 @@ def _build_eval_ns(
     """
     # 上游若直接给了一个面板 DataFrame（index=date, columns=stock），作为 close 兜底
     panels = market_data.load_price_panels(
-        codes=stock_pool or [],
+        codes=stock_pool
+        or market_data.list_cached_codes("1d", exclude_indices=True),
         start_date=start_date,
         end_date=end_date,
     )

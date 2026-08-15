@@ -226,10 +226,12 @@ class FactorResearchService:
                 r = future_returns[common]
 
                 ic = f.corr(r)
-                ic_series.append({"date": str(date), "ic": ic})
+                if ic is not None and np.isfinite(ic):
+                    ic_series.append({"date": str(date), "ic": ic})
 
                 rank_ic = f.rank().corr(r.rank())
-                rank_ic_series.append({"date": str(date), "rank_ic": rank_ic})
+                if rank_ic is not None and np.isfinite(rank_ic):
+                    rank_ic_series.append({"date": str(date), "rank_ic": rank_ic})
 
             ic_values = [
                 x["ic"]
@@ -850,7 +852,9 @@ class FactorResearchService:
                     comp = pd.Series(dtype=float)
                 common = f.index.intersection(comp.index)
                 if len(common) > 10:
-                    ic_values.append(f[common].corr(comp[common]))
+                    ic_value = f[common].corr(comp[common])
+                    if ic_value is not None and np.isfinite(ic_value):
+                        ic_values.append(ic_value)
 
             avg_ic = float(np.mean(ic_values)) if ic_values else 0
             decay.append({"period": period, "ic": avg_ic})
@@ -1289,7 +1293,7 @@ class FactorResearchService:
             from backend.services import market_data, reference_data
             from backend.services.factor_operators import build_operator_namespace
 
-            codes = market_data.list_cached_codes("1d")
+            codes = market_data.list_cached_codes("1d", exclude_indices=True)
             if len(codes) < 30:
                 return {
                     "ok": False,
@@ -1419,7 +1423,7 @@ class FactorResearchService:
             from backend.services import market_data, reference_data
             from backend.services.factor_operators import build_operator_namespace
 
-            codes = market_data.list_cached_codes("1d")
+            codes = market_data.list_cached_codes("1d", exclude_indices=True)
             if len(codes) < 30:
                 return {
                     "ok": False,
@@ -1620,6 +1624,7 @@ class FactorResearchService:
         end_date: str = "",
         periods: list[int] | None = None,
         max_workers: int = 4,
+        stock_pool: list[str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """批量扫描因子 IC（SSE 逐因子进度）
 
@@ -1709,11 +1714,45 @@ class FactorResearchService:
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"批量扫描：分钟面板加载失败，日内因子将报错: {e}")
 
-        # 2. 加载面板（一次）+ 构造求值命名空间
+        # 2. 加载面板（一次）+ 构造求值命名空间。
+        # 全市场扫描内存保护：按最大行数 × 股票数 × 5 个价格字段估算内存，
+        # 超过可用内存的 65% 时提示分块/缩短区间，而不是把机器拖到 OOM。
+        codes = list(stock_pool or []) or market_data.list_cached_codes(
+            "1d", exclude_indices=True
+        )
+        try:
+            import psutil
+
+            coverage = market_data.cache_coverage("1d")
+            rows_by_code = {e["code"]: int(e.get("rows") or 0) for e in coverage}
+            max_rows = max(
+                (rows_by_code.get(c, 0) for c in codes), default=0
+            )
+            if max_rows > 0 and len(codes) > 0:
+                estimated = max_rows * len(codes) * 5 * 8 * 2.5
+                available = psutil.virtual_memory().available
+                if estimated > available * 0.65 and estimated > 512 * 1024 * 1024:
+                    yield _sse(
+                        "scan_done",
+                        {
+                            "ok_count": 0,
+                            "failed": len(targets),
+                            "failed_names": [t["factor_name"] for t in targets],
+                            "message": (
+                                f"预计面板内存约 {estimated / 1024**3:.1f} GB，"
+                                f"超过可用内存 65%（可用 {available / 1024**3:.1f} GB）。"
+                                "请缩小日期区间，或在请求中传入 stock_pool 分批扫描"
+                            ),
+                        },
+                    )
+                    return
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"扫描内存预估失败，继续执行: {e}")
+
         try:
             panels = await asyncio.to_thread(
                 market_data.load_price_panels,
-                codes=[],
+                codes=codes,
                 start_date=start_date,
                 end_date=end_date,
             )
@@ -1794,6 +1833,13 @@ class FactorResearchService:
                 metrics = self._scan_factor_metrics(
                     factor_df.dropna(how="all"), return_data, periods, mask
                 )
+                if int(metrics.get("n_cross_sections") or 0) == 0:
+                    return {
+                        **item,
+                        "ok": False,
+                        "error": "有效截面不足（股票数 < 10 或因子值全为空）",
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                    }
                 return {
                     **item,
                     "ok": True,
@@ -1816,6 +1862,18 @@ class FactorResearchService:
                     failed_names.append(res.get("factor_name", ""))
                 yield _sse("factor_done", res)
 
+        n_stocks = len(panels["close"].columns)
+        n_dates = len(panels["close"].index)
+        warnings: list[str] = []
+        if n_stocks < 300:
+            warnings.append(
+                f"样本仅 {n_stocks} 只股票（建议 ≥300），IC/分层稳定性不足，"
+                "结果仅用于方法验证，不宜直接入池"
+            )
+        if n_dates < 252:
+            warnings.append(
+                f"样本仅 {n_dates} 个交易日（建议 ≥252/1 年），不足以覆盖完整牛熊"
+            )
         yield _sse(
             "scan_done",
             {
@@ -1823,9 +1881,10 @@ class FactorResearchService:
                 "failed": len(failed_names),
                 "failed_names": failed_names,
                 "data_date": str(panels["close"].index[-1])[:10],
-                "n_stocks": len(panels["close"].columns),
-                "n_dates": len(panels["close"].index),
+                "n_stocks": n_stocks,
+                "n_dates": n_dates,
                 "duration_ms": int((time.perf_counter() - started) * 1000),
+                "warnings": warnings,
             },
         )
 

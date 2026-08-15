@@ -160,6 +160,20 @@ interface Briefing {
   } | null
   dividend_events: { code: string; date: string; factor_ratio: number }[]
   data_freshness: { total: number; latest_date: string | null; stale_count: number; calendar: string } | null
+  research_readiness: {
+    ready: boolean
+    n_stocks: number
+    n_days: number
+    data_start: string | null
+    data_end: string | null
+    reference_latest: string | null
+    fundamental_ready: boolean
+    minute_ready: boolean
+    qmt_connected: boolean
+    blockers: string[]
+    warnings: string[]
+    error?: string
+  } | null
   recent_jobs: { job_name: string; status: string; trigger: string; detail: string }[]
 }
 const { data: briefing } = useQuery<Briefing>({
@@ -240,6 +254,48 @@ const mono =
       </div>
 
       <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+
+        <!-- 研究数据就绪度 -->
+        <div
+          v-if="briefing?.research_readiness"
+          class="rounded-[4px] px-3 py-2.5"
+          :style="{
+            border: `1px solid ${briefing.research_readiness.ready ? 'rgba(48,209,88,0.35)' : 'rgba(255,159,10,0.45)'}`,
+            backgroundColor: briefing.research_readiness.ready ? 'rgba(48,209,88,0.04)' : 'rgba(255,159,10,0.05)',
+          }"
+        >
+          <div class="mb-1.5 flex items-center justify-between">
+            <span class="text-[11px] font-medium text-[#646262]" :style="{ fontFamily: mono }">
+              研究数据就绪度
+            </span>
+            <span
+              class="rounded-[3px] px-1.5 py-0.5 text-[10px] font-semibold"
+              :class="briefing.research_readiness.ready ? 'bg-[#30d158]/15 text-[#248a3d]' : 'bg-[#ff9f0a]/15 text-[#a05a00]'"
+            >
+              {{ briefing.research_readiness.ready ? '可用于正式研究' : '仅建议方法验证' }}
+            </span>
+          </div>
+          <div v-if="!briefing.research_readiness.error" class="space-y-1">
+            <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[#646262]">
+              <span>股票 {{ briefing.research_readiness.n_stocks }} 只</span>
+              <span>历史 {{ briefing.research_readiness.n_days }} 交易日</span>
+              <span>{{ briefing.research_readiness.data_start ?? '—' }} ~ {{ briefing.research_readiness.data_end ?? '—' }}</span>
+            </div>
+            <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[#646262]">
+              <span>参考快照 {{ briefing.research_readiness.reference_latest ?? '无' }}</span>
+              <span>财务 {{ briefing.research_readiness.fundamental_ready ? '已缓存' : '缺失' }}</span>
+              <span>分钟 {{ briefing.research_readiness.minute_ready ? '已缓存' : '缺失' }}</span>
+              <span>QMT {{ briefing.research_readiness.qmt_connected ? '已连接' : '未连接' }}</span>
+            </div>
+            <div v-if="briefing.research_readiness.blockers?.length" class="text-[10px] leading-relaxed text-[#a05a00]">
+              <div v-for="(b, i) in briefing.research_readiness.blockers" :key="`b${i}`">✕ {{ b }}</div>
+            </div>
+            <div v-if="briefing.research_readiness.warnings?.length" class="text-[10px] leading-relaxed text-[#8a5a00]">
+              <div v-for="(w, i) in briefing.research_readiness.warnings" :key="`w${i}`">⚠ {{ w }}</div>
+            </div>
+          </div>
+          <div v-else class="py-1 text-[11px] text-[#9a9898]">{{ briefing.research_readiness.error }}</div>
+        </div>
         <!-- 市场状态 -->
         <div class="rounded-[4px] px-3 py-2.5" style="border: 1px solid rgba(15, 0, 0, 0.12); background-color: #fdfcfc">
           <div class="mb-1.5 text-[11px] font-medium text-[#646262]" :style="{ fontFamily: mono }">市场环境</div>

@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from backend.config import settings
 from backend.database import get_db
 from backend.routes.settings import _write_env
+from backend.services import tasks
 from backend.services.ai_providers import (
     PROVIDER_PRESETS,
     apply_effort,
@@ -1504,7 +1505,8 @@ async def start_factor_analysis(body: FactorAnalysisRequest):
             except Exception:
                 pass  # 错误已落库（status=error），轮询侧展示
 
-    asyncio.create_task(_run())
+    # 持有任务强引用，避免路由返回后 task 被 GC（后台分析永远停在 task_start）
+    tasks.spawn(_run())
     return {"id": aid, "status": "running"}
 
 

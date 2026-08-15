@@ -9,20 +9,22 @@ from loguru import logger
 from pydantic import BaseModel
 
 from backend.database import get_db
-from backend.services import market_data
+from backend.services import market_data, tasks
 from backend.services.backtest_analysis import backtest_analysis
 
 router = APIRouter()
 
-# 回测后台任务并发上限（懒创建，避免 import 时绑定事件循环）
-_backtest_sem: Optional[asyncio.Semaphore] = None
+# 回测后台任务并发上限（懒创建，避免 import 时绑定事件循环）。
+# 注意：变量与函数不能同名，否则 def 会把变量绑定成函数对象，
+# 调用 _backtest_sem() 时返回函数本身而非 Semaphore。
+_backtest_sem_obj: Optional[asyncio.Semaphore] = None
 
 
 def _backtest_sem() -> asyncio.Semaphore:
-    global _backtest_sem
-    if _backtest_sem is None:
-        _backtest_sem = asyncio.Semaphore(2)
-    return _backtest_sem
+    global _backtest_sem_obj
+    if _backtest_sem_obj is None:
+        _backtest_sem_obj = asyncio.Semaphore(2)
+    return _backtest_sem_obj
 
 
 # ── 请求模型 ─────────────────────────────────────────────────
@@ -72,6 +74,7 @@ class RunStrategyRequest(BaseModel):
     take_profit: float = 0.0
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
+    execute_at: str = "next_close"  # next_close / tail / next_open（开→收计收益）
     shortable_codes: list[str] = []  # 可融券做空标的（空=不过滤做空）
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
@@ -110,7 +113,8 @@ async def run_strategy(req: RunStrategyRequest):
     try:
         panels = await asyncio.to_thread(
             market_data.load_price_panels,
-            codes=req.stock_pool,
+            codes=req.stock_pool
+            or market_data.list_cached_codes("1d", exclude_indices=True),
             start_date=req.start_date,
             end_date=req.end_date,
         )
@@ -277,6 +281,8 @@ class CapacityRequest(BaseModel):
     normalize: str = "long_only"  # none / long_only / dollar_neutral
     participation_rate: float = 0.1
     capital_levels: Optional[list[float]] = None
+    adv_window: int = 20  # 平均成交额滚动窗口（交易日）
+    lot_size: int = 100  # A 股整手股数（写入 assumptions，不改变金额口径）
 
 
 @router.post("/capacity")
@@ -296,6 +302,8 @@ async def capacity(req: CapacityRequest):
             normalize=req.normalize,
             participation_rate=req.participation_rate,
             capital_levels=req.capital_levels,
+            adv_window=req.adv_window,
+            lot_size=req.lot_size,
         )
         result["status"] = "ok"
         return result
@@ -307,6 +315,7 @@ async def capacity(req: CapacityRequest):
 
 class PortfolioRequest(BaseModel):
     factor_ids: list[int] = []  # 空 = 取整个因子池
+    stock_pool: list[str] = []  # 空 = 本地缓存中的股票池（自动剔除指数缓存）
     combine_method: str = "equal"  # equal / ic_weighted
     top_n: int = 20  # 每日截面做多只数（0=全部正值做多）
     start_date: str = ""
@@ -359,6 +368,7 @@ async def portfolio_backtest(req: PortfolioRequest):
         result = await asyncio.to_thread(
             backtest_analysis.portfolio_backtest,
             factors=factors,
+            stock_pool=req.stock_pool,
             start_date=req.start_date,
             end_date=req.end_date,
             combine_method=req.combine_method,
@@ -424,7 +434,8 @@ async def sensitivity(req: SensitivityRequest):
     try:
         panels = await asyncio.to_thread(
             market_data.load_price_panels,
-            codes=req.stock_pool,
+            codes=req.stock_pool
+            or market_data.list_cached_codes("1d", exclude_indices=True),
             start_date=req.start_date,
             end_date=req.end_date,
         )
@@ -533,6 +544,7 @@ class CreateRunRequest(BaseModel):
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
     stock_pool: list[str] = []
+    execute_at: str = "next_close"  # next_close / tail / next_open
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
@@ -581,7 +593,9 @@ async def create_run(req: CreateRunRequest):
             except Exception:
                 pass  # 错误已落库（status=error）
 
-    asyncio.create_task(_run())
+    # 必须持有任务引用：事件循环只弱引用 task，路由返回后任务可能被 GC，
+    # 表现为回测永远停在 task_start。
+    tasks.spawn(_run())
     return {"id": run_id, "status": "running"}
 
 
@@ -720,6 +734,7 @@ async def walk_forward(req: WalkForwardRequest):
         result = await asyncio.to_thread(
             backtest_analysis.walk_forward_portfolio,
             factors=req.factors,
+            stock_pool=req.stock_pool,
             start_date=req.start_date,
             end_date=req.end_date,
             combine_method=req.combine_method,

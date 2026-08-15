@@ -13,7 +13,10 @@
 - ValueError：用户信号代码本身有问题（未定义函数 / 运行报错）→ 直接上抛给调用方
 """
 
+import asyncio
 import io
+import time
+from urllib.parse import urlparse
 
 import pandas as pd
 from loguru import logger
@@ -177,19 +180,90 @@ async def run_signals(
     return df, False
 
 
-def sandbox_status() -> dict:
-    """沙箱状态（供前端/接口展示是否处于隔离执行）"""
+_status_cache: dict = {"ts": 0.0, "server_reachable": False, "probe_error": ""}
+_STATUS_TTL = 15.0
+
+
+async def _probe_server() -> tuple[bool, str]:
+    """探测 opensandbox-server 是否实际可达（轻量 HTTP，短超时）
+
+    只判断 server 进程/端口是否活着；Docker 与镜像是否可用仍需首次
+    创建沙箱时确认，因此返回「可达」而非「保证可用」。
+    """
+    domain = (settings.sandbox_server_domain or "localhost:8080").strip()
+    base = domain if domain.startswith(("http://", "https://")) else f"http://{domain}"
+    parsed = urlparse(base)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    error = ""
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            for path in ("/v1/ping", "/ping", "/health", "/"):
+                url = f"{parsed.scheme}://{host}:{port}{path}"
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code < 500:
+                        return True, ""
+                except Exception as e:  # noqa: BLE001
+                    error = str(e)[:160]
+    except Exception as e:  # noqa: BLE001
+        error = str(e)[:160]
+
+    # HTTP 探测失败时退回 TCP 探测，区分「端口通但无健康响应」
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=1.2
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:  # noqa: BLE001
+            pass
+        return False, f"端口 {host}:{port} 可达，但未返回健康响应"
+    except Exception as e:  # noqa: BLE001
+        return False, error or str(e)[:160]
+
+
+async def sandbox_status() -> dict:
+    """沙箱状态（供前端/接口展示；实际探测 server，不把「可能可用」当「就绪」）"""
+    now = time.time()
+    if now - _status_cache["ts"] > _STATUS_TTL:
+        server_reachable, probe_error = await _probe_server()
+        _status_cache.update(
+            {
+                "ts": now,
+                "server_reachable": server_reachable,
+                "probe_error": probe_error,
+            }
+        )
+
     available = sandbox_available()
+    server_reachable = bool(_status_cache.get("server_reachable"))
+    active = available and server_reachable
+    if not available:
+        note = "未启用/未安装 opensandbox，回测信号将进程内执行（无容器隔离）"
+    elif active:
+        note = (
+            "opensandbox-server 可达；Docker/镜像最终可用性以首次沙箱创建为准，"
+            "失败时自动降级进程内执行"
+        )
+    else:
+        err = _status_cache.get("probe_error") or "server 不可达"
+        note = (
+            f"opensandbox-server 不可达（{err}）；回测信号将进程内执行"
+            "（无容器隔离）"
+        )
     return {
         "enabled": settings.sandbox_enabled,
         "package_installed": _pkg_installed(),
-        "active": available,
+        "server_reachable": server_reachable,
+        "active": active,
         "image": settings.sandbox_image,
-        "note": (
-            "OpenSandbox 容器隔离已就绪"
-            if available
-            else "未启用/未就绪，回测信号将进程内执行（无容器隔离）"
-        ),
+        "note": note,
+        "probe_error": _status_cache.get("probe_error", ""),
     }
 
 

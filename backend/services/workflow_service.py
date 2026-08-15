@@ -1,15 +1,61 @@
 """工作流服务 - 处理工作流 CRUD 和运行逻辑"""
 
-import asyncio
 import json
+import math
 import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
+import numpy as np
+import pandas as pd
+
 from backend.config import settings
 from backend.database import get_db
 from backend.engine.runner import run_workflow, run_workflow_stream
+from backend.services import tasks
+
+
+def _jsonable(value: Any) -> Any:
+    """把节点输出转换为可被 Starlette JSONResponse 序列化的纯 Python 结构。
+
+    节点输出常含 pandas DataFrame / numpy 标量（如 group_stats 的 np.int64），
+    FastAPI 默认 jsonable_encoder 无法处理，导致工作流跑完后同步 run 接口 500。
+    DataFrame 按 split 方向转成 {columns, index, data}，日期统一转字符串。
+    """
+    if isinstance(value, pd.DataFrame):
+        return {
+            "columns": [str(c) for c in value.columns],
+            "index": [
+                v.isoformat() if hasattr(v, "isoformat") else str(v)
+                for v in value.index
+            ],
+            "data": _jsonable(value.to_numpy().tolist()),
+        }
+    if isinstance(value, pd.Series):
+        return {
+            "index": [
+                v.isoformat() if hasattr(v, "isoformat") else str(v)
+                for v in value.index
+            ],
+            "data": _jsonable(value.to_numpy().tolist()),
+        }
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, (np.generic,)):
+        item = value.item()
+        if isinstance(item, float) and not math.isfinite(item):
+            return None
+        return item
+    if isinstance(value, (pd.Timestamp,)):
+        return value.isoformat()
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 # ---------------------------------------------------------------------------
 # CRUD
@@ -240,8 +286,8 @@ async def run(workflow_id: str) -> dict[str, Any] | None:
         "status": ctx.status,
         "started_at": now,
         "finished_at": finished_at,
-        "node_outputs": ctx.node_outputs,
-        "logs": ctx.logs,
+        "node_outputs": _jsonable(ctx.node_outputs),
+        "logs": _jsonable(ctx.logs),
     }
 
 
@@ -406,8 +452,8 @@ async def run_stream(
             # 流未走到自然终点（客户端断开/服务异常），记为已取消
             final_status = "cancelled"
         # 当前任务可能已被取消（客户端断开），finally 内直接 await 会再次抛
-        # CancelledError，改用独立任务完成收尾写库
-        asyncio.ensure_future(_finalize_run(run_id, workflow_id, final_status, report))
+        # CancelledError，改用独立任务完成收尾写库（spawn 会持有任务强引用）
+        tasks.spawn(_finalize_run(run_id, workflow_id, final_status, report))
 
 
 async def _finalize_run(

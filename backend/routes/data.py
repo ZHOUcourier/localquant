@@ -387,12 +387,23 @@ async def quality_check():
 
     issues: list[str] = []
     checked = 0
+    reference_files = 0
     suspended: list[str] = []  # 最新数据远超最新交易日（疑似停牌/退市）
     price_anomalies = 0
     vol_anomalies = 0
 
     if not settings.cache_dir.exists():
-        return {"passed": True, "issues": [], "summary": "本地无缓存数据，无可检查项"}
+        return {
+            "passed": True,
+            "checked_files": 0,
+            "reference_files": 0,
+            "suspended_count": 0,
+            "suspended": [],
+            "price_anomalies": 0,
+            "vol_anomalies": 0,
+            "issues": [],
+            "summary": "本地无缓存数据，无可检查项",
+        }
 
     latest_trade = None
     try:
@@ -403,6 +414,11 @@ async def quality_check():
 
     for period_dir in sorted(settings.cache_dir.iterdir()):
         if not period_dir.is_dir():
+            continue
+        # reference/ 是参考元数据快照（行业/成分/合约），与行情数据检查口径不同，
+        # 不混入行情文件计数与质量结论。
+        if period_dir.name == "reference":
+            reference_files = len(list(period_dir.glob("*.parquet")))
             continue
         for f in sorted(period_dir.glob("*.parquet")):
             checked += 1
@@ -459,7 +475,17 @@ async def quality_check():
                     pass
 
     if checked == 0:
-        return {"passed": True, "issues": [], "summary": "本地无缓存数据，无可检查项"}
+        return {
+            "passed": True,
+            "checked_files": 0,
+            "reference_files": reference_files,
+            "suspended_count": 0,
+            "suspended": [],
+            "price_anomalies": 0,
+            "vol_anomalies": 0,
+            "issues": [],
+            "summary": "本地无行情缓存，无可检查项",
+        }
 
     extras = []
     if suspended:
@@ -471,8 +497,15 @@ async def quality_check():
 
     return {
         "passed": len(issues) == 0,
+        "checked_files": checked,
+        "reference_files": reference_files,
+        "suspended_count": len(suspended),
+        "suspended": suspended,
+        "price_anomalies": price_anomalies,
+        "vol_anomalies": vol_anomalies,
         "issues": issues,
-        "summary": f"已检查 {checked} 个缓存文件，发现 {len(issues)} 个问题"
+        "summary": f"已检查 {checked} 个行情缓存文件，发现 {len(issues)} 个问题"
+        + f"（参考快照 {reference_files} 个单独维护）"
         + ("；" + "；".join(extras) if extras else ""),
     }
 
@@ -480,7 +513,10 @@ async def quality_check():
 @router.post("/query-local")
 async def query_local(req: QueryRequest):
     """使用 DuckDB 执行 SQL 查询本地 Parquet 数据"""
-    return _duckdb.query_local(req.sql, req.params)
+    result = _duckdb.query_local(req.sql, req.params)
+    if isinstance(result, dict) and result.get("error"):
+        result.setdefault("code", "query_error")
+    return result
 
 
 # ── 底部状态栏：指数行情 ─────────────────────────────────────

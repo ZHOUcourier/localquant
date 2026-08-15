@@ -499,6 +499,7 @@ async def _tool_set_backtest_params(args: dict, session_id: str) -> dict:
         "stamp_tax",
         "frequency",
         "stock_pool",
+        "execute_at",
     ]
     params = {k: args[k] for k in keys if args.get(k) not in (None, "")}
     stored = _SESSION_BT_PARAMS.setdefault(session_id, {})
@@ -545,6 +546,7 @@ async def _tool_run_backtest(args: dict, session_id: str) -> dict:
         "stop_loss",
         "trailing_stop",
         "stock_pool",
+        "execute_at",
         "delisting_loss",
     ):
         if args.get(k) not in (None, ""):
@@ -1024,6 +1026,10 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                         "type": "string",
                         "description": "频率，本地仅支持 1d",
                     },
+                    "execute_at": {
+                        "type": "string",
+                        "description": "执行时点：next_close / tail / next_open",
+                    },
                     "stock_pool": _pool,
                 },
                 "required": [],
@@ -1049,6 +1055,10 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                     "init_balance": {"type": "number"},
                     "commission_rate": {"type": "number"},
                     "slippage": {"type": "number"},
+                    "execute_at": {
+                        "type": "string",
+                        "description": "执行时点：next_close / tail / next_open",
+                    },
                     "stock_pool": _pool,
                 },
                 "required": [],

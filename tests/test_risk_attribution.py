@@ -60,19 +60,21 @@ def test_regression_attribution_no_alpha():
 
 
 def test_attribution_run_endpoint_missing_run():
-    """attribution-run 对不存在的 run 返回 404"""
+    """attribution-run 对不存在的 run 返回 404（ASGI 进程内，不依赖外部服务）"""
     import asyncio
-    import json
-    import urllib.error
-    import urllib.request
 
-    req = urllib.request.Request(
-        "http://127.0.0.1:8000/api/risk/attribution-run",
-        data=json.dumps({"run_id": "no-such-run"}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        urllib.request.urlopen(req)
-        assert False, "应返回 404"
-    except urllib.error.HTTPError as e:
-        assert e.code == 404
+    import httpx
+
+    from backend.main import app
+
+    async def _request():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            return await client.post(
+                "/api/risk/attribution-run", json={"run_id": "no-such-run"}
+            )
+
+    response = asyncio.run(_request())
+    assert response.status_code == 404

@@ -35,9 +35,10 @@ const { data: categories } = usePresetFactorCategories()
 const categoryCode = ref('')
 const scanAll = ref(false)
 const maxWorkers = ref(4)
+const stockPool = ref('')
 const running = ref(false)
 const rows = ref<ScanRow[]>([])
-const summary = ref<{ ok_count: number; failed: number; failed_names: string[]; data_date: string; n_stocks: number; n_dates: number; duration_ms: number } | null>(null)
+const summary = ref<{ ok_count: number; failed: number; failed_names: string[]; data_date: string; n_stocks: number; n_dates: number; duration_ms: number; message?: string; warnings?: string[] } | null>(null)
 const errorMsg = ref<string | null>(null)
 const progress = ref({ done: 0, total: 0 })
 const selected = ref<Set<number>>(new Set())
@@ -46,6 +47,10 @@ const categoryOptions = computed<SelectOption[]>(() => [
   { value: '', label: '全部类别' },
   ...(categories.value ?? []).map((c) => ({ value: c.category_code, label: `${c.category_name} (${c.factor_count})` })),
 ])
+
+const presetTotal = computed(() =>
+  (categories.value ?? []).reduce((sum, c) => sum + (c.factor_count || 0), 0),
+)
 
 const sortField = ref<keyof NonNullable<ScanRow['metrics']> | 'factor_name'>('rank_ic')
 const sortedRows = computed(() => {
@@ -89,6 +94,10 @@ async function runScan() {
       limit: 300,
       periods: [1, 5, 10, 20],
       max_workers: maxWorkers.value,
+      stock_pool: stockPool.value
+        .split(/[,，]/)
+        .map((c) => c.trim())
+        .filter(Boolean),
     }
     if (body.category_codes === undefined) delete body.category_codes
     const res = await fetch('/api/factor/scan', {
@@ -119,6 +128,9 @@ async function runScan() {
           progress.value.done += 1
         } else if (evt.type === 'scan_done') {
           summary.value = evt.data
+          if (!evt.data.ok_count && evt.data.failed && evt.data.message) {
+            errorMsg.value = evt.data.message
+          }
         }
       }
     }
@@ -161,8 +173,15 @@ onUnmounted(() => {
       </div>
       <label class="flex cursor-pointer items-center gap-1 text-xs text-[#646262]">
         <input v-model="scanAll" type="checkbox" class="accent-[#007aff]" :disabled="running" />
-        全部 608 个因子
+        全部 {{ presetTotal }} 个因子
       </label>
+      <input
+        v-model="stockPool"
+        type="text"
+        :disabled="running"
+        placeholder="股票池（逗号分隔，留空=全部本地股票）"
+        class="w-[300px] rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-xs text-[#201d1d] outline-none focus:border-[#007aff] disabled:opacity-50"
+      />
       <Button
         variant="secondary"
         size="sm"
@@ -176,6 +195,14 @@ onUnmounted(() => {
       <span class="text-[11px] text-[#9a9898]">
         面板只加载一次、全因子共享；结果覆盖更新 + 历史快照；按「数据中心」下载的行情计算
       </span>
+    </div>
+
+    <!-- 扫描样本警示 -->
+    <div
+      v-if="summary?.warnings?.length"
+      class="rounded-[4px] border border-[#ff9f0a]/35 bg-[#ff9f0a]/7 px-3 py-2 text-[11px] leading-relaxed text-[#a05a00]"
+    >
+      <div v-for="(w, i) in summary.warnings" :key="i">⚠ {{ w }}</div>
     </div>
 
     <div v-if="errorMsg" class="rounded-[4px] border border-[#ff3b30]/40 bg-[#ff3b30]/8 px-3 py-2 text-xs text-[#c62d23]">
