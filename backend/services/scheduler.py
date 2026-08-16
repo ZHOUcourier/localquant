@@ -74,6 +74,7 @@ async def _market_step() -> tuple[str, str]:
 
     snappable = codes or market_data.list_cached_codes("1d")
     ind = await asyncio.to_thread(reference_data.snapshot_industry, qmt)
+    idx = await asyncio.to_thread(reference_data.snapshot_major_indices, qmt)
     cap = await asyncio.to_thread(reference_data.snapshot_capital, qmt, snappable)
     inst = await asyncio.to_thread(reference_data.snapshot_instrument, qmt, snappable)
     pools = await asyncio.to_thread(reference_data.snapshot_universe_pools, qmt)
@@ -81,7 +82,7 @@ async def _market_step() -> tuple[str, str]:
 
     detail = (
         f"行情增量: {len(codes)} 只({added} 成功/{failed} 失败); "
-        f"快照: industry={ind} capital={cap} instrument={inst} "
+        f"快照: industry={ind} indices={idx} capital={cap} instrument={inst} "
         f"标的池={pools} 财务={fund}"
     )
     return "ok", detail

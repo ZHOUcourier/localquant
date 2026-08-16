@@ -20,6 +20,52 @@ const aiInsight = ref<string | null>(null)
 const aiInsightLoading = ref(false)
 const aiError = ref<string | null>(null)
 
+interface SavedQuery {
+  id: number
+  name: string
+  sql: string
+  last_used_at?: number | null
+}
+const savedQueries = ref<SavedQuery[]>([])
+const saveName = ref('')
+const saveMsg = ref('')
+
+async function loadSaved() {
+  try {
+    const res = await fetch('/api/explorer/sql/queries')
+    if (res.ok) savedQueries.value = (await res.json()).queries ?? []
+  } catch {
+    /* 历史列表加载失败不阻断 SQL 编辑 */
+  }
+}
+loadSaved()
+
+async function saveQuery() {
+  if (!saveName.value.trim() || !sql.value.trim()) return
+  try {
+    const res = await fetch('/api/explorer/sql/queries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: saveName.value.trim(), sql: sql.value }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    saveMsg.value = `已保存「${saveName.value.trim()}」`
+    saveName.value = ''
+    await loadSaved()
+  } catch (e) {
+    saveMsg.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+async function removeQuery(id: number) {
+  try {
+    await fetch(`/api/explorer/sql/queries/${id}`, { method: 'DELETE' })
+    savedQueries.value = savedQueries.value.filter((q) => q.id !== id)
+  } catch {
+    /* ignore */
+  }
+}
+
 async function execute() {
   if (!sql.value.trim()) return
   loading.value = true
@@ -118,6 +164,32 @@ async function handleAIInsight() {
       class="rounded-[4px] border border-[#ff3b30]/30 bg-[#ff3b30]/10 px-3 py-2 text-xs text-[#ff3b30]"
     >
       {{ aiError }}
+    </div>
+
+    <div v-if="savedQueries.length" class="flex flex-wrap items-center gap-1.5">
+      <span class="text-[11px] text-[#9a9898]">历史/收藏:</span>
+      <button
+        v-for="q in savedQueries.slice(0, 12)"
+        :key="q.id"
+        type="button"
+        class="group inline-flex items-center gap-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-[11px] text-[#646262] hover:text-[#201d1d] cursor-pointer"
+        title="点击填入编辑器"
+        @click="sql = q.sql"
+      >
+        {{ q.name }}
+        <span class="text-[#9a9898] opacity-0 group-hover:opacity-100" title="删除" @click.stop="removeQuery(q.id)">×</span>
+      </button>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <input
+        v-model="saveName"
+        type="text"
+        placeholder="给这条 SQL 起个名字后保存"
+        class="min-w-[180px] flex-1 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-xs outline-none placeholder:text-[#9a9898]"
+      />
+      <Button variant="secondary" size="sm" :disabled="!saveName.trim() || !sql.trim()" @click="saveQuery">保存 SQL</Button>
+      <span v-if="saveMsg" class="text-[11px] text-[#248a3d]">{{ saveMsg }}</span>
     </div>
 
     <CodeEditor v-model="sql" language="sql" :height="200" title="SQL 查询编辑" :font-size="13" />

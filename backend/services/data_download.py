@@ -167,6 +167,7 @@ async def _snapshot_reference(
         ("instrument", lambda: reference_data.snapshot_instrument(qmt, codes)),
         ("capital", lambda: reference_data.snapshot_capital(qmt, codes)),
         ("industry", lambda: reference_data.snapshot_industry(qmt)),
+        ("major_indices", lambda: reference_data.snapshot_major_indices(qmt)),
         ("universe_pools", lambda: reference_data.snapshot_universe_pools(qmt)),
     ]
     if sector:

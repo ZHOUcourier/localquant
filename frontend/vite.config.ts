@@ -10,6 +10,18 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes('monaco-editor') || id.includes('/monaco/')) return 'monaco'
+          if (id.includes('echarts') || id.includes('zrender')) return 'echarts'
+          if (id.includes('node_modules')) return 'vendor'
+          return undefined
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

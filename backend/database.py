@@ -337,6 +337,17 @@ async def init_db():
             )
         """)
 
+        # 研究 SQL 历史/收藏：数据探索页保存常用查询，跨会话复用
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS research_sql_queries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                sql TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_used_at INTEGER
+            )
+        """)
+
         # 分析溯源（provenance）：记录每个因子/回测/组合结果的 universe、区间、
         # 复权、基准、参数等，保证任何数字可被复现。kind: factor/backtest/workflow
         await db.execute("""

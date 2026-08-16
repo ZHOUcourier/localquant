@@ -239,6 +239,12 @@ async def clear_cache():
     return {"ok": True, "removed": removed}
 
 
+@router.post("/runs/cleanup")
+async def cleanup_workflow_runs(keep_days: int = 30, dry_run: bool = False):
+    """清理超过保留期的运行产物目录（默认 30 天；dry_run=true 只统计）"""
+    return await workflow_service.cleanup_workflow_artifacts(keep_days, dry_run)
+
+
 @router.get("/{workflow_id}/runs")
 async def list_workflow_runs(workflow_id: str):
     return await workflow_service.list_runs(workflow_id)

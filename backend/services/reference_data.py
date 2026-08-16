@@ -125,6 +125,46 @@ def snapshot_index_constituents(qmt, sector: str) -> int:
     return len(stocks)
 
 
+# 每日调度固定积累的主要宽基/风格指数（QMT 不同版本板块名可能不同，取候选并集去重）
+MAJOR_INDEX_SECTORS = [
+    "000300.SH",
+    "000905.SH",
+    "000852.SH",
+    "000688.SH",
+    "399006.SZ",
+    "沪深300",
+    "中证500",
+    "中证1000",
+    "科创50",
+    "创业板指",
+]
+
+
+def snapshot_major_indices(qmt) -> int:
+    """快照主要宽基/风格指数成分（候选名逐项尝试，成功项去重统计）。
+
+    QMT 板块列表在不同券商版本中命名不一致；这里对常见代码与中文名做
+    候选尝试，以便从「今天」开始自动积累指数成分 as-of 历史，避免以后
+    重建历史指数成分时只能依赖手工导入。
+    """
+    total = 0
+    seen: set[str] = set()
+    for sector in MAJOR_INDEX_SECTORS:
+        try:
+            stocks = qmt.get_sector_stocks(sector)
+        except Exception:
+            continue
+        if not stocks:
+            continue
+        # 防止同一指数同时命中代码与中文名时重复计数
+        key = tuple(sorted(stocks))
+        if key in seen:
+            continue
+        seen.add(key)
+        total += snapshot_index_constituents(qmt, sector)
+    return total
+
+
 def snapshot_industry(qmt) -> int:
     """记录申万一级行业分类快照（SW1 开头板块），返回覆盖股票数"""
     sectors = qmt.get_sector_list()

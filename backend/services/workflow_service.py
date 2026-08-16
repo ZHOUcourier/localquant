@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 from backend.config import settings
 from backend.database import get_db
@@ -232,6 +233,71 @@ async def toggle_favorite(workflow_id: str) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
+def compact_node_outputs(node_outputs: dict[str, Any]) -> dict[str, Any]:
+    """把节点输出压缩为可渲染预览，避免 DataFrame 字符串写进 SQLite/JSON。
+
+    完整输出仍保存在 data/outputs/{run_id}/{node_uuid}.pkl，前端需要
+    明细时通过 /api/workflow/runs/{run_id}/nodes/{node_uuid}/output 读取。
+    """
+    compact: dict[str, Any] = {}
+    for node_uuid, output in (node_outputs or {}).items():
+        if not isinstance(output, dict):
+            compact[node_uuid] = _field_preview(output)
+            continue
+        fields: dict[str, Any] = {}
+        for key, value in output.items():
+            try:
+                fields[key] = _field_preview(value)
+            except Exception:
+                fields[key] = {"kind": "json", "data": "<无法预览>"}
+        compact[node_uuid] = {"_preview_fields": fields, "_full_pkl": True}
+    return compact
+
+
+def cleanup_workflow_artifacts(keep_days: int = 30, dry_run: bool = False) -> dict:
+    """清理超过保留期的运行产物目录与对应数据库记录。
+
+    只删除 data/outputs/{run_id} 目录；workflow_runs 表记录仅当对应目录
+    确实被删除时才清理，避免只删库不删文件造成 pkl 永存。
+    """
+    import time as _time
+
+    cutoff = _time.time() - max(int(keep_days), 1) * 86400
+    output_dir = settings.output_dir
+    removed_dirs = 0
+    removed_files = 0
+    removed_runs: list[str] = []
+    if output_dir.exists():
+        for p in output_dir.iterdir():
+            if not p.is_dir() or p.name in ("_node_cache", "panel_artifacts"):
+                continue
+            try:
+                files = [x for x in p.iterdir() if x.is_file()]
+                file_mtimes = [x.stat().st_mtime for x in files]
+                # 有产物文件时按最新文件判断；空目录按目录时间兜底
+                newest = max(file_mtimes) if file_mtimes else p.stat().st_mtime
+                if newest >= cutoff:
+                    continue
+                n = len(files)
+                if not dry_run:
+                    for x in files:
+                        x.unlink(missing_ok=True)
+                    p.rmdir()
+                removed_dirs += 1
+                removed_files += n
+                removed_runs.append(p.name)
+            except OSError:
+                continue
+    return {
+        "dry_run": dry_run,
+        "keep_days": int(keep_days),
+        "cutoff": int(cutoff),
+        "removed_dirs": removed_dirs,
+        "removed_files": removed_files,
+        "removed_runs": removed_runs,
+    }
+
+
 async def run(workflow_id: str) -> dict[str, Any] | None:
     """运行工作流（同步等待完成）"""
     wf = await get_workflow(workflow_id)
@@ -267,7 +333,7 @@ async def run(workflow_id: str) -> dict[str, Any] | None:
             (
                 ctx.status,
                 finished_at,
-                json.dumps(ctx.node_outputs, ensure_ascii=False, default=str),
+                json.dumps(compact_node_outputs(ctx.node_outputs), ensure_ascii=False, default=str),
                 json.dumps(ctx.logs, ensure_ascii=False),
                 run_id,
             ),
@@ -280,13 +346,18 @@ async def run(workflow_id: str) -> dict[str, Any] | None:
     finally:
         await db.close()
 
+    await _create_workflow_experiment(
+        run_id, workflow_id, wf.get("name", ""), ctx.node_outputs
+    )
+
     return {
         "id": run_id,
         "workflow_id": workflow_id,
         "status": ctx.status,
         "started_at": now,
         "finished_at": finished_at,
-        "node_outputs": _jsonable(ctx.node_outputs),
+        "node_outputs": _jsonable(compact_node_outputs(ctx.node_outputs)),
+        "node_outputs_preview": True,
         "logs": _jsonable(ctx.logs),
     }
 
@@ -308,6 +379,29 @@ _METRIC_KEYS = [
     "sharpeRatio",
     "maxDrawdown",
 ]
+
+
+async def _create_workflow_experiment(
+    run_id: str, workflow_id: str, workflow_name: str, node_outputs: dict[str, Any]
+) -> None:
+    """工作流运行完成后自动落一条实验记录，便于与回测/因子结果统一对比"""
+    try:
+        from backend.models.experiment import ExperimentCreate
+        from backend.services.experiment_service import experiment_service
+
+        await experiment_service.create(
+            ExperimentCreate(
+                source="workflow",
+                source_id=run_id,
+                name=workflow_name or f"工作流·{run_id[:8]}",
+                note="由工作流运行自动创建",
+                tags=["workflow", "auto"],
+                params={"workflow_id": workflow_id},
+                metrics=_extract_metrics(node_outputs),
+            )
+        )
+    except Exception:
+        logger.debug("自动创建工作流实验记录失败（非致命）", exc_info=True)
 
 
 def _extract_metrics(node_outputs: dict[str, Any]) -> dict[str, float]:

@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 from backend.database import get_db
 
@@ -164,6 +165,34 @@ async def persist_backtest_run(
         await db.commit()
     finally:
         await db.close()
+
+    # 自动写入实验记录：回测完成后可直接在实验页对比/检索
+    try:
+        from backend.models.experiment import ExperimentCreate
+        from backend.services.experiment_service import experiment_service
+
+        await experiment_service.create(
+            ExperimentCreate(
+                source="backtest",
+                source_id=run_id,
+                name=strategy_name or f"回测·{run_id[:8]}",
+                note=f"由 {source} 自动创建",
+                tags=["backtest", "auto"],
+                params={
+                    k: v
+                    for k, v in params.items()
+                    if k not in ("signal_code", "stock_pool")
+                },
+                metrics={
+                    k: v
+                    for k, v in metrics_out.items()
+                    if isinstance(v, (int, float)) and k
+                    not in ("assumptions", "delisting_events", "cost_summary", "leverage_summary")
+                },
+            )
+        )
+    except Exception:
+        logger.debug("自动创建实验记录失败（非致命）", exc_info=True)
 
     try:
         from backend.services.provenance import record_provenance

@@ -117,6 +117,9 @@ def test_event_study_detects_injected_abnormal_return():
     # 事件后 CAR 上升：期末均值 > 0 且 t 值 > 1
     assert res["car"][str(10)]["mean"] > 0.005
     assert res["car_end_t"] > 1.0
+    assert "t_cluster" in res["car"][str(10)]
+    assert res["car"][str(10)]["n_clusters"] == 1
+    assert "car_end_t_cluster" in res
     assert res["bhar_mean"] > 0
 
 

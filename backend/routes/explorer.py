@@ -6,6 +6,7 @@
 
 import math
 import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.database import get_db
 from backend.services import market_data
 from backend.services.duckdb_service import DuckDBService
 
@@ -68,6 +70,40 @@ class SQLQueryRequest(BaseModel):
     sql: str
 
 
+class SaveSQLRequest(BaseModel):
+    name: str
+    sql: str
+
+
+async def _record_sql(sql: str, name: str = "") -> None:
+    """记录 SQL 历史（最近 200 条以内按 last_used_at 去重覆盖）"""
+    cleaned = sql.strip().rstrip(";").strip()
+    if not cleaned:
+        return
+    now = int(time.time())
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, last_used_at FROM research_sql_queries WHERE sql = ?",
+            (cleaned,),
+        )
+        row = await cursor.fetchone()
+        if row:
+            await db.execute(
+                "UPDATE research_sql_queries SET last_used_at = ? WHERE id = ?",
+                (now, row["id"]),
+            )
+        else:
+            await db.execute(
+                "INSERT INTO research_sql_queries (name, sql, created_at, last_used_at) "
+                "VALUES (?, ?, ?, ?)",
+                (name or "未命名查询", cleaned, now, now),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
 @router.post("/query")
 async def sql_query(body: SQLQueryRequest):
     """DuckDB SQL 查询本地 Parquet 数据（仅允许 SELECT）"""
@@ -99,7 +135,76 @@ async def sql_query(body: SQLQueryRequest):
     result = duckdb_service.query_local(sql)
     if isinstance(result, dict) and result.get("error"):
         result.setdefault("code", "query_error")
+        return result
+    await _record_sql(sql)
     return result
+
+
+class SQLHistoryEntry(BaseModel):
+    id: int
+    name: str
+    sql: str
+    created_at: int
+    last_used_at: int | None
+
+
+@router.get("/sql/queries")
+async def list_sql_queries():
+    """已保存/最近使用的 SQL 查询"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, name, sql, created_at, last_used_at "
+            "FROM research_sql_queries ORDER BY last_used_at DESC LIMIT 200"
+        )
+        rows = await cursor.fetchall()
+        return {"queries": [dict(r) for r in rows]}
+    finally:
+        await db.close()
+
+
+@router.post("/sql/queries")
+async def save_sql_query(req: SaveSQLRequest):
+    """保存常用 SQL（同名覆盖 sql，否则新增）"""
+    name = req.name.strip()
+    sql = req.sql.strip().rstrip(";").strip()
+    if not name or not sql:
+        return {"error": "name 与 sql 不能为空", "code": "invalid_request"}
+    now = int(time.time())
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id FROM research_sql_queries WHERE name = ?", (name,)
+        )
+        row = await cursor.fetchone()
+        if row:
+            await db.execute(
+                "UPDATE research_sql_queries SET sql = ?, last_used_at = ? WHERE id = ?",
+                (sql, now, row["id"]),
+            )
+            query_id = row["id"]
+        else:
+            cursor = await db.execute(
+                "INSERT INTO research_sql_queries (name, sql, created_at, last_used_at) "
+                "VALUES (?, ?, ?, ?)",
+                (name, sql, now, now),
+            )
+            query_id = cursor.lastrowid
+        await db.commit()
+        return {"id": query_id, "name": name, "sql": sql}
+    finally:
+        await db.close()
+
+
+@router.delete("/sql/queries/{query_id}")
+async def delete_sql_query(query_id: int):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM research_sql_queries WHERE id = ?", (query_id,))
+        await db.commit()
+        return {"deleted": query_id}
+    finally:
+        await db.close()
 
 
 @router.get("/tables")

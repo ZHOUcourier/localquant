@@ -97,6 +97,7 @@ def event_study_analysis(
     market_returns: pd.Series | None = None,
     min_events: int = 5,
     merge_gap: int = DEFAULT_MERGE_GAP,
+    model: str = "auto",
 ) -> dict:
     """事件研究主函数
 
@@ -107,6 +108,8 @@ def event_study_analysis(
             相对日 [-10, +10]，事件日=0，含事件日）
         market_returns: 基准日收益 Series；None 时用当日全市场截面均值
         min_events: 有效事件数下限，不足时给出提示（统计不可靠）
+        model: 异常收益模型 auto / market_model / market_adjusted。
+            auto=事件前窗口足够（>=5 日）时估计市场模型 alpha+beta，否则退回市场调整。
 
     Returns:
         {ok, n_events, window, car: {rel_day: {mean, t, positive_ratio}},
@@ -156,19 +159,53 @@ def event_study_analysis(
                 series[d] = r.iloc[j]
         if len(series) < 2:
             continue
-        # 异常收益 = 个股 - 基准；BHAR = Π(1+r_i)/Π(1+r_m) - 1
+        # 异常收益模型：
+        # 1) market_model  r_i - (alpha + beta * r_m)，alpha/beta 用事件前窗口估计；
+        # 2) market_adjusted  r_i - r_m（原口径，无估计窗口要求）。
         # 注意：窗口在面板边界被截断时（事件靠近区间头部/尾部），
         # series 只含窗口内实际存在的相对日——cum 下标必须与「实际存在的
         # 相对日序列」对齐，而非枚举全部 rel_days（旧实现会对不齐且越界）
         present = [d for d in rel_days if d in series]
         r_arr = np.array([series[d] for d in present])
         m_arr = np.array([market.loc[idx[i0 + d]] for d in present])
-        ab = np.nan_to_num(r_arr) - np.nan_to_num(m_arr)
+        alpha = 0.0
+        beta = 1.0
+        model_used = "market_adjusted"
+        pre_days = [d for d in range(-window_before, 0) if d in series]
+        if (
+            market_returns is not None
+            and model in ("auto", "market_model")
+            and len(pre_days) >= 5
+        ):
+            r_pre = np.array([series[d] for d in pre_days])
+            m_pre = np.array([market.loc[idx[i0 + d]] for d in pre_days])
+            r_pre = np.nan_to_num(r_pre)
+            m_pre = np.nan_to_num(m_pre)
+            if float(np.std(m_pre)) > 1e-12:
+                coef = np.polyfit(m_pre, r_pre, 1)
+                beta = float(coef[0])
+                alpha = float(coef[1])
+                model_used = "market_model"
+        if model_used == "market_model":
+            ab = np.nan_to_num(r_arr) - (alpha + beta * np.nan_to_num(m_arr))
+        else:
+            ab = np.nan_to_num(r_arr) - np.nan_to_num(m_arr)
         cum = np.cumsum(ab)
-        for k, d in enumerate(present):
-            car_curves[d].append(float(cum[k]))
+        car_by_day = {str(d): float(cum[k]) for k, d in enumerate(present)}
+        for d in present:
+            car_curves[d].append(float(car_by_day[str(d)]))
         bhar = float(np.prod(1 + np.nan_to_num(r_arr)) / np.prod(1 + np.nan_to_num(m_arr)) - 1)
-        per_event.append({"code": code, "date": str(date.date()), "bhar": bhar})
+        per_event.append(
+            {
+                "code": code,
+                "date": str(date.date()),
+                "bhar": bhar,
+                "car": car_by_day,
+                "model": model_used,
+                "alpha": alpha if model_used == "market_model" else None,
+                "beta": beta if model_used == "market_model" else None,
+            }
+        )
 
     car_out: dict[str, dict] = {}
     for d in rel_days:
@@ -179,9 +216,31 @@ def event_study_analysis(
         mean = float(v.mean())
         sd = float(v.std(ddof=1)) if len(v) > 1 else 0.0
         t = mean / (sd / np.sqrt(len(v))) if sd > 0 else 0.0
+        # 按事件日聚类的稳健 t：同一交易日多个事件彼此不独立，
+        # 先取每个事件日内的平均 CAR 作为一个观测，再做横截面 t 检验。
+        clusters: dict[str, list[float]] = {}
+        for e in per_event:
+            val = e.get("car", {}).get(str(d))
+            if val is not None:
+                clusters.setdefault(e["date"], []).append(float(val))
+        cluster_means = np.array(
+            [float(np.mean(v)) for v in clusters.values()], dtype=float
+        )
+        c_sd = (
+            float(cluster_means.std(ddof=1))
+            if len(cluster_means) > 1
+            else 0.0
+        )
+        c_t = (
+            float(cluster_means.mean() / (c_sd / np.sqrt(len(cluster_means))))
+            if c_sd > 0 and len(cluster_means) > 1
+            else 0.0
+        )
         car_out[str(d)] = {
             "mean": round(mean, 6),
             "t": round(t, 3),
+            "t_cluster": round(c_t, 3),
+            "n_clusters": int(len(cluster_means)),
             "positive_ratio": round(float((v > 0).mean()), 4),
             "n": int(len(v)),
         }
@@ -206,11 +265,14 @@ def event_study_analysis(
         ),
         "bhar_positive_ratio": round(float((bhar_vals > 0).mean()), 4),
         "car_end_t": end["t"] if end else 0.0,
+        "car_end_t_cluster": end["t_cluster"] if end else 0.0,
         "positive_ratio_end": end["positive_ratio"] if end else 0.0,
+        "models_used": sorted({e["model"] for e in per_event}),
         "note": (
             f"基准={'全市场截面均值' if market_returns is None else '调用方基准'}；"
             "CAR 为事件窗口异常收益累计（事件日=0，含当日）；同股票事件间隔 "
-            f"{merge_gap} 日内自动合并；事件日价格行为已含在收益序列中，无前视"
+            f"{merge_gap} 日内自动合并；t_cluster 为按事件日聚类的稳健 t 值；"
+            "事件日价格行为已含在收益序列中，无前视"
         ),
     }
 
