@@ -947,8 +947,10 @@ def build_operator_namespace(
         "AMOUNT": amount,
         "vwap": vwap,
         "VWAP": vwap,
-        "returns": close.pct_change() if close is not None else None,
-        "RETURNS_": close.pct_change() if close is not None else None,
+        # 与 build_return_panel 同口径：停牌/缺口前向填充后收益为 0，
+        # 复牌日跳空计入，避免公式内 returns 与研究返回面板不一致。
+        "returns": close.ffill().pct_change().fillna(0.0) if close is not None else None,
+        "RETURNS_": close.ffill().pct_change().fillna(0.0) if close is not None else None,
         "adv20": ADV(volume, 20) if volume is not None else None,
         "ADV20": ADV(volume, 20) if volume is not None else None,
         # 派生参考面板（可基线提供）：市值 / 换手率 / 行业映射（供 INDUSTRY_NEUTRALIZE）

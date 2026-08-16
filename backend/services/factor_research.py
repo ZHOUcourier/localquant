@@ -1,5 +1,6 @@
 """因子研究服务 — 提供 IC 分析、分层收益、中性化、相关性等功能"""
 
+import json
 import re
 import time
 from typing import AsyncGenerator, Optional
@@ -13,6 +14,20 @@ from backend.database import get_db
 # ── 公式提取与 LaTeX 转换 ─────────────────────────────────────
 
 _FORMULA_MARKERS = ["公式是：", "计算公式：", "公式：", "公式为："]
+
+
+def _parse_metric_sample(raw) -> dict:
+    """把 metric_sample_json 解析为 dict，兼容旧数据"""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        import json as _json
+
+        return _json.loads(raw)
+    except Exception:
+        return {}
 
 
 def _sample_window_warning(start_date, data_date) -> str | None:
@@ -1097,9 +1112,16 @@ class FactorResearchService:
             rows = await cursor.fetchall()
             items = [dict(row) for row in rows]
             for f in items:
+                f["metric_sample"] = _parse_metric_sample(f.get("metric_sample_json"))
                 f["sample_warning"] = _sample_window_warning(
                     f.get("start_date"), f.get("data_date")
                 )
+                if f.get("metric_source") != "local_recalc" and f.get("ic_mean") is not None:
+                    f["sample_warning"] = (
+                        "指标为外部参考样本（非本地 QMT 重算），仅可用于公式参考；"
+                        "入池/筛选前请先重算。"
+                        + (f"；{f['sample_warning']}" if f.get("sample_warning") else "")
+                    )
 
             return {
                 "items": items,
@@ -1142,9 +1164,16 @@ class FactorResearchService:
             factor["factor_type"] = classify_factor(
                 factor.get("category_name"), formula
             )
+            factor["metric_sample"] = _parse_metric_sample(factor.get("metric_sample_json"))
             factor["sample_warning"] = _sample_window_warning(
                 factor.get("start_date"), factor.get("data_date")
             )
+            if factor.get("metric_source") != "local_recalc" and factor.get("ic_mean") is not None:
+                factor["sample_warning"] = (
+                    "指标为外部参考样本（非本地 QMT 重算），仅可用于公式参考；"
+                    "入池/筛选前请先重算。"
+                    + (f"；{factor['sample_warning']}" if factor.get("sample_warning") else "")
+                )
             return factor
         finally:
             await db.close()
@@ -1226,14 +1255,31 @@ class FactorResearchService:
             recalc = await self._recompute_ic_from_local(factor)
             if recalc.get("ok"):
                 metrics = recalc["metrics"]
+                sample_meta = {
+                    "source": "local_qmt",
+                    "n_stocks": recalc.get("n_stocks", 0),
+                    "n_dates": recalc.get("n_dates", 0),
+                    "start_date": recalc.get("start_date"),
+                    "data_date": recalc.get("data_date"),
+                }
                 sets = ", ".join(f"{k} = ?" for k in metrics)
                 await db.execute(
-                    f"UPDATE preset_factors SET {sets}, data_date = ? WHERE id = ?",
-                    (*metrics.values(), recalc["data_date"], factor_id),
+                    f"UPDATE preset_factors SET {sets}, start_date = ?, data_date = ?, "
+                    "metric_source = 'local_recalc', metric_sample_json = ? WHERE id = ?",
+                    (
+                        *metrics.values(),
+                        recalc.get("start_date"),
+                        recalc["data_date"],
+                        json.dumps(sample_meta, ensure_ascii=False),
+                        factor_id,
+                    ),
                 )
                 await db.commit()
                 factor.update(metrics)
+                factor["start_date"] = recalc.get("start_date")
                 factor["data_date"] = recalc["data_date"]
+                factor["metric_source"] = "local_recalc"
+                factor["metric_sample_json"] = json.dumps(sample_meta, ensure_ascii=False)
                 factor["recalc_mode"] = "recomputed"
                 factor["recalc_message"] = (
                     f"已基于本地 {recalc['n_stocks']} 只股票、"
@@ -1282,88 +1328,42 @@ class FactorResearchService:
         formula = extract_formula(factor.get("description"))
         return self.analyze_formula_on_local(formula)
 
-    def analyze_formula_on_local(self, formula: str) -> dict:
-        """在本地缓存行情面板上对公式因子跑完整分析，返回 {ok, metrics, ...}。
-
-        供预置因子重算与自建因子注册时的指标快照复用；数据不足时 ok=False。
-        """
-        if not formula:
-            return {"ok": False, "message": "无可解析公式，暂不支持本地分析"}
-        try:
-            from backend.services import market_data, reference_data
-            from backend.services.factor_operators import build_operator_namespace
-
-            codes = market_data.list_cached_codes("1d", exclude_indices=True)
-            if len(codes) < 30:
-                return {
-                    "ok": False,
-                    "message": f"本地仅 {len(codes)} 只股票缓存，不足以稳定估计 IC（至少 30 只）",
-                }
-            panels = market_data.load_price_panels(codes=codes)
-            close = panels.get("close")
-            if close is None or len(close.index) < 60:
-                return {"ok": False, "message": "本地行情区间不足 60 个交易日"}
-            ns = build_operator_namespace(
-                panels, industry_map=reference_data.load_industry_map()
-            )
-            # 注入基本面（公告日点位, 可选；无则不注入, 公式引用 fund_xxx 会报错并提示）
-            try:
-                from backend.services.fundamental import build_fundamental_panels
-
-                fund = build_fundamental_panels(codes, panels["close"].index)
-                if fund:
-                    ns.update({f"fund_{f}": p for f, p in fund.items()})
-                    ns.update({f"FUND_{f.upper()}": p for f, p in fund.items()})
-            except Exception:
-                pass
-            factor_df = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
-            if isinstance(factor_df, pd.Series):
-                factor_df = factor_df.to_frame()
-            if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
-                return {"ok": False, "message": "公式未产出有效因子面板"}
-            return_data = market_data.build_return_panel(close)
-            mask = None
-            try:
-                from backend.services.market_data import build_cross_section_mask
-
-                mask = build_cross_section_mask(panels)
-            except Exception:
-                mask = None
-            report = self.full_factor_analysis(
-                factor_df.dropna(how="all"), return_data, periods=[1, 5, 10, 20],
-                mask=mask,
-            )
-            s = report["summary"]
-            metrics = {
-                "ic_mean": float(s.get("ic_mean", 0.0)),
-                "rank_ic": float(s.get("rank_ic", 0.0)),
-                "ic_ir": float(s.get("ic_ir", 0.0)),
-                "ic_std": float(s.get("ic_std", 0.0)),
-                "annualized_return": float(s.get("annual_return", 0.0)),
-                "maximum_drawdown": float(s.get("max_drawdown", 0.0)),
-                "sharpe_ratio": float(s.get("sharpe_ratio", 0.0)),
-            }
-            return {
-                "ok": True,
-                "metrics": metrics,
-                "data_date": str(close.index[-1])[:10],
-                "n_stocks": len(close.columns),
-                "n_dates": len(close.index),
-            }
-        except Exception as e:
-            logger.warning(f"公式因子本地分析失败: {e}")
-            return {"ok": False, "message": f"本地分析失败: {e}"}
-
     async def add_to_pool(self, factor_id: int) -> bool:
-        """将因子加入因子池"""
+        """将因子加入因子池。
+
+        入池门槛：指标必须来自本地 QMT 样本重算（metric_source=local_recalc），
+        且样本规模达到方法验证下限。外部参考指标或小样本扫描结果不得直接入池，
+        避免把未经验证的因子送进组合回测。
+        """
         db = await get_db()
         try:
-            # 检查是否已存在
             cursor = await db.execute(
                 "SELECT id FROM factor_pool WHERE factor_id = ?", (factor_id,)
             )
             if await cursor.fetchone():
                 return True  # 已存在，幂等
+            cursor = await db.execute(
+                "SELECT metric_source, metric_sample_json, factor_name "
+                "FROM preset_factors WHERE id = ?",
+                (factor_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                raise ValueError("因子不存在")
+            source = row["metric_source"] or ""
+            sample = _parse_metric_sample(row["metric_sample_json"])
+            if source != "local_recalc":
+                raise ValueError(
+                    f"「{row['factor_name']}」的指标仍为外部参考值，未基于本地 QMT 样本重算；"
+                    "请先在因子详情页点击「重算」再入池"
+                )
+            n_stocks = int(sample.get("n_stocks") or 0)
+            n_dates = int(sample.get("n_dates") or 0)
+            if n_stocks < 300 or n_dates < 252:
+                raise ValueError(
+                    f"「{row['factor_name']}」本地样本仅 {n_stocks} 只股票 / {n_dates} 个交易日，"
+                    "未达到入池门槛（≥300 只、≥252 个交易日）；请先补全 QMT 行情后重算"
+                )
             await db.execute(
                 "INSERT INTO factor_pool (factor_id) VALUES (?)", (factor_id,)
             )
@@ -1563,6 +1563,11 @@ class FactorResearchService:
             mask=res.get("mask"),
         )
         s = report["summary"]
+        turnover = float(
+            self.turnover_analysis(res["factor_df"].dropna(how="all")).get(
+                "avg_turnover", 0.0
+            )
+        )
         metrics = {
             "ic_mean": float(s.get("ic_mean", 0.0)),
             "rank_ic": float(s.get("rank_ic", 0.0)),
@@ -1571,10 +1576,12 @@ class FactorResearchService:
             "annualized_return": float(s.get("annual_return", 0.0)),
             "maximum_drawdown": float(s.get("max_drawdown", 0.0)),
             "sharpe_ratio": float(s.get("sharpe_ratio", 0.0)),
+            "turnover_rate": turnover,
         }
         return {
             "ok": True,
             "metrics": metrics,
+            "start_date": res.get("start_date"),
             "data_date": res["data_date"],
             "n_stocks": res["n_stocks"],
             "n_dates": res["n_dates"],
@@ -1603,6 +1610,20 @@ class FactorResearchService:
         )
         ls_series = quantile.get("long_short_series", [])
         ls_cum = float(ls_series[-1]["cum_return"]) if ls_series else 0.0
+        spreads = [float(x["spread"]) for x in ls_series if x.get("spread") is not None]
+        n_ls = len(spreads)
+        if n_ls:
+            spread_arr = np.asarray(spreads, dtype=float)
+            annual_return = float((1.0 + ls_cum) ** (252.0 / n_ls) - 1.0)
+            vol = float(spread_arr.std(ddof=1) * np.sqrt(252)) if n_ls > 1 else 0.0
+            sharpe = float(spread_arr.mean() / spread_arr.std(ddof=1) * np.sqrt(252)) if n_ls > 1 and spread_arr.std(ddof=1) > 0 else 0.0
+            nav = 1.0 + np.asarray([x["cum_return"] for x in ls_series], dtype=float)
+            max_dd = float((nav / np.maximum.accumulate(nav) - 1.0).min())
+        else:
+            annual_return = 0.0
+            vol = 0.0
+            sharpe = 0.0
+            max_dd = 0.0
         return {
             "ic_mean": float(base.get("ic_mean", 0.0)),
             "rank_ic": float(base.get("rank_ic_mean", 0.0)),
@@ -1613,6 +1634,10 @@ class FactorResearchService:
             "n_cross_sections": int(len(base.get("ic_series", []))),
             "long_short_cum": ls_cum,
             "monotonicity": float(quantile.get("monotonicity", 0.0)),
+            "annualized_return": annual_return,
+            "maximum_drawdown": max_dd,
+            "sharpe_ratio": sharpe,
+            "long_short_vol": vol,
         }
 
     async def scan_factors_stream(
@@ -1845,6 +1870,8 @@ class FactorResearchService:
                     "ok": True,
                     "metrics": metrics,
                     "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                    "n_stocks": int(factor_df.shape[1]),
+                    "n_dates": int(factor_df.shape[0]),
                 }
             except Exception as e:  # noqa: BLE001
                 return {**item, "ok": False, "error": str(e)[:300]}
@@ -1864,6 +1891,8 @@ class FactorResearchService:
 
         n_stocks = len(panels["close"].columns)
         n_dates = len(panels["close"].index)
+        qmt_calendar = market_data._trading_calendar()
+        date_unit = "交易日" if qmt_calendar else "观测日（QMT 未连接，未校验交易日历）"
         warnings: list[str] = []
         if n_stocks < 300:
             warnings.append(
@@ -1872,8 +1901,15 @@ class FactorResearchService:
             )
         if n_dates < 252:
             warnings.append(
-                f"样本仅 {n_dates} 个交易日（建议 ≥252/1 年），不足以覆盖完整牛熊"
+                f"样本仅 {n_dates} 个{date_unit}（建议 ≥252/1 年），不足以覆盖完整牛熊"
             )
+        n_tested = max(int(ok_count), 1)
+        expected_fp_5pct = round(n_tested * 0.05, 1)
+        warnings.append(
+            f"批量扫描共检验 {ok_count} 个因子，按 5% 显著性水平期望产生约 "
+            f"{expected_fp_5pct} 个假阳性；按扫描排名直接入池存在数据挖掘偏差，"
+            "候选因子必须先通过样本外验证（walk-forward）再入池"
+        )
         yield _sse(
             "scan_done",
             {
@@ -1883,8 +1919,15 @@ class FactorResearchService:
                 "data_date": str(panels["close"].index[-1])[:10],
                 "n_stocks": n_stocks,
                 "n_dates": n_dates,
+                "calendar": "qmt" if qmt_calendar else "weekday_approx",
                 "duration_ms": int((time.perf_counter() - started) * 1000),
                 "warnings": warnings,
+                "multiple_testing": {
+                    "n_tested": n_tested,
+                    "expected_false_positives_5pct": expected_fp_5pct,
+                    "bonferroni_p_value": round(0.05 / n_tested, 6),
+                    "note": "样本内扫描只用于粗筛；入池前请对候选因子运行样本外验证",
+                },
             },
         )
 
@@ -1922,12 +1965,43 @@ class FactorResearchService:
                     int(time.time()),
                 ),
             )
+            sample_meta = {
+                "source": "local_qmt",
+                "n_stocks": int(res.get("n_stocks") or return_data.shape[1]),
+                "n_dates": int(res.get("n_dates") or return_data.shape[0]),
+                "start_date": str(return_data.index[0])[:10],
+                "data_date": str(return_data.index[-1])[:10],
+                "updated_fields": [
+                    "ic_mean",
+                    "rank_ic",
+                    "ic_ir",
+                    "ic_std",
+                    "annualized_return",
+                    "maximum_drawdown",
+                    "sharpe_ratio",
+                    "start_date",
+                    "data_date",
+                ],
+            }
             await db.execute(
                 "UPDATE preset_factors SET ic_mean = ?, rank_ic = ?, ic_ir = ?, "
-                "ic_std = ?, data_date = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE id = ?",
-                (m["ic_mean"], m["rank_ic"], m["ic_ir"], m["ic_std"],
-                 str(return_data.index[-1])[:10], factor_id),
+                "ic_std = ?, annualized_return = ?, maximum_drawdown = ?, "
+                "sharpe_ratio = ?, turnover_rate = NULL, start_date = ?, data_date = ?, "
+                "metric_source = 'local_recalc', metric_sample_json = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (
+                    m["ic_mean"],
+                    m["rank_ic"],
+                    m["ic_ir"],
+                    m["ic_std"],
+                    m.get("annualized_return"),
+                    m.get("maximum_drawdown"),
+                    m.get("sharpe_ratio"),
+                    str(return_data.index[0])[:10],
+                    str(return_data.index[-1])[:10],
+                    json.dumps(sample_meta, ensure_ascii=False),
+                    factor_id,
+                ),
             )
             await db.commit()
             try:

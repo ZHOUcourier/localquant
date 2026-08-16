@@ -35,24 +35,30 @@ class FactorResponse(BaseModel):
 class ICAnalysisRequest(BaseModel):
     """IC 分析请求"""
 
-    factor_data: dict  # {date: {code: value}}
-    return_data: dict  # {date: {code: return}}
+    factor_data: dict = {}
+    return_data: dict = {}
+    factor_token: str = ""
+    return_token: str = ""
     periods: list[int] = Field(default=[1, 5, 10, 20])
 
 
 class QuantileRequest(BaseModel):
     """分层分析请求"""
 
-    factor_data: dict
-    return_data: dict
+    factor_data: dict = {}
+    return_data: dict = {}
+    factor_token: str = ""
+    return_token: str = ""
     n_groups: int = 5
 
 
 class AlphaLensRequest(BaseModel):
     """AlphaLens 因子分析请求（调用 alphalens-reloaded 计算）"""
 
-    factor_data: dict
-    return_data: dict
+    factor_data: dict = {}
+    return_data: dict = {}
+    factor_token: str = ""
+    return_token: str = ""
     periods: list[int] = [1, 5, 10]
     quantiles: int = 5
     sector_map: dict = {}  # {股票代码: 行业名}；空则不做行业分组
@@ -67,6 +73,7 @@ class NeutralizeRequest(BaseModel):
 
 
 class CorrelationRequest(BaseModel):
-    """相关性分析请求"""
+    """相关性分析请求；factor_tokens 优先于 factors"""
 
-    factors: dict[str, dict]  # {factor_name: {date: {code: value}}}
+    factors: dict[str, dict] = {}
+    factor_tokens: dict[str, str] = {}

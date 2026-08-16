@@ -341,7 +341,7 @@ DEFAULT_BACKTEST_PARAMS = {
     "commission_rate": 0.001,
     "slippage": 0.001,
     "stamp_tax": 0.0005,
-    "normalize": "none",
+    "normalize": "long_only",
     "take_profit": 0.0,
     "stop_loss": 0.0,
     "trailing_stop": 0.0,
@@ -461,36 +461,11 @@ async def execute_backtest_run(run_id: str) -> dict:
         stop_loss = float(params.get("stop_loss") or 0.0)
         trailing_stop = float(params.get("trailing_stop") or 0.0)
         execute_at = str(params.get("execute_at") or "next_close")
-        normalize = str(params.get("normalize") or "none")
+        normalize = str(params.get("normalize") or "long_only")
+        max_gross_exposure = float(params.get("max_gross_exposure") or 1.0)
         delisting_loss = float(params.get("delisting_loss") or 0.0)
-        # 空头可融券过滤：两融标的池逐日 as-of 快照存在时应用（A 股仅两融池可做空）
+        # 普通股票多头：不做空，因此不需要两融池/可融券掩码。
         shortable = None
-        if normalize == "dollar_neutral":
-            try:
-                from backend.services import reference_data
-
-                pool_mask = reference_data.load_universe_pool_mask(
-                    "margin", prices.index
-                )
-                if pool_mask is not None:
-                    known = pool_mask.ffill()
-                    if known.notna().any().any():
-                        first_known_row = known[known.notna().any(axis=1)].iloc[0]
-                        pool_mask = known.fillna(first_known_row).astype(bool)
-                    shortable = pool_mask.reindex(
-                        index=prices.index, columns=prices.columns
-                    ).fillna(False)
-                else:
-                    margin_pool = reference_data.load_universe_pool("margin")
-                    if margin_pool:
-                        shortable = pd.DataFrame(
-                            True, index=prices.index, columns=prices.columns
-                        )
-                        for c in prices.columns:
-                            if c not in margin_pool:
-                                shortable[c] = False
-            except Exception:
-                shortable = None
         result = await asyncio.to_thread(
             lambda: backtest_analysis.run_backtest(
                 signals=signals_df,
@@ -514,6 +489,7 @@ async def execute_backtest_run(run_id: str) -> dict:
                     panels.get("open") if execute_at == "next_open" else None
                 ),
                 delisting_loss=delisting_loss,
+                max_gross_exposure=max_gross_exposure,
             )
         )
         for a in result.get("assumptions", []):
@@ -568,6 +544,8 @@ async def execute_backtest_run(run_id: str) -> dict:
                 "cost_summary": result.get("cost_summary", {}),
                 "delisting_events": result.get("delisting_events", []),
                 "n_delisting": len(result.get("delisting_events", [])),
+                "leverage_summary": result.get("leverage_summary", {}),
+                "assumptions": result.get("assumptions", []),
             }
             # 明细数据量受限时只保留尾部，并显式标注截断，避免 trade_count 与明细不一致
             _TRADE_TAIL = 1000

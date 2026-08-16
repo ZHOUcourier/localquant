@@ -370,6 +370,11 @@ def optimize_weights(
     """
     from scipy.optimize import minimize
 
+    if not long_only:
+        raise ValueError(
+            "本系统仅支持普通股票多头组合优化，不允许做空（long_only 必须为 True）"
+        )
+
     assets = list(scores.index)
     n = len(assets)
     if n == 0:

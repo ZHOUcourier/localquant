@@ -32,7 +32,7 @@
       "height": 180,
       "static_input_data": {
         "initial_capital": 1000000,
-        "commission_rate": 0.0003,
+        "commission_rate": 0.001,
         "slippage": 0.001
       }
     },

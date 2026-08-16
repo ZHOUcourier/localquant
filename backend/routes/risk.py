@@ -44,6 +44,7 @@ class PanelReq(BaseModel):
     amount: dict = {}
     market_cap: dict = {}
     fundamental: dict = {}
+    panel_token: str = ""  # 大面板经 /api/risk/panel 落盘后的本地 artifact token
 
 
 class StyleFactorReq(BaseModel):
@@ -63,7 +64,7 @@ class ScoresReq(BaseModel):
     industry_map: dict = {}
     max_position: float = 0.20
     max_industry_exposure: float = 0.30
-    long_only: bool = True
+    long_only: bool = True  # 系统只支持普通多头，禁止传 false
     risk_aversion: float = 1.0
     gross_target: float = 1.0
 
@@ -84,10 +85,21 @@ class StressReq(BaseModel):
 async def style_exposure(req: PanelReq):
     """构建每日风格暴露面板（Barra-like）"""
     try:
+        if req.panel_token:
+            from backend.services.panel_artifact import load_panels
+
+            stored = load_panels(req.panel_token, ["close", "volume", "amount"])
+            close_df = stored.get("close", pd.DataFrame())
+            volume_df = stored.get("volume")
+            amount_df = stored.get("amount")
+        else:
+            close_df = _df(req.close)
+            volume_df = _df(req.volume) if req.volume else None
+            amount_df = _df(req.amount) if req.amount else None
         styles = risk_svc.build_style_exposures(
-            _df(req.close),
-            volume=_df(req.volume) if req.volume else None,
-            amount=_df(req.amount) if req.amount else None,
+            close_df,
+            volume=volume_df,
+            amount=amount_df,
             market_cap=_df(req.market_cap) if req.market_cap else None,
             fundamental=_fundamental(req.fundamental) if req.fundamental else None,
         )
@@ -123,10 +135,15 @@ async def attribution(req: AttributionReq):
 async def optimize(req: ScoresReq):
     """带约束的组合权重（SLSQP）"""
     try:
+        if not req.long_only:
+            raise HTTPException(
+                status_code=400,
+                detail="本系统仅支持普通股票多头组合优化，不允许做空",
+            )
         w = risk_svc.optimize_weights(
             pd.Series(req.scores),
             covariance=None,
-            long_only=req.long_only,
+            long_only=True,
             max_position=req.max_position,
             industry_map=req.industry_map or None,
             max_industry_exposure=req.max_industry_exposure,
@@ -197,7 +214,7 @@ async def stress_historical(req: StressHistoricalReq):
             codes=pool, start_date=req.start_date, end_date=req.end_date
         )
         close = panels["close"]
-        ret = close.pct_change()
+        ret = market_data.build_return_panel(close)
         out = risk_svc.historical_scenario_stress(
             ret, pd.Series(req.weights) if req.weights else pd.Series(dtype=float)
         )
@@ -250,16 +267,39 @@ async def forecast_panel(req: RiskForecastPanelReq):
             codes=pool, start_date=req.start_date, end_date=req.end_date
         )
         close = panels["close"]
-        ret = close.pct_change()
+        # 与回测/因子研究统一：停牌前向填充、复牌跳空入账
+        ret = market_data.build_return_panel(close)
         w = pd.Series(req.weights) if req.weights else pd.Series(dtype=float)
         w = w[w.index.isin(close.columns)]
         if w.empty:
             raise HTTPException(status_code=400, detail="权重与缓存股票池无交集")
 
+        # 风险画像应尽可能使用本地已有参考面板：市值 + 财务（公告日点位）
+        market_cap = None
+        fundamental = {}
+        try:
+            from backend.services import fundamental as fundamental_svc
+            from backend.services import reference_data
+
+            market_cap = reference_data.build_market_cap_panel(close)
+            fund_panels = fundamental_svc.build_fundamental_panels(
+                list(close.columns), close.index
+            )
+            if fund_panels:
+                fundamental = {
+                    k: v
+                    for k, v in fund_panels.items()
+                    if k in ("pb", "roe")
+                }
+        except Exception:
+            pass
+
         styles = risk_svc.build_style_exposures(
             close,
             volume=panels.get("volume"),
             amount=panels.get("amount"),
+            market_cap=market_cap,
+            fundamental=fundamental or None,
         )
         sres = risk_svc.style_factor_returns(ret, styles)
         wf = pd.DataFrame(
@@ -298,6 +338,9 @@ async def forecast_panel(req: RiskForecastPanelReq):
             "data_end": str(close.index[-1])[:10],
             "style_factor_summary": sres["summary"],
             "historical_scenarios": hist,
+            "available_styles": list(styles.keys()),
+            "market_cap_available": market_cap is not None,
+            "fundamental_available": bool(fundamental),
         }
     except HTTPException:
         raise
@@ -313,7 +356,8 @@ async def risk_panel(
 ):
     """从本地行情缓存加载风险分析面板（close/volume/amount，前复权口径）
 
-    让风险页直接使用真实缓存数据（股票池 + 区间），无需手工粘贴 JSON。
+    全市场大面板落本地 artifact，只返回 token 与受限预览，避免把
+    5000+ 只股票的面板塞进浏览器 JSON。
     """
     pool = [c.strip() for c in codes.split(",") if c.strip()]
     try:
@@ -322,23 +366,21 @@ async def risk_panel(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    out = {
-        "codes": list(panels.get("close", pd.DataFrame()).columns),
-        "start": (
-            str(panels["close"].index[0].date())
-            if "close" in panels and len(panels["close"])
-            else ""
-        ),
-        "end": (
-            str(panels["close"].index[-1].date())
-            if "close" in panels and len(panels["close"])
-            else ""
-        ),
-        "close": _panel_dict(panels.get("close", pd.DataFrame())),
-        "volume": _panel_dict(panels.get("volume", pd.DataFrame())),
-        "amount": _panel_dict(panels.get("amount", pd.DataFrame())),
-    }
-    return out
+    from backend.services.panel_artifact import build_panel_response
+
+    resp = build_panel_response(
+        {
+            "close": panels.get("close", pd.DataFrame()),
+            "volume": panels.get("volume", pd.DataFrame()),
+            "amount": panels.get("amount", pd.DataFrame()),
+        },
+        inline_names=["close", "volume", "amount"],
+    )
+    close = panels.get("close", pd.DataFrame())
+    resp["codes"] = [str(c) for c in close.columns]
+    resp["start"] = str(close.index[0].date()) if len(close) else ""
+    resp["end"] = str(close.index[-1].date()) if len(close) else ""
+    return resp
 
 
 class AttributionRunRequest(BaseModel):

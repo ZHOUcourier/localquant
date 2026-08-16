@@ -23,6 +23,10 @@ export interface PresetFactor {
   data_date: string | null
   stock_pool: string | null
   is_preset: boolean
+  /** external_ref=外部参考值；local_recalc=本地 QMT 样本重算 */
+  metric_source?: 'external_ref' | 'local_recalc' | string
+  metric_sample?: Record<string, unknown>
+  sample_warning?: string | null
 }
 
 export interface PresetFactorCategory {

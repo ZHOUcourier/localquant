@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from backend.services.factor_research import FactorResearchService, factor_research
 
@@ -149,12 +150,42 @@ class TestScanFactors:
         assert done.get("warnings")
         assert any("股票" in w for w in done["warnings"])
 
-        # 库内指标已覆盖更新
+        # 库内指标已覆盖更新，且必须标记为本地 QMT 样本（不允许外部参考值直接入池）
         conn = sqlite3.connect(db_path)
-        row = conn.execute("SELECT ic_mean, data_date FROM preset_factors WHERE id=?", (fid1,)).fetchone()
+        row = conn.execute(
+            "SELECT ic_mean, data_date, annualized_return, maximum_drawdown, "
+            "sharpe_ratio, metric_source, metric_sample_json "
+            "FROM preset_factors WHERE id=?",
+            (fid1,),
+        ).fetchone()
         conn.close()
         assert row[0] is not None and row[0] > 0.01
         assert row[1] is not None
+        assert row[2] is not None
+        assert row[3] is not None
+        assert row[4] is not None
+        assert row[5] == "local_recalc"
+        sample = json.loads(row[6])
+        assert sample["n_stocks"] == 60
+
+    def test_add_to_pool_rejects_external_reference(self, tmp_path, monkeypatch):
+        """外部参考指标不得入池；必须先基于本地 QMT 样本重算"""
+        from backend import database
+
+        db_path = str(tmp_path / "gate.db")
+        monkeypatch.setattr(database, "DB_PATH", Path(db_path))
+        asyncio.run(database.init_db())
+        fid = _insert_preset_factor(db_path, "mom20", _synthetic_formula(), "TECHNICAL")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE preset_factors SET ic_mean=0.03, metric_source='external_ref' WHERE id=?",
+            (fid,),
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(ValueError):
+            asyncio.run(factor_research.add_to_pool(fid))
 
     def test_scan_stream_no_data(self, tmp_path, monkeypatch):
         """无行情缓存时应产出明确的 scan_done 错误事件而非崩溃"""

@@ -98,10 +98,15 @@ async function handleCompute() {
     }
     const data = await res.json()
     const result: FactorResult = {
-      dates: data.dates,
-      stocks: data.stocks,
-      values: data.factor_data,
-      returnData: data.return_data,
+      dates: data.dates ?? [],
+      stocks: data.stocks ?? [],
+      previewStocks: data.preview_stocks ?? data.stocks ?? [],
+      values: data.panel_mode === 'artifact' ? (data.preview?.factor_data ?? {}) : (data.factor_data ?? {}),
+      returnData: data.return_data ?? {},
+      factorToken: data.panel_token,
+      returnToken: data.panel_token,
+      panelToken: data.panel_token,
+      panelMode: data.panel_mode,
       name: mode.value === 'formula' ? formula.value || 'factor' : 'custom_factor',
     }
     preview.value = result
@@ -121,6 +126,7 @@ async function handleCompute() {
 
 // 预览仅展示最近 20 个交易日，避免渲染过大表格
 const previewDates = computed(() => (preview.value ? preview.value.dates.slice(-20) : []))
+const previewStocks = computed(() => preview.value?.previewStocks ?? preview.value?.stocks ?? [])
 
 function cellValue(d: string, s: string): number | undefined {
   return preview.value?.values[d]?.[s]
@@ -207,7 +213,9 @@ function cellClass(v: number | undefined): string {
 
       <!-- 因子值预览 -->
       <div v-if="preview" class="flex flex-col gap-2">
-        <label class="text-xs text-[#646262]">因子值预览（最近 {{ previewDates.length }} 个交易日）</label>
+        <label class="text-xs text-[#646262]">
+          因子值预览（最近 {{ previewDates.length }} 个交易日{{ preview.panelMode === 'artifact' ? '，大样本仅展示前 ' + previewStocks.length + ' 只' : '' }}）
+        </label>
         <ScrollArea :max-height="200">
           <table class="w-full border-collapse text-xs">
             <thead>
@@ -216,7 +224,7 @@ function cellClass(v: number | undefined): string {
                   日期
                 </th>
                 <th
-                  v-for="s in preview.stocks"
+                  v-for="s in previewStocks"
                   :key="s"
                   class="border-b border-[rgba(15,0,0,0.12)] px-2 py-1.5 text-right text-[#646262] sticky top-0 bg-[#f8f7f7]"
                 >
@@ -228,7 +236,7 @@ function cellClass(v: number | undefined): string {
               <tr v-for="d in previewDates" :key="d" class="hover:bg-[#f1eeee]">
                 <td class="border-b border-[rgba(15,0,0,0.12)] px-2 py-1 text-[#646262]">{{ d }}</td>
                 <td
-                  v-for="s in preview.stocks"
+                  v-for="s in previewStocks"
                   :key="s"
                   class="border-b border-[rgba(15,0,0,0.12)] px-2 py-1 text-right font-mono"
                   :class="cellClass(cellValue(d, s))"

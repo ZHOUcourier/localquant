@@ -104,7 +104,11 @@ async def sql_query(body: SQLQueryRequest):
 
 @router.get("/tables")
 async def list_tables():
-    """列出本地可查询的数据表（各周期的 Parquet 缓存）"""
+    """列出本地可查询的数据表（各周期的 Parquet 缓存）
+
+    sample_range 取该周期全部文件的并集范围，而不是第一个文件的范围；
+    避免 QUBE get_data_status 拿到单文件样本区间后误判可回测区间。
+    """
     tables = []
     cache_dir = settings.cache_dir
     if cache_dir.exists():
@@ -114,22 +118,63 @@ async def list_tables():
             files = sorted(period_dir.glob("*.parquet"))
             if not files:
                 continue
-            # 读第一个文件获取列结构
+
+            if period_dir.name == "reference":
+                # 参考快照是 [date, code, ...] 长表，不是行情面板；
+                # 日期范围来自 date 列，而不是把默认 RangeIndex 误解析成 1970。
+                columns: list[str] = []
+                ref_dates: list = []
+                for f in files:
+                    try:
+                        df = pd.read_parquet(f)
+                        columns = list(df.columns)
+                        if "date" in df.columns:
+                            ref_dates.extend(pd.to_datetime(df["date"], errors="coerce").dropna().tolist())
+                    except Exception:
+                        continue
+                date_range = (
+                    f"{min(ref_dates).date()} ~ {max(ref_dates).date()}"
+                    if ref_dates
+                    else ""
+                )
+                tables.append(
+                    {
+                        "period": "reference",
+                        "path": "data/cache/reference/*.parquet",
+                        "kind": "reference",
+                        "file_count": len(files),
+                        "columns": columns,
+                        "sample_range": date_range,
+                        "codes": [],
+                        "note": "参考元数据快照（行业/成分/合约/两融池），非行情价格表",
+                    }
+                )
+                continue
+
+            # 行情周期：用覆盖度缓存的并集范围；列结构只读第一个文件即可（下载层保证同构）
             sample = _load_stock(files[0])
             columns = list(sample.columns) if sample is not None else []
             date_range = ""
-            if sample is not None and len(sample) > 0:
-                date_range = (
-                    f"{sample.index.min().date()} ~ {sample.index.max().date()}"
-                )
+            try:
+                coverage = market_data.cache_coverage(period_dir.name)
+                starts = [e.get("start") for e in coverage if e.get("start")]
+                ends = [e.get("end") for e in coverage if e.get("end")]
+                if starts and ends:
+                    date_range = f"{min(starts)} ~ {max(ends)}"
+            except Exception:
+                if sample is not None and len(sample) > 0:
+                    date_range = f"{sample.index.min().date()} ~ {sample.index.max().date()}"
+            all_codes = [_file_code(f) for f in files]
             tables.append(
                 {
                     "period": period_dir.name,
                     "path": f"data/cache/{period_dir.name}/*.parquet",
+                    "kind": "quotes",
                     "stock_count": len(files),
                     "columns": columns,
                     "sample_range": date_range,
-                    "codes": [_file_code(f) for f in files[:200]],
+                    "codes": all_codes[:200],
+                    "codes_truncated": len(all_codes) > 200,
                     "note": (
                         "缓存为不复权价 + adjust_factor 列；前复权价 = close × adjust_factor / 最新 adjust_factor"
                         if "adjust_factor" in columns
@@ -854,6 +899,7 @@ class EventStudyRequest(BaseModel):
     min_events: int = 5
     volume_k: float = 3.0
     events: list[dict] = []  # 手工事件 [{date, code}]（event_type=custom 时使用）
+    benchmark_code: str = ""  # 基准标的（如 000300.SH）；空=全市场截面均值
     period: str = "1d"
 
 
@@ -909,11 +955,25 @@ async def event_study(body: EventStudyRequest):
         manual_events=body.events or None,
         volume_k=body.volume_k,
     )
+    market_returns = None
+    benchmark_code = body.benchmark_code.strip()
+    if benchmark_code:
+        try:
+            bench = market_data.load_price_panels(
+                codes=[benchmark_code],
+                start_date=body.start_date,
+                end_date=body.end_date,
+            )
+            market_returns = market_data.build_return_panel(bench["close"]).iloc[:, 0]
+        except Exception as e:
+            return {"ok": False, "error": f"基准行情加载失败 {benchmark_code}: {e}"}
+
     result = event_study_analysis(
         rets,
         events,
         window_before=body.window_before,
         window_after=body.window_after,
+        market_returns=market_returns,
         min_events=body.min_events,
     )
     result["event_type"] = body.event_type

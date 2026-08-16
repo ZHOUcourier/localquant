@@ -387,7 +387,13 @@ function cardPerfMetrics(f: PresetFactor) {
           @click="openDetail(f.id)"
         >
           <div class="mb-2 flex items-start justify-between gap-2">
-            <span class="text-sm font-medium leading-tight text-[#201d1d]">{{ f.factor_name }}</span>
+            <span class="flex items-center gap-1.5 text-sm font-medium leading-tight text-[#201d1d]">
+              {{ f.factor_name }}
+              <span
+                class="rounded-[3px] border px-1 py-px text-[10px] font-medium"
+                :class="f.metric_source === 'local_recalc' ? 'border-[rgba(46,142,108,0.35)] bg-[rgba(46,142,108,0.10)] text-[#2E8E6C]' : 'border-[rgba(204,127,8,0.35)] bg-[rgba(204,127,8,0.10)] text-[#cc7f08]'"
+              >{{ f.metric_source === 'local_recalc' ? '本地重算' : '外部参考' }}</span>
+            </span>
             <span class="flex shrink-0 items-center gap-1 text-[11px] text-[#646262]">
               <span v-if="healthLoaded && healthMap.get(f.id)" v-html="stageBadge(healthMap.get(f.id))" />
               <span class="inline-block h-[6px] w-[6px] rounded-full" :style="{ backgroundColor: f.category_color_hex || '#646262' }" />
@@ -467,7 +473,13 @@ function cardPerfMetrics(f: PresetFactor) {
             title="点击查看公式与具体数据"
             @click="openDetail(f.id)"
           >
-            <td class="px-3 py-2 text-sm font-medium text-[#201d1d]">{{ f.factor_name }}</td>
+            <td class="px-3 py-2 text-sm font-medium text-[#201d1d]">
+              {{ f.factor_name }}
+              <span
+                class="ml-1 rounded-[3px] border px-1 py-px text-[10px] font-medium"
+                :class="f.metric_source === 'local_recalc' ? 'border-[rgba(46,142,108,0.35)] bg-[rgba(46,142,108,0.10)] text-[#2E8E6C]' : 'border-[rgba(204,127,8,0.35)] bg-[rgba(204,127,8,0.10)] text-[#cc7f08]'"
+              >{{ f.metric_source === 'local_recalc' ? '本地重算' : '外部参考' }}</span>
+            </td>
             <td class="px-3 py-2">
               <span class="inline-flex items-center gap-1 text-xs text-[#646262]">
                 <span v-if="healthLoaded && healthMap.get(f.id)" v-html="stageBadge(healthMap.get(f.id))" />

@@ -18,12 +18,27 @@ class QMTClient:
     def __init__(self):
         self._xtdata: Any = None
         self._connected: bool = False
+        self._last_attempt: float = 0.0
+        self._attempt_count: int = 0
         self._try_connect()
 
     # ── 连接管理 ─────────────────────────────────────────────
 
-    def _try_connect(self):
-        """尝试导入 xtquant 并连接 QMT 客户端"""
+    def _try_connect(self, force: bool = False) -> None:
+        """尝试导入 xtquant 并连接 QMT 客户端。
+
+        未连接时允许周期性自动重连（QMT 客户端可能在后端启动之后才打开），
+        冷却 15 秒避免每个请求都触发连接尝试与日志。
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        if not force and self._connected:
+            return
+        if not force and now - self._last_attempt < 15:
+            return
+        self._last_attempt = now
+        self._attempt_count += 1
         try:
             from xtquant import xtdata  # type: ignore[import-untyped]
 
@@ -33,14 +48,20 @@ class QMTClient:
             self._connected = True
             logger.info("QMT xtdata connected successfully")
         except ImportError:
-            logger.warning(
-                "xtquant not installed — QMT data source unavailable "
-                "(only available on Windows with QMT client)"
-            )
             self._connected = False
+            if force or self._attempt_count == 1:
+                logger.warning(
+                    "xtquant not installed — QMT data source unavailable "
+                    "(only available on Windows with QMT client)"
+                )
         except Exception as e:
-            logger.warning(f"QMT xtdata connection failed: {e}")
             self._connected = False
+            logger.warning(f"QMT xtdata connection failed: {e}")
+
+    def reconnect(self) -> bool:
+        """显式重连 QMT（供数据状态/下载前调用），返回是否连接成功"""
+        self._try_connect(force=True)
+        return self._connected
 
     @property
     def connected(self) -> bool:
@@ -48,7 +69,9 @@ class QMTClient:
         return self._connected
 
     def check_connection(self) -> dict:
-        """返回连接状态信息"""
+        """返回连接状态信息；未连接时先尝试自动重连一次（带冷却）"""
+        if not self._connected:
+            self._try_connect()
         if self._connected:
             return {"connected": True, "message": "QMT xtdata 已连接"}
         return {
@@ -57,7 +80,9 @@ class QMTClient:
         }
 
     def _ensure_connected(self):
-        """确保已连接，否则抛出异常"""
+        """确保已连接，否则自动尝试重连一次并抛出异常"""
+        if not self._connected:
+            self._try_connect()
         if not self._connected:
             raise ConnectionError(
                 "QMT 未连接 — xtquant 仅 Windows 可用，"

@@ -35,6 +35,17 @@ interface CorrData {
   matrix: number[][]
 }
 
+interface CombinedPanelResponse {
+  dates?: string[]
+  stocks?: string[]
+  preview_stocks?: string[]
+  panel_token?: string
+  panel_mode?: 'inline' | 'artifact'
+  factor_data?: FactorMatrix
+  return_data?: FactorMatrix
+  preview?: { factor_data?: FactorMatrix; return_data?: FactorMatrix }
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
@@ -57,48 +68,50 @@ const nGroups = ref(5)
 // 全部来自后端真实计算，初始为空
 const report = ref<FactorReport | null>(null)
 const corrData = ref<CorrData | null>(null)
-const computedFactors = ref<Record<string, FactorMatrix>>({})
+const computedFactors = ref<Record<string, FactorResult>>({})
 const currentFactor = ref<string | null>(null)
-const returnData = ref<FactorMatrix | null>(null)
 
 // AlphaLens（按需运行，比综合报告重）：记住当前因子数据供单独调用
 const alReport = ref<AlphaLensReportT | null>(null)
 const alLoading = ref(false)
 const alError = ref<string | null>(null)
-const lastValues = ref<FactorMatrix | null>(null)
+const lastEntry = ref<FactorResult | null>(null)
 
 const factorNames = computed(() => Object.keys(computedFactors.value))
 
-/** 对指定因子矩阵执行完整评估：一次 /api/factor/analysis 得到综合报告（与因子分析节点同源） */
+/** 对指定因子执行完整评估。全市场 artifact 模式只传 token；小样本兼容矩阵传输。 */
 async function evaluate(
   name: string,
-  values: FactorMatrix,
-  returns: FactorMatrix,
-  allFactors: Record<string, FactorMatrix>,
+  entry: FactorResult,
+  allFactors: Record<string, FactorResult>,
   groups: number,
 ) {
   evaluating.value = true
   evalError.value = null
   try {
     const rep = await postJson<FactorReport>('/api/factor/analysis', {
-      factor_data: values,
-      return_data: returns,
+      factor_data: entry.panelMode === 'artifact' ? {} : entry.values,
+      return_data: entry.panelMode === 'artifact' ? {} : entry.returnData,
+      factor_token: entry.panelMode === 'artifact' ? entry.factorToken : '',
+      return_token: entry.panelMode === 'artifact' ? entry.returnToken : '',
       n_groups: groups,
     })
     report.value = rep
-    lastValues.value = values
-    // 因子切换/重算时清空上一个 AlphaLens 结果（避免错配）
+    lastEntry.value = entry
     alReport.value = null
     alError.value = null
 
-    // 相关性（需要至少 2 个因子）
-    if (Object.keys(allFactors).length >= 2) {
+    const names = Object.keys(allFactors)
+    if (names.length >= 2) {
+      const allArtifact = names.every((n) => allFactors[n].factorToken)
       const cRes = await postJson<{
         matrix: Record<string, Record<string, number>>
         factor_names: string[]
-      }>('/api/factor/correlation', { factors: allFactors })
-      const names = cRes.factor_names
-      corrData.value = { names, matrix: names.map((a) => names.map((b) => cRes.matrix[a]?.[b] ?? 0)) }
+      }>('/api/factor/correlation', allArtifact
+        ? { factors: {}, factor_tokens: Object.fromEntries(names.map((n) => [n, allFactors[n].factorToken])) }
+        : { factors: Object.fromEntries(names.map((n) => [n, allFactors[n].values])) })
+      const cNames = cRes.factor_names
+      corrData.value = { names: cNames, matrix: cNames.map((a) => cNames.map((b) => cRes.matrix[a]?.[b] ?? 0)) }
     } else {
       corrData.value = null
     }
@@ -117,13 +130,16 @@ async function evaluate(
 
 /** 按需运行 AlphaLens 分析（复用当前因子值与收益；因子研究页无行业数据，不传 sector_map） */
 async function runAlphaLens() {
-  if (!lastValues.value || !returnData.value) return
+  const entry = lastEntry.value
+  if (!entry) return
   alLoading.value = true
   alError.value = null
   try {
     alReport.value = await postJson<AlphaLensReportT>('/api/factor/alphalens', {
-      factor_data: lastValues.value,
-      return_data: returnData.value,
+      factor_data: entry.panelMode === 'artifact' ? {} : entry.values,
+      return_data: entry.panelMode === 'artifact' ? {} : entry.returnData,
+      factor_token: entry.panelMode === 'artifact' ? entry.factorToken : '',
+      return_token: entry.panelMode === 'artifact' ? entry.returnToken : '',
       periods: [1, 5, 10],
       quantiles: nGroups.value,
     })
@@ -135,25 +151,24 @@ async function runAlphaLens() {
 }
 
 async function handleFactorComputed(result: FactorResult) {
-  const factors = { ...computedFactors.value, [result.name]: result.values }
+  const factors = { ...computedFactors.value, [result.name]: result }
   computedFactors.value = factors
-  returnData.value = result.returnData
-  await evaluate(result.name, result.values, result.returnData, factors, nGroups.value)
+  await evaluate(result.name, result, factors, nGroups.value)
 }
 
 /** 切换分层组数后重新评估当前因子 */
 async function handleGroupsChange(groups: number) {
   nGroups.value = groups
   const cf = currentFactor.value
-  if (cf && returnData.value && computedFactors.value[cf]) {
-    await evaluate(cf, computedFactors.value[cf], returnData.value, computedFactors.value, groups)
-  }
+  const entry = cf ? computedFactors.value[cf] : null
+  if (cf && entry) await evaluate(cf, entry, computedFactors.value, groups)
 }
 
 /** 点击已计算因子 → 重新评估该因子 */
 async function handleSelectFactor(name: string) {
-  if (!returnData.value || !computedFactors.value[name]) return
-  await evaluate(name, computedFactors.value[name], returnData.value, computedFactors.value, nGroups.value)
+  const entry = computedFactors.value[name]
+  if (!entry) return
+  await evaluate(name, entry, computedFactors.value, nGroups.value)
 }
 
 function handleRemoveFactor(name: string) {
@@ -168,17 +183,35 @@ function handleRemoveFactor(name: string) {
 
 /** 多因子等权合成（后端 /api/factor/combine），并将合成结果作为新因子评估 */
 async function handleCombine() {
-  if (Object.keys(computedFactors.value).length < 2 || !returnData.value) return
+  const names = Object.keys(computedFactors.value)
+  if (names.length < 2) return
+  const first = computedFactors.value[names[0]]
+  const allArtifact = names.every((n) => computedFactors.value[n].factorToken)
   evaluating.value = true
   evalError.value = null
   try {
-    const combined = await postJson<FactorMatrix>('/api/factor/combine', { factors: computedFactors.value })
-    const name = `合成因子(${Object.keys(computedFactors.value).length})`
+    const data = await postJson<CombinedPanelResponse>('/api/factor/combine', allArtifact
+      ? { factors: {}, factor_tokens: Object.fromEntries(names.map((n) => [n, computedFactors.value[n].factorToken])) }
+      : { factors: Object.fromEntries(names.map((n) => [n, computedFactors.value[n].values])) })
+    const name = `合成因子(${names.length})`
+    const combined: FactorResult = {
+      name,
+      dates: data.dates ?? first.dates,
+      stocks: data.stocks ?? first.stocks,
+      previewStocks: data.preview_stocks ?? data.stocks ?? first.previewStocks,
+      values: data.panel_mode === 'artifact' ? {} : (data.factor_data ?? {}),
+      returnData: first.returnData,
+      factorToken: data.panel_token,
+      returnToken: first.returnToken ?? data.panel_token,
+      panelToken: data.panel_token,
+      panelMode: data.panel_mode,
+    }
     const factors = { ...computedFactors.value, [name]: combined }
     computedFactors.value = factors
-    await evaluate(name, combined, returnData.value, factors, nGroups.value)
+    await evaluate(name, combined, factors, nGroups.value)
   } catch (e) {
     evalError.value = e instanceof Error ? e.message : String(e)
+  } finally {
     evaluating.value = false
   }
 }

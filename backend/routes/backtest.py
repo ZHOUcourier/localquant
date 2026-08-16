@@ -37,11 +37,12 @@ class RunBacktestRequest(BaseModel):
     commission_rate: float = 0.001
     slippage: float = 0.001
     stamp_tax: float = 0.0005
-    normalize: str = "none"  # none / long_only / dollar_neutral
+    normalize: str = "long_only"  # 仅支持普通股票多头；不融资、不融券、不做空
+    max_gross_exposure: float = 1.0  # 最大日总仓位 Σ|w|；普通股票投资固定为 100%
     take_profit: float = 0.0  # 单仓止盈比例（0=关闭）
     stop_loss: float = 0.0  # 单仓止损比例（0=关闭）
     trailing_stop: float = 0.0  # 移动止损比例（0=关闭）
-    shortable_codes: list[str] = []  # 可融券做空标的（空=全部可做空，不过滤）
+    shortable_codes: list[str] = []  # 兼容旧字段；系统只做多，已不参与交易逻辑
     execute_at: str = "next_close"  # next_close=信号日收盘 / tail=尾盘 / next_open=次日开盘
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
@@ -65,17 +66,19 @@ class RunStrategyRequest(BaseModel):
     stock_pool: list[str] = []
     start_date: str = ""
     end_date: str = ""
+    benchmark_code: str = ""  # 可选基准（如 000300.SH），用于相对收益指标
     initial_capital: float = 1_000_000
     commission_rate: float = 0.001
     slippage: float = 0.001
     stamp_tax: float = 0.0005
-    normalize: str = "none"  # none / long_only / dollar_neutral
+    normalize: str = "long_only"  # 仅支持普通股票多头；不融资、不融券、不做空
+    max_gross_exposure: float = 1.0  # 最大日总仓位 Σ|w|；普通股票投资固定为 100%
     risk_free_rate: float = 0.03
     take_profit: float = 0.0
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
     execute_at: str = "next_close"  # next_close / tail / next_open（开→收计收益）
-    shortable_codes: list[str] = []  # 可融券做空标的（空=不过滤做空）
+    shortable_codes: list[str] = []  # 兼容旧字段；系统只做多，已不参与交易逻辑
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
@@ -142,13 +145,8 @@ async def run_strategy(req: RunStrategyRequest):
         reference = await asyncio.to_thread(
             market_data.load_reference_panels, close=prices, volume=panels.get("volume")
         )
+        # 普通多头：不做空，shortable 始终为 None（不参与交易逻辑）
         shortable = None
-        if req.shortable_codes:
-            pool = set(req.shortable_codes)
-            shortable = pd.DataFrame(True, index=prices.index, columns=prices.columns)
-            for c in prices.columns:
-                if c not in pool:
-                    shortable[c] = False
         result = await asyncio.to_thread(
             backtest_analysis.run_backtest,
             signals=signals_df,
@@ -170,14 +168,34 @@ async def run_strategy(req: RunStrategyRequest):
             execute_at=req.execute_at,
             open_prices=panels.get("open") if req.execute_at == "next_open" else None,
             delisting_loss=req.delisting_loss,
+            max_gross_exposure=req.max_gross_exposure,
         )
         equity_curve = result["equity_curve"]
         strategy_returns = result["strategy_returns"]
 
+        benchmark_returns = None
+        if req.benchmark_code.strip():
+            try:
+                bench_panels = await asyncio.to_thread(
+                    market_data.load_price_panels,
+                    codes=[req.benchmark_code.strip()],
+                    start_date=req.start_date,
+                    end_date=req.end_date,
+                )
+                bench_close = bench_panels["close"]
+                benchmark_returns = market_data.build_return_panel(bench_close).iloc[:, 0]
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"基准行情加载失败 {req.benchmark_code}: {e}",
+                )
+
         tear, dd = await asyncio.to_thread(
             lambda: (
                 backtest_analysis.performance_tear_sheet(
-                    returns=strategy_returns, risk_free_rate=req.risk_free_rate
+                    returns=strategy_returns,
+                    benchmark_returns=benchmark_returns,
+                    risk_free_rate=req.risk_free_rate,
                 ),
                 backtest_analysis.drawdown_analysis(strategy_returns),
             )
@@ -189,17 +207,41 @@ async def run_strategy(req: RunStrategyRequest):
                 for k, v in s.items()
             }
 
+        tear_sheet = {**tear, "max_drawdown": dd["max_drawdown"]}
+
+        # 所有回测入口统一落库 + provenance，保证回测中心可追溯
+        from backend.services.backtest_records import persist_backtest_run
+
+        result["prices"] = prices
+        run_params = req.model_dump()
+        run_params["n_stocks"] = int(signals_df.shape[1])
+        run_params["n_days"] = int(signals_df.shape[0])
+        run_id = await persist_backtest_run(
+            params=run_params,
+            result=result,
+            metrics={
+                **tear_sheet,
+                "trade_count": 0,
+                "final_equity": float(equity_curve.iloc[-1]),
+            },
+            strategy_id="",
+            strategy_name=f"run-strategy·{req.signal_code.strip()[:24]}",
+            source="run_strategy",
+        )
+
         return {
             "status": "ok",
+            "backtest_run_id": run_id,
             "initial_capital": req.initial_capital,
             "sandboxed": sandboxed,
             "equity_curve": _ser(equity_curve),
             "strategy_returns": _ser(strategy_returns),
             "drawdown_series": _ser(dd["drawdown_series"]),
-            "tear_sheet": {**tear, "max_drawdown": dd["max_drawdown"]},
+            "tear_sheet": tear_sheet,
             "cost_summary": result["cost_summary"],
             "assumptions": result["assumptions"],
             "delisting_events": result.get("delisting_events", []),
+            "leverage_summary": result.get("leverage_summary", {}),
         }
     except HTTPException:
         raise
@@ -217,15 +259,8 @@ async def run_backtest(req: RunBacktestRequest):
         signals_df = _dict_to_df(req.signals)
         prices_df = _dict_to_df(req.prices)
 
+        # 普通多头：不做空，shortable 始终为 None（不参与交易逻辑）
         shortable = None
-        if req.shortable_codes:
-            pool = set(req.shortable_codes)
-            shortable = pd.DataFrame(
-                True, index=prices_df.index, columns=prices_df.columns
-            )
-            for c in prices_df.columns:
-                if c not in pool:
-                    shortable[c] = False
 
         result = backtest_analysis.run_backtest(
             signals=signals_df,
@@ -241,6 +276,7 @@ async def run_backtest(req: RunBacktestRequest):
             shortable_mask=shortable,
             execute_at=req.execute_at,
             delisting_loss=req.delisting_loss,
+            max_gross_exposure=req.max_gross_exposure,
         )
 
         # 序列化
@@ -253,8 +289,23 @@ async def run_backtest(req: RunBacktestRequest):
             else 0.0
         )
 
+        from backend.services.backtest_records import persist_backtest_run
+
+        result["prices"] = prices_df
+        run_params = {k: v for k, v in req.model_dump().items() if k not in ("signals", "prices")}
+        run_params["n_stocks"] = int(signals_df.shape[1])
+        run_params["n_days"] = int(signals_df.shape[0])
+        run_id = await persist_backtest_run(
+            params=run_params,
+            result=result,
+            metrics={"total_return": total_return, "final_equity": float(equity_curve.iloc[-1])},
+            strategy_name="run-api",
+            source="run_api",
+        )
+
         return {
             "status": "ok",
+            "backtest_run_id": run_id,
             "total_return": total_return,
             "equity_curve": {
                 str(k.date() if hasattr(k, "date") else k): float(v)
@@ -268,6 +319,7 @@ async def run_backtest(req: RunBacktestRequest):
             "cost_summary": result["cost_summary"],
             "assumptions": result["assumptions"],
             "delisting_events": result.get("delisting_events", []),
+            "leverage_summary": result.get("leverage_summary", {}),
         }
     except Exception as e:
         logger.error(f"回测执行失败: {e}")
@@ -278,7 +330,7 @@ class CapacityRequest(BaseModel):
     signals: dict  # {date_str: {code: signal_value}}
     prices: dict  # {date_str: {code: price}}
     amount: Optional[dict] = None  # {date_str: {code: 成交额}}（建议提供）
-    normalize: str = "long_only"  # none / long_only / dollar_neutral
+    normalize: str = "long_only"  # 仅支持普通股票多头
     participation_rate: float = 0.1
     capital_levels: Optional[list[float]] = None
     adv_window: int = 20  # 平均成交额滚动窗口（交易日）
@@ -341,13 +393,14 @@ async def portfolio_backtest(req: PortfolioRequest):
         if req.factor_ids:
             marks = ",".join("?" * len(req.factor_ids))
             cursor = await db.execute(
-                f"SELECT id, factor_name, description FROM preset_factors "
+                f"SELECT id, factor_name, description, metric_source FROM preset_factors "
                 f"WHERE id IN ({marks}) ORDER BY id",
                 req.factor_ids,
             )
         else:
             cursor = await db.execute(
-                "SELECT pf.id, pf.factor_name, pf.description FROM preset_factors pf "
+                "SELECT pf.id, pf.factor_name, pf.description, pf.metric_source "
+                "FROM preset_factors pf "
                 "INNER JOIN factor_pool fp ON fp.factor_id = pf.id ORDER BY fp.added_at DESC"
             )
         rows = [dict(r) for r in await cursor.fetchall()]
@@ -355,12 +408,24 @@ async def portfolio_backtest(req: PortfolioRequest):
         await db.close()
 
     factors = []
+    skipped: list[str] = []
     for r in rows:
+        if r.get("metric_source") != "local_recalc":
+            skipped.append(str(r["factor_name"]))
+            continue
         formula = extract_formula(r.get("description"))
         if formula:
             factors.append(
                 {"factor_id": r["id"], "factor_name": r["factor_name"], "formula": formula}
             )
+    if skipped:
+        raise HTTPException(
+            status_code=400,
+            detail="以下因子指标仍为外部参考值，未基于本地 QMT 样本重算，禁止进入组合回测：\n"
+            + "、".join(skipped[:10])
+            + ("…" if len(skipped) > 10 else "")
+            + "。请先在因子详情页重算后再试。",
+        )
     if not factors:
         raise HTTPException(status_code=400, detail="所选因子均无可用公式（仅支持公式型因子）")
 
@@ -423,8 +488,8 @@ class SensitivityRequest(BaseModel):
 async def sensitivity(req: SensitivityRequest):
     """回测参数敏感性（网格扫描）：信号只算一次，逐参数组合回测对比
 
-    支持扫描参数：commission_rate / slippage / stamp_tax / normalize /
-    take_profit / stop_loss / trailing_stop
+    支持扫描参数：commission_rate / slippage / stamp_tax /
+    take_profit / stop_loss / trailing_stop（normalize 固定为 long_only）
     """
     from backend.services.sandbox import run_signals
 
@@ -539,7 +604,8 @@ class CreateRunRequest(BaseModel):
     commission_rate: float = 0.001
     slippage: float = 0.001
     stamp_tax: float = 0.0005
-    normalize: str = "none"
+    normalize: str = "long_only"  # 仅支持普通股票多头
+    max_gross_exposure: float = 1.0
     take_profit: float = 0.0
     stop_loss: float = 0.0
     trailing_stop: float = 0.0

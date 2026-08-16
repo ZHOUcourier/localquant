@@ -555,14 +555,14 @@ async def list_templates() -> list[dict[str, Any]]:
     return results
 
 
-async def create_from_template(template_id: str) -> dict[str, Any]:
-    """从模板创建工作流"""
+async def create_from_template(template_id: str, name: str = "") -> dict[str, Any]:
+    """从模板创建工作流（可覆盖名称）"""
     d = _templates_dir()
     f = d / f"{template_id}.json"
     if not f.exists():
         return None
     data = json.loads(f.read_text(encoding="utf-8"))
-    name = data.get("name", template_id)
+    name = (name or "").strip() or data.get("name", template_id)
     description = data.get("description", "")
     nodes = data.get("nodes", [])
     links = data.get("links", [])

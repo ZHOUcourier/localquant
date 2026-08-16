@@ -381,7 +381,11 @@ async def get_stocks():
 
 @router.post("/quality-check")
 async def quality_check():
-    """检查本地缓存数据完整性：空文件、缺失值、重复索引、价格/成交量异常、长期停牌"""
+    """检查本地缓存数据完整性：文件、索引、OHLC 自洽、复权因子、停牌/退市、交易日历。
+
+    QMT 连接时用 QMT 交易日历校验缓存中的非交易日 bar；未连接时不做虚假的
+    节假日校验，但会基于「全缓存最晚日期」用工作日近似标记长期停牌/退市标的。
+    """
     import numpy as np
     import pandas as pd
 
@@ -391,6 +395,9 @@ async def quality_check():
     suspended: list[str] = []  # 最新数据远超最新交易日（疑似停牌/退市）
     price_anomalies = 0
     vol_anomalies = 0
+    calendar_issues = 0
+    calendar_mode = "unavailable"
+    global_latest = None
 
     if not settings.cache_dir.exists():
         return {
@@ -401,16 +408,19 @@ async def quality_check():
             "suspended": [],
             "price_anomalies": 0,
             "vol_anomalies": 0,
+            "calendar_issues": 0,
+            "calendar_mode": "unavailable",
             "issues": [],
             "summary": "本地无缓存数据，无可检查项",
         }
 
-    latest_trade = None
     try:
         latest_trade = market_data._trading_calendar()
-        latest_trade_date = latest_trade[-1] if latest_trade else None
+        calendar_mode = "qmt" if latest_trade else "unavailable"
+        calendar_set = {pd.Timestamp(d) for d in latest_trade} if latest_trade else None
     except Exception:
-        latest_trade_date = None
+        latest_trade = None
+        calendar_set = None
 
     for period_dir in sorted(settings.cache_dir.iterdir()):
         if not period_dir.is_dir():
@@ -431,9 +441,30 @@ async def quality_check():
             if df.empty:
                 issues.append(f"{name}: 数据为空")
                 continue
+            try:
+                idx = pd.to_datetime(df.index)
+                if idx.tz is not None:
+                    idx = idx.tz_localize(None)
+                df = df.copy()
+                df.index = idx.normalize()
+            except Exception:
+                issues.append(f"{name}: 时间索引无法解析")
+                continue
             dup = int(df.index.duplicated().sum())
             if dup > 0:
                 issues.append(f"{name}: 存在 {dup} 条重复索引")
+
+            # 交易日历校验：QMT 日历可得时，标记不属于交易日的 bar
+            if calendar_set is not None:
+                extra = [d for d in df.index if pd.Timestamp(d) not in calendar_set]
+                if extra:
+                    calendar_issues += len(extra)
+                    sample = ", ".join(str(d.date()) for d in extra[:3])
+                    issues.append(
+                        f"{name}: 存在 {len(extra)} 个非交易日 bar（如 {sample}），"
+                        "请检查下载口径是否混入日历日数据"
+                    )
+
             if "close" in df.columns:
                 na = int(df["close"].isna().sum())
                 if na > 0:
@@ -442,7 +473,18 @@ async def quality_check():
                 c = pd.to_numeric(df["close"], errors="coerce")
                 if (c <= 0).any():
                     issues.append(f"{name}: 存在非正价格 {int((c <= 0).sum())} 个")
-                adj = df["adjust_factor"].astype(float) if "adjust_factor" in df.columns else pd.Series(1.0, index=df.index)
+                adj = (
+                    df["adjust_factor"].astype(float)
+                    if "adjust_factor" in df.columns
+                    else pd.Series(1.0, index=df.index)
+                )
+                if (adj <= 0).any():
+                    issues.append(f"{name}: adjust_factor 存在非正值")
+                elif len(adj) > 1 and (adj.diff().dropna() < 0).any():
+                    issues.append(
+                        f"{name}: adjust_factor 出现下降（复权因子应随时间非降），"
+                        "请检查不复权/后复权合成口径"
+                    )
                 if len(adj) > 1:
                     qfq = c * adj / float(adj.iloc[-1])
                     jump = qfq.pct_change().abs()
@@ -454,21 +496,54 @@ async def quality_check():
                             f"{name}: 前复权单日跳变 >50% 共 {len(bad)} 次（最近 {first}，"
                             "请确认除权事件是否已由 adjust_factor 正确吸收）"
                         )
+
+            # OHLC 自洽性：high/low 必须包住 open/close（允许浮点误差）
+            ohlc_cols = [col for col in ("open", "high", "low", "close") if col in df.columns]
+            if {"high", "low"} <= set(ohlc_cols):
+                h = pd.to_numeric(df["high"], errors="coerce")
+                l = pd.to_numeric(df["low"], errors="coerce")
+                bad_hl = int(((h - l) < -1e-8).sum())
+                if bad_hl:
+                    issues.append(f"{name}: high < low 共 {bad_hl} 处")
+                for col in ("open", "close"):
+                    if col in df.columns:
+                        x = pd.to_numeric(df[col], errors="coerce")
+                        bad_h = int((h - x < -1e-8).sum())
+                        bad_l = int((x - l < -1e-8).sum())
+                        if bad_h:
+                            issues.append(f"{name}: high < {col} 共 {bad_h} 处")
+                        if bad_l:
+                            issues.append(f"{name}: {col} < low 共 {bad_l} 处")
+
             if "volume" in df.columns:
                 v = pd.to_numeric(df["volume"], errors="coerce")
+                if (v < 0).any():
+                    issues.append(f"{name}: 存在负成交量 {int((v < 0).sum())} 个")
                 adv = v.rolling(20).mean()
                 spike = v[v > adv * 20].dropna()
                 if len(spike):
                     vol_anomalies += len(spike)
                     first = str(spike.index[0])[:10]
-                    issues.append(f"{name}: 成交量超过 20 日均量 20 倍的尖峰共 {len(spike)} 次（最近 {first}）")
+                    issues.append(
+                        f"{name}: 成交量超过 20 日均量 20 倍的尖峰共 {len(spike)} 次（最近 {first}）"
+                    )
 
-            # 疑似停牌/退市：最新数据日距最新交易日 > 60 个交易日
-            if latest_trade_date is not None and "close" in df.columns:
+            # 记录全缓存最晚数据日，用于无 QMT 日历时的停牌/退市近似判断
+            try:
+                last_d = pd.Timestamp(df.index[-1]).date()
+                global_latest = last_d if global_latest is None else max(global_latest, last_d)
+            except Exception:
+                pass
+
+            # 疑似停牌/退市：距最新交易日/全缓存最晚日超过 60 个交易日
+            if latest_trade or global_latest:
                 try:
                     last_d = pd.Timestamp(df.index[-1]).date()
-                    past = [d for d in latest_trade if d <= last_d]
-                    gap = len(latest_trade) - 1 - (len(past) - 1)
+                    if latest_trade:
+                        past = [d for d in latest_trade if d <= last_d]
+                        gap = len(latest_trade) - 1 - (len(past) - 1)
+                    else:
+                        gap = len(pd.bdate_range(last_d, global_latest)) - 1
                     if gap > 60:
                         suspended.append(f"{name}（距今 {gap} 个交易日）")
                 except Exception:
@@ -483,26 +558,39 @@ async def quality_check():
             "suspended": [],
             "price_anomalies": 0,
             "vol_anomalies": 0,
+            "calendar_issues": 0,
+            "calendar_mode": calendar_mode,
             "issues": [],
             "summary": "本地无行情缓存，无可检查项",
         }
 
     extras = []
     if suspended:
-        extras.append(f"疑似停牌/退市 {len(suspended)} 只：{'、'.join(suspended[:8])}{'…' if len(suspended) > 8 else ''}（历史回测需确认是否覆盖退市股，避免幸存者偏差）")
+        extras.append(
+            f"疑似停牌/退市 {len(suspended)} 只：{'、'.join(suspended[:8])}"
+            f"{'…' if len(suspended) > 8 else ''}（历史回测需确认是否覆盖退市股，避免幸存者偏差）"
+        )
     if price_anomalies:
         extras.append(f"价格异常 {price_anomalies} 处")
     if vol_anomalies:
         extras.append(f"量能异常 {vol_anomalies} 处")
+    if calendar_issues:
+        extras.append(f"非交易日 bar {calendar_issues} 个")
+    if calendar_mode != "qmt":
+        extras.append(
+            "QMT 未连接，交易日历校验不可用；已改用全缓存最晚日期做工作日近似停牌/退市判断"
+        )
 
     return {
-        "passed": len(issues) == 0,
+        "passed": len(issues) == 0 and not suspended,
         "checked_files": checked,
         "reference_files": reference_files,
         "suspended_count": len(suspended),
         "suspended": suspended,
         "price_anomalies": price_anomalies,
         "vol_anomalies": vol_anomalies,
+        "calendar_issues": calendar_issues,
+        "calendar_mode": calendar_mode,
         "issues": issues,
         "summary": f"已检查 {checked} 个行情缓存文件，发现 {len(issues)} 个问题"
         + f"（参考快照 {reference_files} 个单独维护）"

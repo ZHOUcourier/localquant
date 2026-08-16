@@ -1,5 +1,5 @@
 """评审整改回归测试：行业归因/事前风险/历史情景/事件研究/walk-forward/
-空头过滤/执行时点/块自助蒙特卡洛/Cashflow 字段/滚动IC权重
+普通多头边界/执行时点/块自助蒙特卡洛/Cashflow 字段/滚动IC权重
 
 全部使用合成数据，不依赖 QMT（与既有测试同约定）。
 """
@@ -174,28 +174,30 @@ def test_walk_forward_portfolio_stitches_folds(monkeypatch):
     assert any("样本外" in a for a in res["assumptions"])
 
 
-# ── 空头可融券过滤 ───────────────────────────────────────────────────
+# ── 普通多头投资边界（不做空/不融券）──────────────────────────────────
 
 
-def test_shortable_mask_blocks_shorts():
+def test_short_signals_are_not_shorted():
     svc = BacktestAnalysisService()
     dates = pd.bdate_range("2023-01-02", periods=10)
     codes = ["600000.SH", "600001.SH"]
     close = pd.DataFrame(
         {c: 20 * (1.01 ** np.arange(10)) for c in codes}, index=dates
     )
-    # 两只都做空，但 600001 不可融券
+    # 负信号（做空意图）会被清零：系统只做普通多头
     signals = pd.DataFrame({c: -1.0 for c in codes}, index=dates)
-    shortable = pd.DataFrame({"600000.SH": True, "600001.SH": False}, index=dates, columns=codes)
-    res = svc.run_backtest(
-        signals=signals, prices=close, normalize="dollar_neutral", shortable_mask=shortable
-    )
-    # 不可融券标的无空头仓位
-    assert (res["positions"]["600001.SH"].abs() < 1e-12).all()
-    assert (res["positions"]["600000.SH"] < 0).any()
-    # 不传 shortable 时多空策略会给出假设警示
-    res2 = svc.run_backtest(signals=signals, prices=close, normalize="dollar_neutral")
-    assert any("未过滤" in a for a in res2["assumptions"])
+    res = svc.run_backtest(signals=signals, prices=close)
+    assert (res["positions"].abs() < 1e-12).all().all()
+    assert any("不做空" in a for a in res["assumptions"])
+
+
+def test_dollar_neutral_is_rejected():
+    svc = BacktestAnalysisService()
+    dates = pd.bdate_range("2023-01-02", periods=10)
+    close = pd.DataFrame({"600000.SH": 20 * (1.01 ** np.arange(10))}, index=dates)
+    signals = pd.DataFrame(-1.0, index=dates, columns=["600000.SH"])
+    with pytest.raises(ValueError):
+        svc.run_backtest(signals=signals, prices=close, normalize="dollar_neutral")
 
 
 # ── 执行时点（tail / next_open） ────────────────────────────────────

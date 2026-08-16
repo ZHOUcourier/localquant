@@ -390,6 +390,10 @@ function typeBadgeClass(t?: string): string {
         <div class="mb-3 flex items-center gap-2 text-xs text-[#646262]">
           <span class="inline-block h-[7px] w-[7px] rounded-full" :style="{ backgroundColor: factor.category_color_hex || '#646262' }" />
           {{ factor.category_name || '未分类' }}
+          <span
+            class="rounded-[3px] border px-1 py-px text-[10px] font-medium"
+            :class="factor.metric_source === 'local_recalc' ? 'border-[rgba(46,142,108,0.35)] bg-[rgba(46,142,108,0.10)] text-[#2E8E6C]' : 'border-[rgba(204,127,8,0.35)] bg-[rgba(204,127,8,0.10)] text-[#cc7f08]'"
+          >{{ factor.metric_source === 'local_recalc' ? '本地重算' : '外部参考' }}</span>
           <span v-if="factor.category_code === 'INTRADAY'" class="rounded-[3px] bg-[rgba(38,166,154,0.12)] px-1 text-[10px] text-[#26A69A]">日内高频</span>
           <span class="text-[#9a9898]">
             {{ factor.stock_pool ? `· 股票池 ${factor.stock_pool}` : '' }}

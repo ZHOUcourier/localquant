@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -146,6 +147,20 @@ async def research_briefing():
         data_start = min((e["start"] for e in equity_rows if e.get("start")), default=None)
         data_end = max((e["end"] for e in equity_rows if e.get("end")), default=None)
         n_days = max((int(e.get("rows") or 0) for e in equity_rows), default=0)
+        # 交易日历可得时以 QMT 交易日计；否则 n_days 只是缓存观测行数，明确标注
+        trade_calendar = market_data._trading_calendar()
+        calendar = "qmt" if trade_calendar else "weekday_approx"
+        if trade_calendar and data_start and data_end:
+            try:
+                start_ts = pd.Timestamp(data_start)
+                end_ts = pd.Timestamp(data_end)
+                n_calendar_days = len(
+                    [d for d in trade_calendar if start_ts.date() <= d <= end_ts.date()]
+                )
+                if n_calendar_days:
+                    n_days = n_calendar_days
+            except Exception:
+                pass
         ref = reference_data.reference_status()
         ref_dates = [v["latest"] for v in ref.values() if v.get("latest")]
         ref_latest = max(ref_dates) if ref_dates else None
@@ -187,6 +202,7 @@ async def research_briefing():
             "ready": not blockers,
             "n_stocks": len(equity_codes),
             "n_days": n_days,
+            "calendar": calendar,
             "data_start": data_start,
             "data_end": data_end,
             "reference_latest": ref_latest,

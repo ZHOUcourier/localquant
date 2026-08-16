@@ -194,6 +194,20 @@ def _dict_to_df(d: dict) -> pd.DataFrame:
     return pd.DataFrame.from_dict(d, orient="index")
 
 
+def _resolve_panel(data: dict, token: str, field: str) -> pd.DataFrame:
+    """解析面板：优先使用本地 artifact token，兼容原有嵌套 dict 传输。"""
+    from backend.services.panel_artifact import load_token_panel
+
+    if token:
+        df = load_token_panel(data, token, field)
+        if df is None:
+            raise HTTPException(status_code=400, detail=f"面板 token 无效：{field}")
+        return df
+    df = _dict_to_df(data or {})
+    df.index = pd.to_datetime(df.index)
+    return df
+
+
 class FactorComputeRequest(BaseModel):
     mode: str = "formula"  # formula | code
     formula: str = ""
@@ -309,21 +323,21 @@ async def compute_factor(req: FactorComputeRequest):
     returns = market_data.build_return_panel(close)
     factor, returns = _align_factor_return(factor, returns)
 
-    return {
-        "dates": [str(d.date()) for d in factor.index],
-        "stocks": list(factor.columns),
-        "factor_data": market_data.panel_to_dict(factor),
-        "return_data": market_data.panel_to_dict(returns),
-    }
+    from backend.services.panel_artifact import build_panel_response
+
+    # 全市场面板不要整表 JSON 回传：小样本内联，大样本落本地 artifact +
+    # 受限预览；下游分析接口接受同一 token。
+    return build_panel_response(
+        {"factor_data": factor, "return_data": returns},
+        inline_names=["factor_data", "return_data"],
+    )
 
 
 @router.post("/ic-analysis")
 async def ic_analysis(req: ICAnalysisRequest):
     try:
-        factor_df = _dict_to_df(req.factor_data)
-        return_df = _dict_to_df(req.return_data)
-        factor_df.index = pd.to_datetime(factor_df.index)
-        return_df.index = pd.to_datetime(return_df.index)
+        factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
+        return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
         factor_df, return_df = _align_factor_return(factor_df, return_df)
         result = factor_research.ic_analysis(factor_df, return_df, req.periods)
         tasks.spawn(
@@ -347,10 +361,8 @@ async def ic_analysis(req: ICAnalysisRequest):
 @router.post("/quantile")
 async def quantile_analysis(req: QuantileRequest):
     try:
-        factor_df = _dict_to_df(req.factor_data)
-        return_df = _dict_to_df(req.return_data)
-        factor_df.index = pd.to_datetime(factor_df.index)
-        return_df.index = pd.to_datetime(return_df.index)
+        factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
+        return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
         factor_df, return_df = _align_factor_return(factor_df, return_df)
         result = factor_research.quantile_analysis(factor_df, return_df, req.n_groups)
         tasks.spawn(
@@ -375,10 +387,8 @@ async def quantile_analysis(req: QuantileRequest):
 async def factor_decay(req: ICAnalysisRequest):
     """因子衰减：IC 随持有期增长的变化（与因子分析节点同源）"""
     try:
-        factor_df = _dict_to_df(req.factor_data)
-        return_df = _dict_to_df(req.return_data)
-        factor_df.index = pd.to_datetime(factor_df.index)
-        return_df.index = pd.to_datetime(return_df.index)
+        factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
+        return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
         factor_df, return_df = _align_factor_return(factor_df, return_df)
         max_period = max(req.periods) if req.periods else 20
         return factor_research.factor_decay(factor_df, return_df, max_period)
@@ -391,8 +401,7 @@ async def factor_decay(req: ICAnalysisRequest):
 async def factor_turnover(req: ICAnalysisRequest):
     """因子换手率（与因子分析节点同源）"""
     try:
-        factor_df = _dict_to_df(req.factor_data)
-        factor_df.index = pd.to_datetime(factor_df.index)
+        factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
         return factor_research.turnover_analysis(factor_df)
     except Exception as e:
         logger.error(f"换手率分析失败: {e}")
@@ -407,10 +416,8 @@ async def full_analysis(req: QuantileRequest):
     时序/累计/分布/自相关/衰减、最新一期因子值排名。
     """
     try:
-        factor_df = _dict_to_df(req.factor_data)
-        return_df = _dict_to_df(req.return_data)
-        factor_df.index = pd.to_datetime(factor_df.index)
-        return_df.index = pd.to_datetime(return_df.index)
+        factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
+        return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
         factor_df, return_df = _align_factor_return(factor_df, return_df)
         res = factor_research.full_factor_analysis(
             factor_df, return_df, n_groups=req.n_groups
@@ -441,10 +448,8 @@ async def alphalens_analysis(req: AlphaLensRequest):
     from backend.services.alphalens_analysis import full_alphalens_analysis
 
     try:
-        factor_df = _dict_to_df(req.factor_data)
-        return_df = _dict_to_df(req.return_data)
-        factor_df.index = pd.to_datetime(factor_df.index)
-        return_df.index = pd.to_datetime(return_df.index)
+        factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
+        return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"数据解析失败: {e}")
     try:
@@ -483,9 +488,10 @@ async def correlation(req: CorrelationRequest):
     try:
         factors = {}
         for name, data in req.factors.items():
-            df = _dict_to_df(data)
-            df.index = pd.to_datetime(df.index)
+            df = _resolve_panel(data, "", f"factor_data")
             factors[name] = df
+        for name, token in req.factor_tokens.items():
+            factors[name] = _resolve_panel({}, token, "factor_data")
         result = factor_research.factor_correlation(factors)
         return result
     except Exception as e:
@@ -499,11 +505,17 @@ async def combine_factors(req: CorrelationRequest):
     try:
         factors = {}
         for name, data in req.factors.items():
-            df = _dict_to_df(data)
-            df.index = pd.to_datetime(df.index)
-            factors[name] = df
+            factors[name] = _resolve_panel(data, "", "factor_data")
+        for name, token in req.factor_tokens.items():
+            factors[name] = _resolve_panel({}, token, "factor_data")
         result = factor_research.multi_factor_combine(factors)
-        return result.fillna(0).to_dict(orient="index")
+        # 合成结果可能也是全市场面板：同样走 artifact 而非大 JSON
+        from backend.services.panel_artifact import build_panel_response
+
+        return build_panel_response(
+            {"factor_data": result.fillna(0)},
+            inline_names=["factor_data"],
+        )
     except Exception as e:
         logger.error(f"因子合成失败: {e}")
         raise HTTPException(status_code=500, detail=f"因子合成失败: {e}")
@@ -668,8 +680,11 @@ async def recalculate_preset_factor(factor_id: int):
 
 @router.post("/preset/{factor_id}/add-to-pool")
 async def add_to_pool(factor_id: int):
-    """加入因子池"""
-    await factor_research.add_to_pool(factor_id)
+    """加入因子池（仅允许本地 QMT 样本重算且达到最小样本门槛的因子）"""
+    try:
+        await factor_research.add_to_pool(factor_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"success": True}
 
 

@@ -3,10 +3,17 @@
 export interface FactorResult {
   dates: string[]
   stocks: string[]
-  /** {date: {stock: factor_value}} */
+  /** 大样本 artifact 模式下只有受限预览列 */
+  previewStocks?: string[]
+  /** {date: {stock: factor_value}}；artifact 模式为空对象 */
   values: Record<string, Record<string, number>>
-  /** {date: {stock: daily_return}} 用于 IC / 分层分析 */
+  /** {date: {stock: daily_return}}；artifact 模式为空对象 */
   returnData: Record<string, Record<string, number>>
+  /** 本地 panel artifact token（全市场时后端自动切换） */
+  factorToken?: string
+  returnToken?: string
+  panelToken?: string
+  panelMode?: 'inline' | 'artifact'
   /** 用于标识该因子（相关性分析） */
   name: string
 }

@@ -14,6 +14,7 @@ router = APIRouter()
 
 class FromTemplateRequest(BaseModel):
     template_id: str
+    name: str = ""  # 可选自定义名称；为空则沿用模板名
 
 
 class SweepRequest(BaseModel):
@@ -30,7 +31,7 @@ async def list_templates():
 
 @router.post("/from-template")
 async def create_from_template(body: FromTemplateRequest):
-    wf = await workflow_service.create_from_template(body.template_id)
+    wf = await workflow_service.create_from_template(body.template_id, name=body.name)
     if not wf:
         raise HTTPException(status_code=404, detail="Template not found")
     return wf

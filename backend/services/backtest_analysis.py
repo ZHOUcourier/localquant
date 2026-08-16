@@ -26,7 +26,7 @@ class BacktestAnalysisService:
         commission_rate: float = 0.001,
         slippage: float = 0.001,
         stamp_tax: float = 0.0005,
-        normalize: str = "none",
+        normalize: str = "long_only",
         tradable_mask: pd.DataFrame | None = None,
         shortable_mask: pd.DataFrame | None = None,
         up_limit: pd.DataFrame | None = None,
@@ -39,6 +39,7 @@ class BacktestAnalysisService:
         execute_at: str = "next_close",
         open_prices: pd.DataFrame | None = None,
         delisting_loss: float = 0.0,
+        max_gross_exposure: float = 1.0,
     ) -> dict:
         """
         向量化回测（权重空间，T 日信号 → 执行）。
@@ -46,19 +47,22 @@ class BacktestAnalysisService:
         Parameters
         ----------
         signals : DataFrame
-            每列为一只标的的信号值（正=做多, 负=做空, 0=空仓），index 为日期。
+            每列为一只标的的信号值（正=买入倾向, 负=不买入, 0=空仓），index 为日期。
         prices : DataFrame
             每列为一只标的的收盘价，index 与 signals 对齐。
         stamp_tax : float
             卖出印花税（买入不收），默认 0.05%。
         normalize : str
-            权重归一：none=信号值直接作权重；long_only=取正信号按日归一 Σw=1；
-            dollar_neutral=多空各归一至 ±0.5（总暴露 1）。
+            本平台只支持普通股票多头投资：long_only（正信号按日归一，Σw=1，
+            总仓位不超过 100%）。负信号一律视为不买入，不融资、不融券、不做空。
+        max_gross_exposure : float
+            允许的最大日总仓位（Σ|w|）。普通多头默认且上限为 1.0；
+            该参数保留为安全护栏，防止未来改动引入意外杠杆。
         tradable_mask : DataFrame | None
             可交易掩码（False=停牌）：停牌日冻结持仓、不计换手成本。
         shortable_mask : DataFrame | None
-            可融券掩码（False=不可融券做空）：做空信号仅在可融券标的生效，
-            A 股融券标的是两融池子，不过滤会让多空策略业绩系统性虚高。
+            兼容旧调用的可融券掩码参数；当前系统只做普通多头，负信号已清零，
+            该参数不参与任何交易逻辑。
         up_limit / down_limit / high / low : DataFrame | None
             涨跌停近似价与高低价：一字涨停禁买入加仓、一字跌停禁卖出减仓。
             未成交的调仓意图不推演挂单顺延（持仓保持不动，该笔调仓丢弃），并在
@@ -113,10 +117,30 @@ class BacktestAnalysisService:
         day_idx = np.arange(n_days)[:, None]
         dead_arr = day_idx > last_ok[None, :]  # (n_days, n_assets) True=数据已截止
 
-        # 权重归一（按日截面）
+        # 投资边界：普通股票多头，不做空/不加杠杆
+        if normalize != "long_only":
+            raise ValueError(
+                f"不支持 normalize={normalize}。本系统仅支持普通股票多头投资（long_only），"
+                "不融资、不融券、不做空；如需调整仓位，请在信号代码中自行转换为正权重。"
+            )
+        if float(max_gross_exposure) > 1.0:
+            raise ValueError(
+                "max_gross_exposure 不能超过 1.0：本系统仅支持普通股票多头投资，"
+                "任何情况下总仓位都不允许超过 100%。"
+            )
         weights = self._normalize_weights(signals, normalize)
-        if normalize == "none":
-            assumptions.append("信号值直接作为权重（未归一，可能含隐性杠杆）")
+        gross_before = weights.abs().sum(axis=1).replace(0.0, np.nan)
+        gross_max = float(gross_before.max(skipna=True)) if gross_before.notna().any() else 0.0
+        if gross_max > float(max_gross_exposure) + 1e-12:
+            worst_ts = gross_before.idxmax(skipna=True)
+            raise ValueError(
+                f"组合总仓位超过 100%：{gross_max:.2f} > {float(max_gross_exposure):.2f}（日期 {worst_ts.date()}）。"
+                "本系统仅支持普通股票多头投资，请检查信号是否被正确归一为 long_only 权重。"
+            )
+        if (signals < 0).to_numpy().any():
+            assumptions.append(
+                "策略信号中出现负值：已按普通多头规则视为不买入（负信号清零），不做空、不融券"
+            )
 
         # 信号延迟执行：next_close/tail=当日收盘，next_open=次日开盘
         if execute_at == "tail":
@@ -145,15 +169,6 @@ class BacktestAnalysisService:
         )
         if tradable_mask is None:
             assumptions.append("无停牌数据，未处理停牌（停牌日仍可交易）")
-
-        shortable_arr = self._align_mask(
-            shortable_mask, common_idx, common_cols, default=True
-        )
-        if shortable_mask is None and normalize == "dollar_neutral":
-            assumptions.append(
-                "无融券池数据，做空信号未过滤（A 股仅两融标的可融券，"
-                "不过滤空头业绩可能虚高）"
-            )
 
         up_board, down_board = self._limit_boards(
             common_idx, common_cols, up_limit, down_limit, high, low, prices
@@ -189,11 +204,8 @@ class BacktestAnalysisService:
             # 数据已截止的标的（退市/缓存截断）：永不建仓（信号清零，杜绝"死股复活"）
             desired[dead_arr[t]] = 0.0
 
-            # 可融券过滤：非两融池标的的做空信号清零（多空策略真实约束）
-            if shortable_arr is not None:
-                not_shortable = ~shortable_arr[t]
-                if not_shortable.any():
-                    desired[not_shortable & (desired < 0)] = 0.0
+            # 普通多头边界：负目标权重一律归零（不做空）
+            desired[desired < 0] = 0.0
 
             # 风控锁：退出后保持空仓，直到策略自身信号归零才允许日后重新开仓
             if manage:
@@ -356,6 +368,27 @@ class BacktestAnalysisService:
         # 净值曲线
         equity_curve = (1 + strategy_returns).cumprod() * initial_capital
 
+        # 杠杆与破产边界：显式报告，而不是让负净值静默继续复利
+        gross_series = positions.abs().sum(axis=1)
+        net_series = positions.sum(axis=1)
+        leverage_summary = {
+            "max_gross_exposure": float(gross_series.max()),
+            "mean_gross_exposure": float(gross_series.mean()),
+            "max_net_exposure": float(net_series.max()),
+            "min_net_exposure": float(net_series.min()),
+            "gross_exposure_limit": float(max_gross_exposure),
+        }
+        min_equity = float(equity_curve.min())
+        if min_equity <= 0:
+            ruined = equity_curve[equity_curve <= 0]
+            ruin_date = str(ruined.index[0].date()) if len(ruined) else None
+            leverage_summary["ruin_date"] = ruin_date
+            leverage_summary["min_equity"] = min_equity
+            assumptions.append(
+                f"组合净值在 {ruin_date} 触及或跌破 0（最低 {min_equity:.2f}）；"
+                "负净值后的复利结果无经济意义，请检查成本与数据口径"
+            )
+
         return {
             "strategy_returns": strategy_returns,
             "equity_curve": equity_curve,
@@ -370,24 +403,22 @@ class BacktestAnalysisService:
             "delisting_events": delisting_events,
             "delisting_pnl": pd.Series(delisting_pnl, index=common_idx),
             "initial_capital": initial_capital,
+            "leverage_summary": leverage_summary,
+            "gross_exposure": gross_series,
+            "net_exposure": net_series,
         }
 
     @staticmethod
     def _normalize_weights(signals: pd.DataFrame, method: str) -> pd.DataFrame:
-        """按日截面归一信号为权重"""
-        if method == "long_only":
-            w = signals.clip(lower=0.0)
-            row_sum = w.sum(axis=1)
-            return w.div(row_sum.where(row_sum > 0, np.nan), axis=0).fillna(0.0)
-        if method == "dollar_neutral":
-            longs = signals.clip(lower=0.0)
-            shorts = signals.clip(upper=0.0)
-            ls = longs.sum(axis=1)
-            ss = shorts.abs().sum(axis=1)
-            long_w = longs.div(ls.where(ls > 0, np.nan), axis=0).fillna(0.0) * 0.5
-            short_w = shorts.div(ss.where(ss > 0, np.nan), axis=0).fillna(0.0) * 0.5
-            return long_w + short_w
-        return signals
+        """按日截面归一信号为权重（仅普通多头）"""
+        if method != "long_only":
+            raise ValueError(
+                f"不支持 normalize={method}。本系统仅支持普通股票多头投资（long_only），"
+                "不融资、不融券、不做空。"
+            )
+        w = signals.clip(lower=0.0)
+        row_sum = w.sum(axis=1)
+        return w.div(row_sum.where(row_sum > 0, np.nan), axis=0).fillna(0.0)
 
     @staticmethod
     def _align_mask(
@@ -720,44 +751,7 @@ class BacktestAnalysisService:
         signals = signals.fillna(0.0)
 
         reference = market_data.load_reference_panels(close, panels.get("volume"))
-        # 空头可融券过滤：两融标的池逐日 as-of 快照存在时应用（A 股仅两融池可做空）；
-        # 只有最新快照时用最新池回填全部区间并在 assumptions 明示幸存者偏差
-        shortable = None
-        shortable_assumption: str | None = None
-        try:
-            from backend.services import reference_data
-
-            pool_mask = reference_data.load_universe_pool_mask(
-                "margin", close.index
-            )
-            if pool_mask is not None:
-                # 早于首次快照的日期用首次快照成分（as-of 口径下最合理的回退）
-                known = pool_mask.ffill()
-                if known.notna().any().any():
-                    first_known_row = known[known.notna().any(axis=1)].iloc[0]
-                    pool_mask = known.fillna(first_known_row).astype(bool)
-                shortable = pool_mask.reindex(
-                    index=close.index, columns=close.columns
-                ).fillna(False)
-                shortable_assumption = (
-                    "空头可融券过滤：两融池按逐日 as-of 快照（早于首次快照的区间"
-                    "回退到首次快照成分，成分变更历史仍可能缺失）"
-                )
-            else:
-                margin_pool = reference_data.load_universe_pool("margin")
-                if margin_pool:
-                    shortable = pd.DataFrame(
-                        True, index=close.index, columns=close.columns
-                    )
-                    for c in close.columns:
-                        if c not in margin_pool:
-                            shortable[c] = False
-                    shortable_assumption = (
-                        "空头可融券过滤：两融池为最新快照回填全部区间（幸存者偏差："
-                        "早于快照日的成分可能不同，请导入历史两融快照消除）"
-                    )
-        except Exception:
-            shortable = None
+        # 普通股票多头：组合回测只做多，不加载/不使用两融池做空掩码。
         result = self.run_backtest(
             signals=signals,
             prices=close,
@@ -767,7 +761,7 @@ class BacktestAnalysisService:
             stamp_tax=stamp_tax,
             normalize="long_only",
             tradable_mask=reference["tradable_mask"],
-            shortable_mask=shortable,
+            shortable_mask=None,
             up_limit=reference["up_limit"],
             down_limit=reference["down_limit"],
             high=panels.get("high"),
@@ -782,12 +776,6 @@ class BacktestAnalysisService:
         strategy_returns = result["strategy_returns"]
         tear = self.performance_tear_sheet(returns=strategy_returns)
         dd = self.drawdown_analysis(strategy_returns)
-
-        # 两融池口径假设并入 assumptions（若本次回测未触发）
-        if shortable_assumption and not any(
-            "空头可融券过滤" in a for a in result["assumptions"]
-        ):
-            result["assumptions"].append(shortable_assumption)
 
         # 风格归因（失败不阻断主结果）
         attribution: dict | None = None

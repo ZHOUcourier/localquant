@@ -23,18 +23,29 @@ def conv_time(timestamp_ms: int | float) -> str:
 
 
 def normalize_timestamp(index: pd.Index) -> pd.DatetimeIndex:
-    """将各种时间索引统一转为 DatetimeIndex
+    """将各种时间索引统一转为 Asia/Shanghai 无时区 DatetimeIndex。
 
-    支持：整数（毫秒时间戳）、字符串日期、已有 DatetimeIndex。
+    QMT 行情时间戳均为北京时间；epoch 毫秒/秒若按 UTC 解释会让分钟 bar
+    产生 8 小时时移。统一转到 Asia/Shanghai 后再丢弃时区，避免下游
+    再做 tz_localize(None) 时保留错误时刻。
     """
     if isinstance(index, pd.DatetimeIndex):
+        if index.tz is not None:
+            return index.tz_convert("Asia/Shanghai").tz_localize(None)
         return index
 
-    # 整数索引 → 毫秒时间戳
+    # 整数/浮点索引 → epoch 时间戳；按量级区分毫秒/秒
     if pd.api.types.is_integer_dtype(index) or pd.api.types.is_float_dtype(index):
-        return pd.to_datetime(index.astype("int64"), unit="ms", utc=True)
+        values = pd.Series(pd.to_numeric(index, errors="coerce")).dropna()
+        max_abs = float(values.abs().max()) if len(values) else 0.0
+        unit = "ms" if max_abs > 1e11 else "s"
+        return (
+            pd.to_datetime(index.astype("int64"), unit=unit, utc=True)
+            .tz_convert("Asia/Shanghai")
+            .tz_localize(None)
+        )
 
-    # 字符串或其他 → 尝试解析
+    # 字符串或其他 → 尝试解析（字符串由 QMT 给出时通常已是北京时间）
     return pd.to_datetime(index)
 
 

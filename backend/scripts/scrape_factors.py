@@ -170,6 +170,8 @@ def init_tables(conn: sqlite3.Connection):
             start_date TEXT,
             data_date TEXT,
             stock_pool TEXT,
+            metric_source TEXT DEFAULT 'external_ref',
+            metric_sample_json TEXT DEFAULT '{}',
             is_preset BOOLEAN DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -407,8 +409,9 @@ def save_factors(conn: sqlite3.Connection, factors: list[dict]):
                      category_color_hex, description,
                      ic_mean, rank_ic, ic_ir, ic_std,
                      annualized_return, maximum_drawdown, sharpe_ratio, turnover_rate,
-                     start_date, data_date, stock_pool, is_preset, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                     start_date, data_date, stock_pool, metric_source, metric_sample_json,
+                     is_preset, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'external_ref', ?, 1, ?)
             """,
                 (
                     code,
@@ -429,6 +432,7 @@ def save_factors(conn: sqlite3.Connection, factors: list[dict]):
                     f.get("startDate"),
                     f.get("dataDate"),
                     f.get("stockPool"),
+                    '{"source": "pandaiquant_factor_center", "market": "A"}',
                     now,
                 ),
             )

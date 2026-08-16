@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * 风险与组合分析 — 风格暴露、组合优化、绩效指标、压力测试。
- * 输入为 close 面板（{日期: {代码: 收盘价}}），可手工粘贴 JSON，
- * 也可一键生成合成示例（无 QMT 也可验证后端计算逻辑）。
+ * 输入为 close 面板（{日期: {代码: 收盘价}}）；研究数据只从本地 QMT 缓存加载，
+ * 不提供合成行情示例。
  */
 import { computed, ref } from 'vue'
 import { Card, Button } from '@/components/ui'
@@ -10,17 +10,6 @@ import VChart from '@/components/ui/VChart.vue'
 import { Activity, SlidersHorizontal, Target, Scale, ShieldAlert, Loader2, Database } from 'lucide-vue-next'
 
 type Panel = Record<string, Record<string, number>>
-
-const CODES = ['000001.SZ', '600000.SH', '000002.SZ', '600036.SH', '601318.SH']
-
-const OBS = [
-  '2023-03-01', '2023-03-02', '2023-03-03', '2023-03-06', '2023-03-07',
-  '2023-03-08', '2023-03-09', '2023-03-10', '2023-03-13', '2023-03-14',
-  '2023-03-15', '2023-03-16', '2023-03-17', '2023-03-20', '2023-03-21',
-  '2023-03-22', '2023-03-23', '2023-03-24', '2023-03-27', '2023-03-28',
-  '2023-03-29', '2023-03-30', '2023-03-31', '2023-04-03', '2023-04-04',
-  '2023-04-06', '2023-04-07', '2023-04-10', '2023-04-11', '2023-04-12',
-]
 
 const panelText = ref('')
 const busy = ref<'' | 'exposure' | 'optimize' | 'metrics' | 'stress'>('')
@@ -40,6 +29,7 @@ const cacheEnd = ref('')
 const cacheLoading = ref(false)
 const cacheInfo = ref('')
 const loadedPanels = ref<{ close: Panel; volume: Panel; amount: Panel } | null>(null)
+const riskPanelToken = ref('')
 
 async function loadFromCache() {
   cacheLoading.value = true
@@ -53,13 +43,21 @@ async function loadFromCache() {
     const res = await fetch(`/api/risk/panel?${q.toString()}`)
     const data = await res.json().catch(() => null)
     if (!res.ok) throw new Error(data?.detail ?? `接口错误 (HTTP ${res.status})`)
-    loadedPanels.value = { close: data.close, volume: data.volume, amount: data.amount }
-    panelText.value = JSON.stringify(
-      { close: data.close, volume: data.volume, amount: data.amount },
-      null,
-      2,
-    )
-    cacheInfo.value = `已加载 ${data.codes.length} 只标的 · ${data.start} ~ ${data.end}（前复权口径）`
+    riskPanelToken.value = data.panel_token ?? ''
+    if (data.panel_mode === 'inline') {
+      loadedPanels.value = { close: data.close, volume: data.volume, amount: data.amount }
+      panelText.value = JSON.stringify(
+        { close: data.close, volume: data.volume, amount: data.amount },
+        null,
+        2,
+      )
+    } else {
+      // 全市场大面板只在服务端暂存，不展开到浏览器 textarea
+      loadedPanels.value = null
+      panelText.value = ''
+    }
+    cacheInfo.value = `已加载 ${data.codes?.length ?? 0} 只标的 · ${data.start} ~ ${data.end}（前复权口径）` +
+      (data.panel_mode === 'artifact' ? '；大面板已在服务端暂存' : '')
     state.value = { exposure: null, weights: null, metrics: null, stress: null }
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e)
@@ -68,35 +66,10 @@ async function loadFromCache() {
   }
 }
 
-function mulberry32(a: number) {
-  return function () {
-    a |= 0
-    a = (a + 0x6d2b79f5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-function buildSample() {
-  const rnd = mulberry32(20240802)
-  const close: Panel = {}
-  OBS.forEach((d, di) => {
-    close[d] = {}
-    for (const c of CODES) {
-      const drift = (CODES.indexOf(c) % 3) * 0.002 // 制造风格差异
-      close[d][c] =
-        di === 0 ? 10 + rnd() * 20
-        : close[OBS[di - 1]][c] * (1 + drift + (rnd() - 0.5) * 0.03)
-    }
-  })
-  panelText.value = JSON.stringify({ close }, null, 2)
-  state.value = { exposure: null, weights: null, metrics: null, stress: null }
-  errorMsg.value = ''
-}
-
 function readClose(): Panel {
-  if (!panelText.value.trim()) buildSample()
+  if (!panelText.value.trim()) {
+    throw new Error('请先点击「加载」从本地 QMT 行情缓存加载面板')
+  }
   const obj = JSON.parse(panelText.value) as { close?: Panel }
   if (!obj.close) throw new Error('面板需包含 "close" 字段')
   return obj.close
@@ -107,7 +80,7 @@ const parseClose = readClose
 /** 从 close 推导 returns / 动量评分（仅作输入准备；实际计算在后端） */
 function buildInputs(close: Panel) {
   const dates = Object.keys(close).sort()
-  const codes = CODES.filter((c) => close[dates[0]]?.[c] != null)
+  const codes = Object.keys(close[dates[0]] || {})
   const returns: Panel = {}
   for (let i = 1; i < dates.length; i++) {
     const d = dates[i]
@@ -164,21 +137,28 @@ async function guard(run: () => Promise<void>) {
   }
 }
 
+function requireInlinePanel(): Panel {
+  if (riskPanelToken.value && !panelText.value.trim()) {
+    throw new Error('当前为全市场大面板（服务端暂存），请指定较小型股票池后再做组合优化/绩效/压力测试')
+  }
+  return parseClose()
+}
+
 function runExposure() {
   return guard(async () => {
-    const close = parseClose()
     const panels = loadedPanels.value
     state.value.exposure = await postJson<Record<string, Panel>>('/api/risk/style-exposure', {
-      close,
+      close: panels ? panels.close : {},
       volume: panels?.volume ?? {},
       amount: panels?.amount ?? {},
+      panel_token: riskPanelToken.value,
     })
   })
 }
 
 function runOptimize() {
   return guard(async () => {
-    const { scores } = buildInputs(parseClose())
+    const { scores } = buildInputs(requireInlinePanel())
     const out = await postJson<{ weights: Record<string, number> }>('/api/risk/optimize', { scores })
     state.value.weights = out.weights
   })
@@ -186,7 +166,7 @@ function runOptimize() {
 
 function runMetrics() {
   return guard(async () => {
-    const { strategy, benchmark } = buildInputs(parseClose())
+    const { strategy, benchmark } = buildInputs(requireInlinePanel())
     state.value.metrics = await postJson<Record<string, unknown>>('/api/risk/metrics', {
       returns: strategy,
       benchmark,
@@ -198,7 +178,7 @@ function runStress() {
   return guard(async () => {
     let weights = state.value.weights
     if (!weights) {
-      const { scores } = buildInputs(parseClose())
+      const { scores } = buildInputs(requireInlinePanel())
       weights = (await postJson<{ weights: Record<string, number> }>('/api/risk/optimize', { scores })).weights
       state.value.weights = weights
     }
@@ -215,7 +195,7 @@ async function runForecast() {
   try {
     let weights = state.value.weights
     if (!weights) {
-      const { scores } = buildInputs(parseClose())
+      const { scores } = buildInputs(requireInlinePanel())
       weights = (await postJson<{ weights: Record<string, number> }>('/api/risk/optimize', { scores })).weights
       state.value.weights = weights
     }
@@ -250,12 +230,14 @@ const exposureChartOption = computed(() => {
   const exp = state.value.exposure
   if (!exp) return {}
   const styleKeys = Object.keys(exp)
+  const firstPanel = exp[styleKeys[0]]
+  const dates = firstPanel ? Object.keys(firstPanel).sort() : []
   const series = styleKeys.map((s) => ({
     name: s,
     type: 'line',
     smooth: true,
     showSymbol: false,
-    data: OBS.map((d) => {
+    data: dates.map((d) => {
       const p = exp[s][d]
       const vals = p ? Object.values(p) : []
       return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
@@ -265,7 +247,7 @@ const exposureChartOption = computed(() => {
     tooltip: { trigger: 'axis' },
     legend: { type: 'scroll', bottom: 0 },
     grid: { left: 40, right: 16, top: 20, bottom: 40 },
-    xAxis: { type: 'category', data: OBS, boundaryGap: false },
+    xAxis: { type: 'category', data: dates, boundaryGap: false },
     yAxis: { type: 'value' },
     series,
   }
@@ -323,9 +305,6 @@ const weightChartOption = computed(() => {
           placeholder='{"close": {"2023-03-01": {"000001.SZ": 12.3}}}'
         />
         <div class="mt-3 flex flex-wrap gap-2">
-          <Button variant="secondary" size="sm" @click="buildSample">
-            <Activity :size="14" class="mr-1" /> 生成合成示例
-          </Button>
           <Button variant="primary" size="sm" :disabled="!!busy" @click="runExposure">
             <SlidersHorizontal :size="14" class="mr-1" /> 风格暴露
           </Button>

@@ -229,7 +229,7 @@ def snapshot_instrument(qmt, codes: list[str]) -> int:
 def snapshot_universe_pools(qmt) -> dict[str, int]:
     """记录标的池 as-of 快照（两融标的=可融券池，沪深股通=北向池），返回各池成分数
 
-    用途：回测空头可融券过滤（dollar_neutral 只允许在两融池内做空）、
+    用途：两融/北向标的池仅作为市场结构参考；本系统只做普通股票多头，
     北向池内因子研究。快照为 as-of 形式，早于首次快照的区间用最新池（幸存者偏差，
     调用方通过 assumptions 明示）。
     """

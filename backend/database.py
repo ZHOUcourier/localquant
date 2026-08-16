@@ -125,6 +125,18 @@ async def init_db():
             )
         """)
 
+        # 预置因子指标溯源列：区分「外部参考值」与「本地 QMT 样本重算值」
+        cursor = await db.execute("PRAGMA table_info(preset_factors)")
+        preset_factor_cols = [row[1] for row in await cursor.fetchall()]
+        if "metric_source" not in preset_factor_cols:
+            await db.execute(
+                "ALTER TABLE preset_factors ADD COLUMN metric_source TEXT DEFAULT 'external_ref'"
+            )
+        if "metric_sample_json" not in preset_factor_cols:
+            await db.execute(
+                "ALTER TABLE preset_factors ADD COLUMN metric_sample_json TEXT DEFAULT '{}'"
+            )
+
         # 策略库表（QUBE 对话产出 / 工作流快照；status: working=工作中, saved=已保存）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS strategies (

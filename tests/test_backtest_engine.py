@@ -134,26 +134,39 @@ def test_assumptions_reported_when_reference_missing():
     joined = "；".join(result["assumptions"])
     assert "停牌" in joined
     assert "一字板" in joined
-    assert "杠杆" in joined  # normalize=none 的提示
 
 
-def test_dollar_neutral_gross_exposure():
-    """dollar_neutral：多空各 0.5，净暴露 0"""
+def test_default_normalize_is_long_only():
+    """默认 long_only：正信号按日归一，普通多头满仓且无杠杆"""
+    idx = _dates(3)
+    prices = pd.DataFrame({"A": [100.0, 110.0, 121.0]}, index=idx)
+    signals = pd.DataFrame({"A": [8.0, 8.0, 8.0]}, index=idx)
+    result = svc.run_backtest(signals, prices, commission_rate=0.0, slippage=0.0)
+    assert result["positions"].iloc[1]["A"] == pytest.approx(1.0)
+    assert result["leverage_summary"]["gross_exposure_limit"] == 1.0
+
+
+def test_short_signals_are_clipped_to_zero():
+    """普通股票多头：负信号不产生空头仓位，只视为不买入"""
     idx = _dates(3)
     prices = pd.DataFrame(
         {"A": [100.0, 101.0, 102.0], "B": [100.0, 99.0, 98.0]}, index=idx
     )
-    signals = pd.DataFrame({"A": [3.0, 3.0, 3.0], "B": [-1.0, -1.0, -1.0]}, index=idx)
+    signals = pd.DataFrame({"A": [1.0, 1.0, 1.0], "B": [-1.0, -1.0, -1.0]}, index=idx)
+    result = svc.run_backtest(signals, prices, commission_rate=0.0, slippage=0.0, stamp_tax=0.0)
+    assert (result["positions"]["B"].abs() < 1e-12).all()
+    assert any("不做空" in a for a in result["assumptions"])
 
-    result = svc.run_backtest(
-        signals,
-        prices,
-        commission_rate=0.0,
-        slippage=0.0,
-        stamp_tax=0.0,
-        normalize="dollar_neutral",
-    )
-    pos = result["positions"].iloc[1]
-    assert pos["A"] == pytest.approx(0.5)
-    assert pos["B"] == pytest.approx(-0.5)
-    assert np.isclose(pos.sum(), 0.0)
+
+def test_non_long_only_and_leverage_are_rejected():
+    """普通股票投资边界：做空/多空/原始权重模式与 >100% 仓位全部拒绝"""
+    idx = _dates(3)
+    prices = pd.DataFrame({"A": [100.0, 110.0, 121.0]}, index=idx)
+    signals = pd.DataFrame({"A": [1.0, 1.0, 1.0]}, index=idx)
+
+    with pytest.raises(ValueError):
+        svc.run_backtest(signals, prices, normalize="none")
+    with pytest.raises(ValueError):
+        svc.run_backtest(signals, prices, normalize="dollar_neutral")
+    with pytest.raises(ValueError):
+        svc.run_backtest(signals, prices, max_gross_exposure=2.0)

@@ -789,7 +789,7 @@ const provenanceColumns: Column[] = [
             </div>
           </div>
           <p class="text-xs text-[#646262] leading-relaxed pt-1">
-            参考数据随批量下载自动快照；指数历史成分从首次快照日起逐日积累，更早区间仍为当前成分（存在幸存者偏差）。标的池（两融=可融券做空过滤、北向=沪深股通）亦随批量下载快照。
+            参考数据随批量下载自动快照；指数历史成分从首次快照日起逐日积累，更早区间仍为当前成分（存在幸存者偏差）。标的池（两融/北向=沪深股通）仅作市场结构参考快照；本系统只做普通多头，不使用其做空或融资。
           </p>
           <div v-if="minuteCoverage && Object.keys(minuteCoverage).length" class="pt-2 border-t border-[#e3e0e0]">
             <div class="text-xs font-medium text-[#646262] mb-1.5">分钟缓存 · 日内高频</div>

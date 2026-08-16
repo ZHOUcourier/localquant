@@ -50,7 +50,7 @@ class BacktestInput(BaseModel):
     trailing_stop={"input_type": "number_field"},
     normalize={
         "input_type": "combobox",
-        "options": ["long_only", "dollar_neutral", "none"],
+        "options": ["long_only"],
     },
     frequency={"input_type": "combobox", "options": ["1d", "1w", "1mon"]},
 )
@@ -84,7 +84,7 @@ class BacktestOutput(BaseModel):
     notes=[
         "signals / prices 均需连线提供（面板：index=日期, columns=股票）；benchmark 为可选基准收盘序列",
         "volume/high/low 为可选连线：提供后启用停牌冻结与一字板不可成交处理，未提供时不处理并在 assumptions 中明示",
-        "normalize 默认 long_only（正信号按日归一 Σw=1，避免信号值直接作权重的隐性杠杆），可选 dollar_neutral / none",
+        "normalize 固定为 long_only：只做普通股票多头，正信号按日归一为满仓组合（Σw≤1），负信号视为不买入；不融资、不融券、不做空",
         "佣金率默认 0.001，滑点 0.001，卖出印花税 0.0005（与回测引擎/其余入口口径一致）；T 日信号 T+1 执行；指标按 252 交易日年化",
         "止盈/止损/移动止损（0 关闭）：单仓逐仓风控，基于 T-1 收盘判定、T 日执行，避免当日盘中前视；命中会覆盖信号目标为平仓",
         "移动止损 trailing_stop 仅对盈利仓生效：自建仓后最高点回撤达比例即止（锁盈）",
