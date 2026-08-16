@@ -1,7 +1,6 @@
 """基础工具节点 — Python代码输入、自定义股票池、公式输入、数据下载"""
 
 import os
-from typing import Optional, Type
 
 import numpy as np
 import pandas as pd
@@ -16,12 +15,12 @@ from backend.plugins.ui_control import ui
 
 class DataFrameInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 class DataFrameOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 # ============================================================
@@ -35,7 +34,7 @@ class DataFrameOutput(BaseModel):
 )
 class PythonCodeInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     code: str = Field(
         default="# 自定义Python代码\n# 可用变量: df (DataFrame), pd, np\n# 请修改 df 变量作为输出\ndf = df.copy() if df is not None else pd.DataFrame()\n",
         title="Python代码",
@@ -44,7 +43,7 @@ class PythonCodeInput(BaseModel):
 
 class PythonCodeOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -63,14 +62,14 @@ class PythonCodeInputNode(BaseWorkNode):
     """自定义Python代码编写，接收DataFrame，输出DataFrame"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return PythonCodeInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return PythonCodeOutput
 
-    def run(self, input: PythonCodeInput) -> Optional[BaseModel]:
+    def run(self, input: PythonCodeInput) -> BaseModel | None:
         df = input.data if input.data is not None else pd.DataFrame()
         if not input.code.strip():
             return PythonCodeOutput(data=df.copy())
@@ -81,7 +80,7 @@ class PythonCodeInputNode(BaseWorkNode):
             "np": np,
         }
         try:
-            exec(
+            exec(  # noqa: S102
                 input.code,
                 {
                     "__builtins__": {
@@ -110,7 +109,7 @@ class PythonCodeInputNode(BaseWorkNode):
                     }
                 },
                 exec_ctx,
-            )  # noqa: S102
+            )
             result = exec_ctx.get("df", df)
             if not isinstance(result, pd.DataFrame):
                 result = df.copy()
@@ -147,7 +146,7 @@ class StockPoolOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     stock_list: list = Field(default_factory=list, title="股票池")
     count: int = Field(default=0, title="数量")
-    membership: Optional[pd.DataFrame] = Field(default=None, title="逐日成员掩码")
+    membership: pd.DataFrame | None = Field(default=None, title="逐日成员掩码")
     assumptions: list = Field(default_factory=list, title="假设清单")
 
 
@@ -167,14 +166,14 @@ class StockPoolNode(BaseWorkNode):
     """定义股票选择范围（手工列表 / 指数成分 as-of）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return StockPoolInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return StockPoolOutput
 
-    def run(self, input: StockPoolInput) -> Optional[BaseModel]:
+    def run(self, input: StockPoolInput) -> BaseModel | None:
         if input.mode.startswith("指数成分"):
             return self._index_membership(input.index_name.strip())
         codes = [c.strip() for c in input.stock_codes.split(",") if c.strip()]
@@ -219,14 +218,14 @@ class StockPoolNode(BaseWorkNode):
 )
 class FormulaInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     formula: str = Field(default="df['close'] * 2", title="数学公式")
     output_col: str = Field(default="result", title="输出列名")
 
 
 class FormulaOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -244,14 +243,14 @@ class FormulaInputNode(BaseWorkNode):
     """数学公式定义，输入DataFrame+公式，输出计算结果"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FormulaInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FormulaOutput
 
-    def run(self, input: FormulaInput) -> Optional[BaseModel]:
+    def run(self, input: FormulaInput) -> BaseModel | None:
         df = input.data
         if df is None or (isinstance(df, pd.DataFrame) and df.empty):
             return FormulaOutput(data=pd.DataFrame())
@@ -262,7 +261,7 @@ class FormulaInputNode(BaseWorkNode):
             eval_ctx[col.lower()] = result[col]
 
         try:
-            expr_result = eval(input.formula, {"__builtins__": {}}, eval_ctx)  # noqa: S307
+            expr_result = eval(input.formula, {"__builtins__": {}}, eval_ctx)
             if isinstance(expr_result, pd.Series):
                 result[input.output_col] = expr_result
             elif isinstance(expr_result, pd.DataFrame):
@@ -292,7 +291,7 @@ class DataDownloadInput(BaseModel):
 
 class DataDownloadOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     file_path: str = Field(default="", title="文件路径")
     success: bool = Field(default=False, title="是否成功")
 
@@ -312,14 +311,14 @@ class DataDownloadNode(BaseWorkNode):
     """下载行情数据到本地"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return DataDownloadInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return DataDownloadOutput
 
-    def run(self, input: DataDownloadInput) -> Optional[BaseModel]:
+    def run(self, input: DataDownloadInput) -> BaseModel | None:
         if not input.data_url.strip():
             return DataDownloadOutput(success=False)
 

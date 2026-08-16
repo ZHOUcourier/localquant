@@ -1,8 +1,7 @@
 """运行上下文 - 管理工作流执行状态 + SSE 事件推送"""
 import asyncio
-import json
 import time
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -24,7 +23,7 @@ class WorkflowContext:
         self.status = "running"
         self._pending_inputs: dict[str, dict[str, Any]] = {}
         # SSE 事件队列（asyncio.Queue）
-        self._sse_queue: Optional[asyncio.Queue] = None
+        self._sse_queue: asyncio.Queue | None = None
 
     def attach_sse_queue(self, queue: asyncio.Queue):
         """绑定 SSE 事件队列"""
@@ -45,7 +44,7 @@ class WorkflowContext:
         self.node_outputs[node_uuid] = output
         self._log(f"Node {node_uuid} output saved")
 
-    def get_node_output(self, node_uuid: str) -> Optional[dict[str, Any]]:
+    def get_node_output(self, node_uuid: str) -> dict[str, Any] | None:
         """获取节点输出"""
         return self.node_outputs.get(node_uuid)
 

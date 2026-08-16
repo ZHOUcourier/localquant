@@ -1,7 +1,6 @@
 """设置路由 — 读取/写入 .env 配置，供前端设置页持久化"""
 
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter
 from loguru import logger
@@ -33,20 +32,20 @@ EDITABLE_KEYS = {
 
 
 class ConfigUpdate(BaseModel):
-    qmt_path: Optional[str] = None
-    qmt_data_dir: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    openai_base_url: Optional[str] = None
-    ai_provider: Optional[str] = None
-    ai_model: Optional[str] = None
-    ai_effort: Optional[str] = None
-    ai_engine: Optional[str] = None
-    ai_cli: Optional[str] = None
-    ai_cli_model: Optional[str] = None
-    ai_cli_effort: Optional[str] = None
-    factor_service_url: Optional[str] = None
-    backend_port: Optional[int] = None
-    frontend_port: Optional[int] = None
+    qmt_path: str | None = None
+    qmt_data_dir: str | None = None
+    openai_api_key: str | None = None
+    openai_base_url: str | None = None
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    ai_effort: str | None = None
+    ai_engine: str | None = None
+    ai_cli: str | None = None
+    ai_cli_model: str | None = None
+    ai_cli_effort: str | None = None
+    factor_service_url: str | None = None
+    backend_port: int | None = None
+    frontend_port: int | None = None
 
 
 def _mask_key(key: str) -> str:

@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from backend.services import intraday_cleaner, intraday_operators as io
+from backend.services import intraday_cleaner
+from backend.services import intraday_operators as io
 
 
 def _make_minute_cache(tmp_path, n_stocks=10, days=30):
@@ -61,7 +62,6 @@ def _make_minute_cache(tmp_path, n_stocks=10, days=30):
 def minute_cache(tmp_path):
     cache, codes = _make_minute_cache(tmp_path)
     import backend.services.intraday_cleaner as ic
-
     from backend.data.cache import DataCache
 
     ic._cache = DataCache(tmp_path)
@@ -74,8 +74,8 @@ def test_clean_removes_auction_bar_and_meta(tmp_path):
     cache, codes = _make_minute_cache(tmp_path, n_stocks=1, days=3)
     raw = cache.get(codes[0], "5m")
     assert len(raw) == 3 * 48
-    cleaned, meta = intraday_cleaner.clean_code_minute(raw, "5m")
-    assert len(cleaned) == 3 * 48  # 构造数据无竞价 bar（首根 09:35），不剔除
+    _cleaned, meta = intraday_cleaner.clean_code_minute(raw, "5m")
+    assert len(_cleaned) == 3 * 48  # 构造数据无竞价 bar（首根 09:35），不剔除
     assert len(meta) == 3
     assert meta["n_bars"].iloc[0] == 48
     assert not meta["is_half"].any()
@@ -90,13 +90,13 @@ def test_clean_detects_one_line(tmp_path):
     day2 = idx[idx.normalize() == idx[48].normalize()]
     raw.loc[day2, "high"] = raw.loc[day2, "close"]
     raw.loc[day2, "low"] = raw.loc[day2, "close"]
-    cleaned, meta = intraday_cleaner.clean_code_minute(raw, "5m")
+    _cleaned, meta = intraday_cleaner.clean_code_minute(raw, "5m")
     assert bool(meta["one_line"].iloc[1])
 
 
 def test_aggregators_match_manual():
     """ID_LAST / ID_SUM / ID_MEAN 与手算一致"""
-    rng = np.random.default_rng(0)
+    _rng = np.random.default_rng(0)
     dates = pd.bdate_range("2024-01-02", periods=2)
     idx = pd.DatetimeIndex(
         [
@@ -130,7 +130,7 @@ def test_m_delay_does_not_cross_days():
 
 def test_tail_ret_positive_with_injected_drift(minute_cache, tmp_path):
     """注入尾盘正漂移后 TAIL_RET(12) 应显著为正"""
-    cache, codes = _make_minute_cache(tmp_path, n_stocks=3, days=20)
+    _cache, codes = _make_minute_cache(tmp_path, n_stocks=3, days=20)
     loaded = intraday_cleaner.load_intraday_panels(codes, "5m")
     panels, meta = loaded["panels"], loaded["meta"]
     ns = io.build_intraday_namespace(panels, meta)
@@ -141,19 +141,19 @@ def test_tail_ret_positive_with_injected_drift(minute_cache, tmp_path):
 
 def test_build_intraday_namespace_formula_eval(minute_cache, tmp_path):
     """公式环境：TAIL_RET 与 ID_SLICE+ID_MEAN 组合可直接求值并折叠到日频"""
-    cache, codes = _make_minute_cache(tmp_path, n_stocks=3, days=20)
+    _cache, codes = _make_minute_cache(tmp_path, n_stocks=3, days=20)
     loaded = intraday_cleaner.load_intraday_panels(codes, "5m")
     panels, meta = loaded["panels"], loaded["meta"]
     ns = io.build_intraday_namespace(panels, meta)
-    r1 = eval("RANK(TAIL_RET(12))", {"__builtins__": {}}, ns)  # noqa: S307
+    r1 = eval("RANK(TAIL_RET(12))", {"__builtins__": {}}, ns)
     assert isinstance(r1, pd.DataFrame)
     assert len(r1.index) == 20
     # 分钟级中间结果：ID_SLICE 后 ID_MEAN 折叠
-    r2 = eval("ID_MEAN(ID_SLICE(m_close, '14:00', '15:00'))", {"__builtins__": {}}, ns)  # noqa: S307
+    r2 = eval("ID_MEAN(ID_SLICE(m_close, '14:00', '15:00'))", {"__builtins__": {}}, ns)
     assert isinstance(r2, pd.DataFrame)
     assert len(r2.index) == 20
     # RV 全日正值
-    rv = eval("RV()", {"__builtins__": {}}, ns)  # noqa: S307
+    rv = eval("RV()", {"__builtins__": {}}, ns)
     assert float(rv.values[~np.isnan(rv.values)].min()) >= 0.0
 
 
@@ -172,10 +172,10 @@ def test_intraday_formula_detection_routes():
 
 def test_intraday_panels_clean_flag(minute_cache, tmp_path):
     """load_intraday_panels 返回清洗标记与面板结构"""
-    cache, codes = _make_minute_cache(tmp_path, n_stocks=3, days=20)
+    _cache, codes = _make_minute_cache(tmp_path, n_stocks=3, days=20)
     loaded = intraday_cleaner.load_intraday_panels(codes, "5m")
     assert loaded["cleaned"] is True
-    assert set(["open", "high", "low", "close", "volume", "amount"]).issubset(loaded["panels"].keys())
+    assert {"open", "high", "low", "close", "volume", "amount"}.issubset(loaded["panels"].keys())
     assert len(loaded["meta"]) == 3
     assert len(loaded["panels"]["close"].columns) == 3
     assert "auc_vol" in loaded["meta"][codes[0]].columns or "auc_vol" not in loaded["meta"][codes[0]].columns

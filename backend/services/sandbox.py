@@ -155,7 +155,7 @@ def _run_in_process(signal_code: str, prices: pd.DataFrame) -> pd.DataFrame:
     exec(signal_code, {"__builtins__": __builtins__, "pd": pd, "np": np}, exec_ctx)  # noqa: S102
     fn = exec_ctx.get("generate_signals")
     if not callable(fn):
-        raise ValueError("信号代码必须定义 generate_signals(prices, **kwargs) 函数")
+        raise TypeError("信号代码必须定义 generate_signals(prices, **kwargs) 函数")
     return _normalize_signals(fn(prices))
 
 
@@ -207,9 +207,9 @@ async def _probe_server() -> tuple[bool, str]:
                     resp = await client.get(url)
                     if resp.status_code < 500:
                         return True, ""
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     error = str(e)[:160]
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         error = str(e)[:160]
 
     # HTTP 探测失败时退回 TCP 探测，区分「端口通但无健康响应」
@@ -220,10 +220,10 @@ async def _probe_server() -> tuple[bool, str]:
         writer.close()
         try:
             await writer.wait_closed()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return False, f"端口 {host}:{port} 可达，但未返回健康响应"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return False, error or str(e)[:160]
 
 

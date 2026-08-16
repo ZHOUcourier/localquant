@@ -30,6 +30,37 @@ const savedQueries = ref<SavedQuery[]>([])
 const saveName = ref('')
 const saveMsg = ref('')
 
+interface QueryTemplate {
+  id: string
+  name: string
+  sql: string
+  note?: string
+}
+interface FieldInfo {
+  name: string
+  description: string
+}
+const templates = ref<QueryTemplate[]>([])
+const fieldDictionary = ref<FieldInfo[]>([])
+
+async function loadSchema() {
+  try {
+    const res = await fetch('/api/explorer/schema')
+    if (!res.ok) return
+    const data = await res.json()
+    templates.value = data.templates ?? []
+    const quoteTable = (data.tables ?? []).find((t: { kind?: string }) => t.kind === 'quotes')
+    fieldDictionary.value = quoteTable?.fields ?? []
+  } catch {
+    /* 数据字典加载失败不阻断编辑 */
+  }
+}
+loadSchema()
+
+function applyTemplate(t: QueryTemplate) {
+  sql.value = t.sql
+}
+
 async function loadSaved() {
   try {
     const res = await fetch('/api/explorer/sql/queries')
@@ -164,6 +195,31 @@ async function handleAIInsight() {
       class="rounded-[4px] border border-[#ff3b30]/30 bg-[#ff3b30]/10 px-3 py-2 text-xs text-[#ff3b30]"
     >
       {{ aiError }}
+    </div>
+
+    <div v-if="templates.length" class="flex flex-wrap items-center gap-1.5">
+      <span class="text-[11px] text-[#9a9898]">模板:</span>
+      <button
+        v-for="t in templates"
+        :key="t.id"
+        type="button"
+        class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2 py-1 text-[11px] text-[#646262] hover:text-[#201d1d] cursor-pointer"
+        :title="t.note || t.name"
+        @click="applyTemplate(t)"
+      >
+        {{ t.name }}
+      </button>
+    </div>
+
+    <div v-if="fieldDictionary.length" class="flex flex-wrap gap-x-3 gap-y-1 rounded-[4px] border border-[rgba(15,0,0,0.08)] bg-[#f8f7f7] px-2 py-1.5">
+      <span
+        v-for="f in fieldDictionary"
+        :key="f.name"
+        class="text-[10px] text-[#9a9898]"
+        :title="f.description"
+      >
+        {{ f.name }}<span v-if="f.description">: {{ f.description }}</span>
+      </span>
     </div>
 
     <div v-if="savedQueries.length" class="flex flex-wrap items-center gap-1.5">

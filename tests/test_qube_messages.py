@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-import backend.database as database
+from backend import database
 from backend.routes import qube as qube_routes
 
 
@@ -97,7 +97,6 @@ def test_regenerate_locates_last_user_and_truncates(qube_db):
     m1 = _add_msg(sid, "user", "一")
     m2 = _add_msg(sid, "assistant", "二")
     m3 = _add_msg(sid, "user", "三")
-    m4 = _add_msg(sid, "assistant", "四")
     history = asyncio.run(qube_routes._load_history(sid))
     user_idx = max((i for i, m in enumerate(history) if m["role"] == "user"))
     assert history[user_idx]["id"] == m3

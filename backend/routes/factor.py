@@ -282,9 +282,9 @@ async def compute_factor(req: FactorComputeRequest):
             if len(formula_lines) > 1:
                 exec_ctx = dict(eval_ctx)
                 exec("\n".join(formula_lines[:-1]), {"__builtins__": {}}, exec_ctx)  # noqa: S102
-                factor = eval(formula_lines[-1], {"__builtins__": {}}, exec_ctx)  # noqa: S307
+                factor = eval(formula_lines[-1], {"__builtins__": {}}, exec_ctx)
             else:
-                factor = eval(req.formula, {"__builtins__": {}}, eval_ctx)  # noqa: S307
+                factor = eval(req.formula, {"__builtins__": {}}, eval_ctx)
         else:
             if not req.code.strip():
                 raise ValueError("因子代码为空")
@@ -300,7 +300,7 @@ async def compute_factor(req: FactorComputeRequest):
         if isinstance(factor, pd.Series):
             factor = factor.to_frame()
         if not isinstance(factor, pd.DataFrame):
-            raise ValueError(
+            raise TypeError(
                 f"因子计算结果应为 DataFrame，得到 {type(factor).__name__}"
             )
     except HTTPException:
@@ -488,7 +488,7 @@ async def correlation(req: CorrelationRequest):
     try:
         factors = {}
         for name, data in req.factors.items():
-            df = _resolve_panel(data, "", f"factor_data")
+            df = _resolve_panel(data, "", "factor_data")
             factors[name] = df
         for name, token in req.factor_tokens.items():
             factors[name] = _resolve_panel({}, token, "factor_data")
@@ -618,10 +618,10 @@ async def delete_factor(factor_id: str):
 async def list_preset_factors(
     page: int = 1,
     page_size: int = 30,
-    category_code: str = None,
-    sort_field: str = None,
+    category_code: str | None = None,
+    sort_field: str | None = None,
     sort_order: str = "desc",
-    search: str = None,
+    search: str | None = None,
 ):
     """预置因子分页列表"""
     result = await factor_research.list_preset_factors(
@@ -971,9 +971,9 @@ async def intraday_compute(req: IntradayComputeRequest):
     try:
         if len(lines) > 1:
             exec("\n".join(lines[:-1]), {"__builtins__": {}}, ns)  # noqa: S102
-            factor = eval(lines[-1], {"__builtins__": {}}, ns)  # noqa: S307
+            factor = eval(lines[-1], {"__builtins__": {}}, ns)
         else:
-            factor = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+            factor = eval(formula, {"__builtins__": {}}, ns)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"分钟因子公式计算失败: {e}")
 
@@ -1091,7 +1091,7 @@ async def intraday_ic_by_time(req: IntradayIcByTimeRequest):
             continue
         ns = build_intraday_namespace(t_panels, meta)
         try:
-            factor = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+            factor = eval(formula, {"__builtins__": {}}, ns)
         except Exception as e:
             raise HTTPException(
                 status_code=400, detail=f"时刻 {t} 公式计算失败: {e}"
@@ -1129,7 +1129,7 @@ async def intraday_ic_by_time(req: IntradayIcByTimeRequest):
                 if len(v) > 1 and v.std(ddof=1) > 0
                 else 0.0,
                 "positive_ratio": round(float((v > 0).mean()), 4),
-                "n_days": int(len(v)),
+                "n_days": len(v),
             }
         )
 
@@ -1138,7 +1138,7 @@ async def intraday_ic_by_time(req: IntradayIcByTimeRequest):
         "period": loaded["period"],
         "formula": formula,
         "times": out,
-        "n_stocks": int(len(panels["close"].columns)),
+        "n_stocks": len(panels["close"].columns),
         "data_start": str(daily_close.index[0].date()),
         "data_end": str(daily_close.index[-1].date()),
         "note": (

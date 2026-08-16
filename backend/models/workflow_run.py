@@ -1,6 +1,6 @@
 """工作流运行记录 Pydantic 模型"""
+
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class WorkflowRunResponse(BaseModel):
@@ -8,8 +8,8 @@ class WorkflowRunResponse(BaseModel):
     id: str
     workflow_id: str
     status: str  # pending/running/success/failed
-    started_at: Optional[int] = None
-    finished_at: Optional[int] = None
+    started_at: int | None = None
+    finished_at: int | None = None
     node_outputs: dict = Field(default_factory=dict)  # {node_uuid: output_path}
     logs: list[dict] = Field(default_factory=list)  # [{node_uuid, level, message, timestamp}]
 
@@ -22,4 +22,4 @@ class NodeExecutionStatus(BaseModel):
     node_uuid: str
     status: str  # pending/running/success/failed
     message: str = ""
-    output_path: Optional[str] = None
+    output_path: str | None = None

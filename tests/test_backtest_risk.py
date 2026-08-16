@@ -1,6 +1,5 @@
 """逐仓风控（止盈/止损/移动止损）单元测试 — 验证 T+1、锁仓、命中与绩效边界"""
 
-import numpy as np
 import pandas as pd
 import pytest
 

@@ -4,8 +4,9 @@ import json
 import math
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -837,7 +838,7 @@ async def get_node_output_preview(run_id: str, node_uuid: str) -> dict[str, Any]
     pkl_path = settings.output_dir / run_id / f"{node_uuid}.pkl"
     if not pkl_path.exists():
         return None
-    with open(pkl_path, "rb") as f:
+    with open(pkl_path, "rb") as f:  # noqa: ASYNC230
         output: dict[str, Any] = pickle.load(f)
     if not isinstance(output, dict):
         output = {"output": output}

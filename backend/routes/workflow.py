@@ -122,7 +122,7 @@ async def get_node_report(
         if not pkl.exists():
             continue
         try:
-            with open(pkl, "rb") as f:
+            with open(pkl, "rb") as f:  # noqa: ASYNC230
                 output = pickle.load(f)
         except Exception:
             continue
@@ -240,8 +240,8 @@ async def clear_cache():
 
 
 @router.post("/runs/cleanup")
-async def cleanup_workflow_runs(keep_days: int = 30, dry_run: bool = False):
-    """清理超过保留期的运行产物目录（默认 30 天；dry_run=true 只统计）"""
+async def cleanup_workflow_runs(keep_days: int = 30, dry_run: bool = True):
+    """手动清理运行产物。默认 dry_run=true 只统计不删除；确认后显式传 dry_run=false。"""
     return await workflow_service.cleanup_workflow_artifacts(keep_days, dry_run)
 
 

@@ -9,7 +9,6 @@
   由上游「因子构建」节点产出；数据全部源自 QMT 行情，绝不引入外部数据。
 """
 
-from typing import Optional, Type
 
 import numpy as np
 import pandas as pd
@@ -32,8 +31,8 @@ from backend.services.factor_research import factor_research
 )
 class FactorAnalysisInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
     periods: str = "1,5,10,20"
     n_groups: int = 5
     method: str = "rank_ic"
@@ -41,22 +40,22 @@ class FactorAnalysisInput(BaseModel):
 
 class FactorAnalysisOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    summary: Optional[dict] = (
+    summary: dict | None = (
         None  # 数据卡指标（因子收益/夏普/IC/Rank_IC/t/p/单调性等）
     )
-    group_perf: Optional[pd.DataFrame] = (
+    group_perf: pd.DataFrame | None = (
         None  # 分组绩效表（含多空组合、超额、跟踪误差、信息比率）
     )
-    ic_summary: Optional[pd.DataFrame] = None  # 各周期 IC 汇总
-    group_cumulative: Optional[pd.DataFrame] = None  # 各组累计收益曲线
-    group_excess_cumulative: Optional[pd.DataFrame] = None  # 各组超额累计收益
-    ic_series: Optional[pd.DataFrame] = None  # IC / Rank_IC 逐日时序
-    ic_cumulative: Optional[pd.DataFrame] = None  # IC / Rank_IC 累计
-    ic_decay: Optional[pd.DataFrame] = None  # IC / Rank_IC 衰减
-    ic_distribution: Optional[pd.DataFrame] = None  # IC / Rank_IC 分布直方图
-    ic_autocorr: Optional[pd.DataFrame] = None  # IC / Rank_IC 自相关
-    latest_ranking: Optional[pd.DataFrame] = None  # 最新一期因子值排名
-    report: Optional[dict] = (
+    ic_summary: pd.DataFrame | None = None  # 各周期 IC 汇总
+    group_cumulative: pd.DataFrame | None = None  # 各组累计收益曲线
+    group_excess_cumulative: pd.DataFrame | None = None  # 各组超额累计收益
+    ic_series: pd.DataFrame | None = None  # IC / Rank_IC 逐日时序
+    ic_cumulative: pd.DataFrame | None = None  # IC / Rank_IC 累计
+    ic_decay: pd.DataFrame | None = None  # IC / Rank_IC 衰减
+    ic_distribution: pd.DataFrame | None = None  # IC / Rank_IC 分布直方图
+    ic_autocorr: pd.DataFrame | None = None  # IC / Rank_IC 自相关
+    latest_ranking: pd.DataFrame | None = None  # 最新一期因子值排名
+    report: dict | None = (
         None  # 完整综合报告（与 /api/factor/analysis 同构，供节点内直接展示）
     )
 
@@ -77,14 +76,14 @@ class FactorAnalysisNode(BaseWorkNode):
     """一站式因子分析（复用 factor_research.full_factor_analysis）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FactorAnalysisInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FactorAnalysisOutput
 
-    def run(self, input: FactorAnalysisInput) -> Optional[BaseModel]:
+    def run(self, input: FactorAnalysisInput) -> BaseModel | None:
         if not _valid(input.factor_data) or not _valid(input.return_data):
             raise ValueError(
                 "因子分析：需要上游连线提供 factor_data 与 return_data（面板 DataFrame）"
@@ -131,7 +130,7 @@ class FactorAnalysisNode(BaseWorkNode):
             )
 
         # 分布直方图（含偏度/峰度）
-        ic_dist, ric_dist = ic_rep["distribution"], ric_rep["distribution"]
+        ic_dist, _ric_dist = ic_rep["distribution"], ric_rep["distribution"]
         dist_df = (
             pd.DataFrame(
                 {
@@ -199,9 +198,9 @@ class FactorAnalysisNode(BaseWorkNode):
 )
 class AlphaLensInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
-    sector_data: Optional[pd.DataFrame] = (
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
+    sector_data: pd.DataFrame | None = (
         None  # 行业面板（可选，首行作为 {股票: 行业}）
     )
     periods: str = "1,5,10"
@@ -210,10 +209,10 @@ class AlphaLensInput(BaseModel):
 
 class AlphaLensOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    ic_summary: Optional[pd.DataFrame] = None  # 各周期 IC 汇总（含 t/p/IR）
-    ic_by_group: Optional[pd.DataFrame] = None  # 行业分组 IC
-    mean_return_by_quantile: Optional[pd.DataFrame] = None  # 分层平均收益
-    report: Optional[dict] = (
+    ic_summary: pd.DataFrame | None = None  # 各周期 IC 汇总（含 t/p/IR）
+    ic_by_group: pd.DataFrame | None = None  # 行业分组 IC
+    mean_return_by_quantile: pd.DataFrame | None = None  # 分层平均收益
+    report: dict | None = (
         None  # 完整 AlphaLens 报告（与 /api/factor/alphalens 同构）
     )
 
@@ -234,14 +233,14 @@ class AlphaLensNode(BaseWorkNode):
     """AlphaLens 式因子分析（复用 alphalens_analysis.full_alphalens_analysis）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return AlphaLensInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return AlphaLensOutput
 
-    def run(self, input: AlphaLensInput) -> Optional[BaseModel]:
+    def run(self, input: AlphaLensInput) -> BaseModel | None:
         from backend.services.alphalens_analysis import full_alphalens_analysis
 
         if not _valid(input.factor_data) or not _valid(input.return_data):
@@ -282,18 +281,18 @@ class AlphaLensNode(BaseWorkNode):
 )
 class ICInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
     periods: str = "1,5,10,20"
     method: str = "rank_ic"
 
 
 class ICOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    ic_result: Optional[pd.DataFrame] = (
+    ic_result: pd.DataFrame | None = (
         None  # 各周期 IC 汇总（均值/标准差/ICIR/t值/胜率）
     )
-    ic_series: Optional[pd.DataFrame] = None  # 逐日 IC 时序（AlphaLens 风格）
+    ic_series: pd.DataFrame | None = None  # 逐日 IC 时序（AlphaLens 风格）
 
 
 @work_node(
@@ -312,14 +311,14 @@ class ICNode(BaseWorkNode):
     """截面 IC / RankIC 分析（复用 factor_research 服务）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return ICInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return ICOutput
 
-    def run(self, input: ICInput) -> Optional[BaseModel]:
+    def run(self, input: ICInput) -> BaseModel | None:
         factor_data = input.factor_data
         return_data = input.return_data
         if not _valid(factor_data) or not _valid(return_data):
@@ -379,16 +378,16 @@ class ICNode(BaseWorkNode):
 )
 class GroupReturnInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
     n_groups: int = 5
 
 
 class GroupReturnOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    group_return: Optional[pd.DataFrame] = None  # 各组平均单期收益
-    group_cumulative: Optional[pd.DataFrame] = None  # 各组累计收益曲线
-    group_stats: Optional[pd.DataFrame] = None  # 多空价差/单调性
+    group_return: pd.DataFrame | None = None  # 各组平均单期收益
+    group_cumulative: pd.DataFrame | None = None  # 各组累计收益曲线
+    group_stats: pd.DataFrame | None = None  # 多空价差/单调性
 
 
 @work_node(
@@ -407,14 +406,14 @@ class GroupReturnNode(BaseWorkNode):
     """截面分组收益分析（复用 factor_research 服务）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return GroupReturnInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return GroupReturnOutput
 
-    def run(self, input: GroupReturnInput) -> Optional[BaseModel]:
+    def run(self, input: GroupReturnInput) -> BaseModel | None:
         factor_data = input.factor_data
         return_data = input.return_data
         if not _valid(factor_data) or not _valid(return_data):
@@ -474,13 +473,13 @@ class GroupReturnNode(BaseWorkNode):
 )
 class FactorCorrelationInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factors: Optional[pd.DataFrame] = None  # 多列因子数据（每列一个因子）
+    factors: pd.DataFrame | None = None  # 多列因子数据（每列一个因子）
     method: str = "pearson"
 
 
 class FactorCorrelationOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    correlation_matrix: Optional[pd.DataFrame] = None
+    correlation_matrix: pd.DataFrame | None = None
 
 
 @work_node(
@@ -498,14 +497,14 @@ class FactorCorrelationNode(BaseWorkNode):
     """多因子相关性矩阵"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FactorCorrelationInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FactorCorrelationOutput
 
-    def run(self, input: FactorCorrelationInput) -> Optional[BaseModel]:
+    def run(self, input: FactorCorrelationInput) -> BaseModel | None:
         factors = input.factors
         if not _valid(factors):
             raise ValueError("因子相关性：需要连线提供多列因子 DataFrame")
@@ -524,14 +523,14 @@ class FactorCorrelationNode(BaseWorkNode):
 )
 class FactorDecayInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
     max_period: int = 20
 
 
 class FactorDecayOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    decay_result: Optional[pd.DataFrame] = None
+    decay_result: pd.DataFrame | None = None
 
 
 @work_node(
@@ -549,14 +548,14 @@ class FactorDecayNode(BaseWorkNode):
     """因子 IC 随持有期衰减（复用 factor_research 服务）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FactorDecayInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FactorDecayOutput
 
-    def run(self, input: FactorDecayInput) -> Optional[BaseModel]:
+    def run(self, input: FactorDecayInput) -> BaseModel | None:
         factor_data = input.factor_data
         return_data = input.return_data
         if not _valid(factor_data) or not _valid(return_data):
@@ -583,8 +582,8 @@ class FactorDecayNode(BaseWorkNode):
 )
 class FactorCombineInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factors: Optional[pd.DataFrame] = None  # 多列因子数据
-    return_data: Optional[pd.DataFrame] = None  # 收益面板（ic_weighted 必需）
+    factors: pd.DataFrame | None = None  # 多列因子数据
+    return_data: pd.DataFrame | None = None  # 收益面板（ic_weighted 必需）
     weights: dict[str, float] = Field(default_factory=dict)  # 因子名 -> 权重
     method: str = "weighted_sum"
     ic_window: int = 120
@@ -593,7 +592,7 @@ class FactorCombineInput(BaseModel):
 
 class FactorCombineOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    combined_factor: Optional[pd.DataFrame] = None
+    combined_factor: pd.DataFrame | None = None
 
 
 @work_node(
@@ -612,14 +611,14 @@ class FactorCombineNode(BaseWorkNode):
     """多因子合成（加权求和 / 等权 / IC 加权）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FactorCombineInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FactorCombineOutput
 
-    def run(self, input: FactorCombineInput) -> Optional[BaseModel]:
+    def run(self, input: FactorCombineInput) -> BaseModel | None:
         factors = input.factors
         if not _valid(factors):
             raise ValueError("多因子合成：需要连线提供多列因子 DataFrame")
@@ -651,7 +650,7 @@ class FactorCombineNode(BaseWorkNode):
     @staticmethod
     def _column_ic_weights(
         numeric_df: pd.DataFrame,
-        return_data: Optional[pd.DataFrame],
+        return_data: pd.DataFrame | None,
         ic_window: int,
     ) -> dict[str, float]:
         """列级 IC 加权：每列因子与收益对齐后取 RankIC，|IC| 归一、符号对齐方向
@@ -703,8 +702,8 @@ def _valid(df) -> bool:
 )
 class WalkForwardInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
     train_days: int = 252
     test_days: int = 63
     n_splits: int = 3
@@ -714,8 +713,8 @@ class WalkForwardInput(BaseModel):
 
 class WalkForwardOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    validation_report: Optional[dict] = None  # 完整验证报告（folds + aggregate）
-    oos_summary: Optional[pd.DataFrame] = None  # 每折 in-sample / OOS 指标表
+    validation_report: dict | None = None  # 完整验证报告（folds + aggregate）
+    oos_summary: pd.DataFrame | None = None  # 每折 in-sample / OOS 指标表
 
 
 @work_node(
@@ -735,14 +734,14 @@ class WalkForwardNode(BaseWorkNode):
     """因子样本外验证（复用 factor_research 服务）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return WalkForwardInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return WalkForwardOutput
 
-    def run(self, input: WalkForwardInput) -> Optional[BaseModel]:
+    def run(self, input: WalkForwardInput) -> BaseModel | None:
         if not _valid(input.factor_data) or not _valid(input.return_data):
             raise ValueError(
                 "因子样本外验证：需要上游连线提供 factor_data 与 return_data（面板 DataFrame）"

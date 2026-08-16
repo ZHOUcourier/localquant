@@ -2,7 +2,6 @@
 
 import json
 import urllib.request
-from typing import Optional, Type
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,7 +30,7 @@ class PushResultOutput(BaseModel):
 )
 class DingTalkInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     webhook_url: str = Field(default="", title="Webhook URL")
     message_type: str = Field(default="text", title="消息类型")
     message_content: str = Field(default="", title="消息内容")
@@ -53,14 +52,14 @@ class DingTalkNode(BaseWorkNode):
     """钉钉机器人推送节点"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return DingTalkInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return PushResultOutput
 
-    def run(self, input: DingTalkInput) -> Optional[BaseModel]:
+    def run(self, input: DingTalkInput) -> BaseModel | None:
         if not input.webhook_url.strip():
             return PushResultOutput(text="", metadata={"error": "Webhook URL 为空"})
 

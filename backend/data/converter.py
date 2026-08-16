@@ -4,12 +4,12 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
 
-def conv_time(timestamp_ms: int | float) -> str:
+def conv_time(timestamp_ms: float) -> str:
     """毫秒时间戳转 "20240101150000" 格式字符串
 
     Args:
@@ -18,7 +18,7 @@ def conv_time(timestamp_ms: int | float) -> str:
     Returns:
         "YYYYMMDDHHmmss" 格式字符串
     """
-    dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+    dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=UTC)
     return dt.strftime("%Y%m%d%H%M%S")
 
 

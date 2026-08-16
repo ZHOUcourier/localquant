@@ -1,6 +1,5 @@
 """工作流相关 Pydantic 模型"""
 
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +15,7 @@ class WorkNodeModel(BaseModel):
     width: float = 240
     height: float = 180
     static_input_data: dict = Field(default_factory=dict)
-    output_path: Optional[str] = None
+    output_path: str | None = None
 
 
 class LinkModel(BaseModel):
@@ -42,10 +41,10 @@ class WorkflowCreate(BaseModel):
 class WorkflowUpdate(BaseModel):
     """更新工作流请求"""
 
-    name: Optional[str] = None
-    description: Optional[str] = None
-    nodes: Optional[list[WorkNodeModel]] = None
-    links: Optional[list[LinkModel]] = None
+    name: str | None = None
+    description: str | None = None
+    nodes: list[WorkNodeModel] | None = None
+    links: list[LinkModel] | None = None
 
 
 class WorkflowResponse(BaseModel):
@@ -58,7 +57,7 @@ class WorkflowResponse(BaseModel):
     links: list[LinkModel]
     created_at: int
     updated_at: int
-    last_run_id: Optional[str] = None
+    last_run_id: str | None = None
     is_favorite: bool = False
 
     class Config:
@@ -74,5 +73,5 @@ class WorkflowListItem(BaseModel):
     node_count: int
     created_at: int
     updated_at: int
-    last_run_id: Optional[str] = None
+    last_run_id: str | None = None
     is_favorite: bool = False

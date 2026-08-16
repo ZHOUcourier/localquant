@@ -1,5 +1,4 @@
 # QMT 数据获取节点
-from typing import Optional
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -59,7 +58,7 @@ class QMTKlineNode(BaseWorkNode):
     def output_model(cls):
         return QMTKlineOutput
 
-    def run(self, input: BaseModel) -> Optional[BaseModel]:
+    def run(self, input: BaseModel) -> BaseModel | None:
         from backend.data import qmt_client
 
         codes = [c.strip() for c in input.code_list.split(",") if c.strip()]
@@ -135,7 +134,7 @@ class QMTFinancialNode(BaseWorkNode):
     def output_model(cls):
         return QMTFinancialOutput
 
-    def run(self, input: BaseModel) -> Optional[BaseModel]:
+    def run(self, input: BaseModel) -> BaseModel | None:
         from backend.data import qmt_client
 
         codes = [c.strip() for c in input.code_list.split(",") if c.strip()]
@@ -199,7 +198,7 @@ class QMTSectorNode(BaseWorkNode):
     def output_model(cls):
         return QMTSectorOutput
 
-    def run(self, input: BaseModel) -> Optional[BaseModel]:
+    def run(self, input: BaseModel) -> BaseModel | None:
         from backend.data import qmt_client
 
         if input.sector_name.strip():
@@ -249,7 +248,7 @@ class TradingCalendarNode(BaseWorkNode):
     def output_model(cls):
         return TradingCalendarOutput
 
-    def run(self, input: BaseModel) -> Optional[BaseModel]:
+    def run(self, input: BaseModel) -> BaseModel | None:
         from backend.data import qmt_client
 
         dates = qmt_client.get_trading_dates(
@@ -305,7 +304,7 @@ class StockListNode(BaseWorkNode):
     def output_model(cls):
         return StockListOutput
 
-    def run(self, input: BaseModel) -> Optional[BaseModel]:
+    def run(self, input: BaseModel) -> BaseModel | None:
         from backend.data import qmt_client
 
         if input.sector.strip():

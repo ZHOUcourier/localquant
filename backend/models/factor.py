@@ -1,6 +1,5 @@
 """因子研究 Pydantic 模型"""
 
-from typing import Optional
 
 from pydantic import BaseModel, Field
 

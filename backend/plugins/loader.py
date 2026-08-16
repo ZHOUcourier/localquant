@@ -8,7 +8,6 @@ from loguru import logger
 def load_all_nodes():
     """加载所有内置节点和自定义节点"""
     # 1. 确保注册表和基类已导入
-    from backend.plugins.base import BaseWorkNode
     from backend.plugins.registry import ALL_WORK_NODES
 
     # 2. 加载内置节点模块

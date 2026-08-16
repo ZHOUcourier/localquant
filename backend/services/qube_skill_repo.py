@@ -10,7 +10,6 @@
 import json
 import re
 import time
-from typing import Optional
 
 import httpx
 from loguru import logger
@@ -21,7 +20,7 @@ REPO_CACHE_TTL = 6 * 3600  # 秒
 DEFAULT_TIMEOUT = 12.0
 
 
-def parse_repo_url(repo_url: str) -> Optional[dict]:
+def parse_repo_url(repo_url: str) -> dict | None:
     """解析 GitHub 仓库 URL → {owner, repo, branch, subpath}
 
     支持两种形态：
@@ -42,7 +41,7 @@ def _candidate_readme_names() -> list[str]:
     return ["README.md", "readme.md", "Readme.md", "README.rst", "README"]
 
 
-async def _fetch_raw(client: httpx.AsyncClient, url: str) -> Optional[str]:
+async def _fetch_raw(client: httpx.AsyncClient, url: str) -> str | None:
     try:
         resp = await client.get(url)
     except httpx.HTTPError as e:
@@ -56,7 +55,7 @@ async def _fetch_raw(client: httpx.AsyncClient, url: str) -> Optional[str]:
     return text
 
 
-async def _fetch_readme(client: httpx.AsyncClient, info: dict) -> Optional[str]:
+async def _fetch_readme(client: httpx.AsyncClient, info: dict) -> str | None:
     base = f"https://raw.githubusercontent.com/{info['owner']}/{info['repo']}"
     branches = [info["branch"]] if info["branch"] else []
     branches += [b for b in ("main", "master") if b not in branches]
@@ -76,7 +75,7 @@ async def _fetch_readme(client: httpx.AsyncClient, info: dict) -> Optional[str]:
     return None
 
 
-async def _fetch_skill_md(client: httpx.AsyncClient, info: dict) -> Optional[str]:
+async def _fetch_skill_md(client: httpx.AsyncClient, info: dict) -> str | None:
     """拉取技能本体 SKILL.md：子目录技能优先子目录，否则仓库根目录"""
     base = f"https://raw.githubusercontent.com/{info['owner']}/{info['repo']}"
     branches = [info["branch"]] if info["branch"] else []

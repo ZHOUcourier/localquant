@@ -19,8 +19,9 @@ QUBE 注册的平台原生工具与技能库（qube_skills 表 enabled=1 项）�
 import json
 import time
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -100,7 +101,7 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
         calls: dict[int, dict] = {}
 
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=300.0) as client:  # noqa: SIM117
                 async with client.stream(
                     "POST",
                     f"{cfg.base_url}/chat/completions",
@@ -310,6 +311,8 @@ async def _tool_read_doc(args: dict) -> dict:
 
 async def _tool_query_market_data(args: dict) -> dict:
     """查询本地 A 股行情表格（只读）：指定标的/区间/字段，返回尾部样本"""
+    import pandas as pd
+
     from backend.services import market_data
 
     symbols = list(args.get("symbols") or [])
@@ -337,7 +340,7 @@ async def _tool_query_market_data(args: dict) -> dict:
             continue
         tail = panel.tail(5).iloc[:, :8]
         out["tables"][f] = {
-            str(d.date()): {c: round(float(v), 3) for c, v in row.items() if v == v}
+            str(d.date()): {c: round(float(v), 3) for c, v in row.items() if not pd.isna(v)}
             for d, row in tail.iterrows()
         }
     return out

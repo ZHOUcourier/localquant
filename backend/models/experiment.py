@@ -1,6 +1,6 @@
 """实验记录 Pydantic 模型"""
+
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class ExperimentCreate(BaseModel):

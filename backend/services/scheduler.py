@@ -177,7 +177,7 @@ async def scheduler_loop():
         return None
 
     while True:
-        now = datetime.now()
+        now = datetime.now().astimezone()
         day = now.date().isoformat()
         hhmm = f"{now.hour:02d}:{now.minute:02d}"
         step = _step_for(hhmm)
@@ -191,7 +191,7 @@ async def scheduler_loop():
             tasks.spawn(run_jobs(trigger="schedule", steps=["recalc"]))
         # 跨半夜清空当日标记
         if now.hour == 0 and now.minute == 0:
-            day0 = datetime.now().date().isoformat()
+            day0 = datetime.now().astimezone().date().isoformat()
             _fired_update = {d for d in _fired_update if d == day0}
             _fired_recalc = {d for d in _fired_recalc if d == day0}
         await asyncio.sleep(30)

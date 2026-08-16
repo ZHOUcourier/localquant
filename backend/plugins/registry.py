@@ -1,21 +1,21 @@
-from typing import Optional, Type
+import builtins
 
 from loguru import logger
 
 from backend.plugins.base import BaseWorkNode
 
 # 全局节点注册表
-ALL_WORK_NODES: dict[str, Type[BaseWorkNode]] = {}
+ALL_WORK_NODES: dict[str, type[BaseWorkNode]] = {}
 
 
 def work_node(
-    name: Optional[str] = None,
+    name: str | None = None,
     group: str = "99-自定义节点",
     type: str = "general",
     box_color: str = "black",
     description: str = "",
     example: str = "",
-    notes: Optional[list[str]] = None,
+    notes: list[str] | None = None,
 ):
     """装饰器 — 注册工作流节点到全局注册表
 
@@ -28,7 +28,7 @@ def work_node(
     notes: 使用注意事项列表（供侧边栏悬停说明与节点详情展示）
     """
 
-    def decorator(cls: Type[BaseWorkNode]) -> Type[BaseWorkNode]:
+    def decorator(cls: builtins.type[BaseWorkNode]) -> builtins.type[BaseWorkNode]:
         if not issubclass(cls, BaseWorkNode):
             raise TypeError(f"{cls.__name__} must inherit from BaseWorkNode")
 
@@ -48,7 +48,7 @@ def work_node(
     return decorator
 
 
-def get_node_by_name(name: str) -> Optional[Type[BaseWorkNode]]:
+def get_node_by_name(name: str) -> type[BaseWorkNode] | None:
     """根据类名获取节点类"""
     return ALL_WORK_NODES.get(name)
 

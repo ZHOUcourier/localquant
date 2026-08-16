@@ -1,7 +1,7 @@
 """Pydantic 模型定义"""
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -19,7 +19,7 @@ class NodeModel(BaseModel):
     width: float = 240
     height: float = 180
     static_input_data: dict[str, Any] = Field(default_factory=dict)
-    output_path: Optional[str] = None
+    output_path: str | None = None
 
 
 class LinkModel(BaseModel):
@@ -33,7 +33,7 @@ class LinkModel(BaseModel):
 
 
 class WorkflowCreate(BaseModel):
-    id: Optional[str] = None  # 有 id 时为更新，无 id 时为创建
+    id: str | None = None  # 有 id 时为更新，无 id 时为创建
     name: str
     description: str = ""
     is_favorite: bool = False
@@ -42,10 +42,10 @@ class WorkflowCreate(BaseModel):
 
 
 class WorkflowUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    nodes: Optional[list[NodeModel]] = None
-    links: Optional[list[LinkModel]] = None
+    name: str | None = None
+    description: str | None = None
+    nodes: list[NodeModel] | None = None
+    links: list[LinkModel] | None = None
 
 
 class WorkflowResponse(BaseModel):
@@ -56,7 +56,7 @@ class WorkflowResponse(BaseModel):
     links: list[LinkModel]
     created_at: int
     updated_at: int
-    last_run_id: Optional[str] = None
+    last_run_id: str | None = None
     is_favorite: bool = False
 
 
@@ -82,8 +82,8 @@ class WorkflowRunResponse(BaseModel):
     id: str
     workflow_id: str
     status: str
-    started_at: Optional[int] = None
-    finished_at: Optional[int] = None
+    started_at: int | None = None
+    finished_at: int | None = None
     node_outputs: dict[str, Any] = Field(default_factory=dict)
     logs: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -129,4 +129,4 @@ class NodeExecutionStatus(BaseModel):
     node_uuid: str
     status: str  # pending/running/success/failed
     message: str = ""
-    output_path: Optional[str] = None
+    output_path: str | None = None

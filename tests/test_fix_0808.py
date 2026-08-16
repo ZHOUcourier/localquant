@@ -53,7 +53,7 @@ def test_ic_and_decay_are_json_serializable():
 
 def test_capacity_mean_participation_finite():
     """容量分析各档 mean/p95 不能出现 NaN（布尔 DataFrame 索引陷阱）"""
-    rets, close = _panel()
+    _rets, close = _panel()
     prices = close
     amount = pd.DataFrame(
         1e8, index=prices.index, columns=prices.columns
@@ -101,7 +101,7 @@ def test_backtest_semaphore_factory_returns_semaphore():
 
 
 def test_capacity_assumptions_include_adv_window_and_lot_size():
-    rets, close = _panel()
+    _rets, close = _panel()
     result = bt.capacity_analysis(
         signals=close.pct_change().fillna(0.0),
         prices=close,

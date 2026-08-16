@@ -1,6 +1,6 @@
 """插件相关 Pydantic 模型"""
+
 from pydantic import BaseModel
-from typing import Optional
 
 
 class PluginNodeInfo(BaseModel):
@@ -10,8 +10,8 @@ class PluginNodeInfo(BaseModel):
     group: str
     type: str
     box_color: str
-    input_schema: Optional[dict] = None
-    output_schema: Optional[dict] = None
+    input_schema: dict | None = None
+    output_schema: dict | None = None
 
 
 class PluginGroupResponse(BaseModel):

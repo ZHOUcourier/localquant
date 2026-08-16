@@ -1,6 +1,5 @@
 """特征工程节点 — 特征构建、变换、选择"""
 
-from typing import Optional, Type
 
 import numpy as np
 import pandas as pd
@@ -34,7 +33,7 @@ from backend.plugins.ui_control import ui
 )
 class FeatureEngineeringInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     feature_cols: str = Field(default="", title="特征列名(逗号分隔)")
     target_col: str = Field(default="", title="目标列名(可选)")
     method: str = Field(default="standardize", title="特征变换方法")
@@ -46,7 +45,7 @@ class FeatureEngineeringInput(BaseModel):
 
 class FeatureEngineeringOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     feature_names: list = Field(default_factory=list, title="特征名列表")
 
 
@@ -66,14 +65,14 @@ class FeatureEngineeringNode(BaseWorkNode):
     """输入DataFrame，配置特征列和参数，输出特征矩阵"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FeatureEngineeringInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FeatureEngineeringOutput
 
-    def run(self, input: FeatureEngineeringInput) -> Optional[BaseModel]:
+    def run(self, input: FeatureEngineeringInput) -> BaseModel | None:
         df = input.data
         if df is None or (isinstance(df, pd.DataFrame) and df.empty):
             return FeatureEngineeringOutput(data=pd.DataFrame(), feature_names=[])

@@ -3,12 +3,8 @@
 import json
 import time
 import uuid
-from typing import Optional
 
-import aiosqlite
-from loguru import logger
-
-from backend.database import DB_PATH, get_db
+from backend.database import get_db
 from backend.models.experiment import ExperimentCreate
 
 
@@ -45,7 +41,7 @@ class ExperimentService:
 
     async def list_experiments(
         self,
-        source: Optional[str] = None,
+        source: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict]:
@@ -76,7 +72,7 @@ class ExperimentService:
 
         return results
 
-    async def get_experiment(self, exp_id: str) -> Optional[dict]:
+    async def get_experiment(self, exp_id: str) -> dict | None:
         """获取单个实验详情"""
         db = await get_db()
         cursor = await db.execute("SELECT * FROM experiments WHERE id = ?", (exp_id,))
@@ -126,7 +122,7 @@ class ExperimentService:
             values = {}
             for exp in experiments:
                 values[exp["id"]] = exp["params"].get(key)
-            unique_values = set(str(v) for v in values.values())
+            unique_values = {str(v) for v in values.values()}
             param_diffs[key] = {
                 "values": values,
                 "has_diff": len(unique_values) > 1,
@@ -152,8 +148,8 @@ class ExperimentService:
 
     async def search(
         self,
-        tags: Optional[list[str]] = None,
-        metric_min: Optional[dict] = None,
+        tags: list[str] | None = None,
+        metric_min: dict | None = None,
         limit: int = 50,
     ) -> list[dict]:
         """搜索实验——标签与指标下限均在 SQL 层过滤（JSON1 提取，免全量内存扫描）"""

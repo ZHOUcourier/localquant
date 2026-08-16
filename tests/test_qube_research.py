@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import backend.database as database
+from backend import database
 
 
 @pytest.fixture()
@@ -172,7 +172,7 @@ def test_factor_analysis_error_marks_stage(qube_db, monkeypatch):
         finally:
             await db.close()
         aid = await qube_research.create_factor_analysis(fid, "s1", {})
-        with pytest.raises(Exception):
+        with pytest.raises(NameError):
             await qube_research.execute_factor_analysis(aid)
         db = await database.get_db()
         try:

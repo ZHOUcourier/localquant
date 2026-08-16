@@ -575,9 +575,9 @@ async def run_workflow_stream(
 
 def _sse_event(event_type: str, data: dict[str, Any]) -> str:
     """构造 SSE 格式字符串（自动附加时间戳与日志级别，供前端筛选/排序）"""
-    data.setdefault("timestamp", datetime.now().isoformat())
+    data.setdefault("timestamp", datetime.now().astimezone().isoformat())
     if "level" not in data:
         status = data.get("status", "")
-        data["level"] = "error" if status == "failed" else "info" if status else "info"
+        data["level"] = "error" if status == "failed" else "info"
     payload = json.dumps(data, ensure_ascii=False, default=str)
     return f"event: {event_type}\ndata: {payload}\n\n"

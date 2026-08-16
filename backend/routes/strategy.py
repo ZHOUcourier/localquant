@@ -10,7 +10,6 @@
 import re
 import time
 import uuid
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -31,12 +30,12 @@ class StrategyCreate(BaseModel):
 
 
 class StrategyUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    content: Optional[str] = None
-    code: Optional[str] = None  # 更新代码时自动记录一条版本
-    version_note: Optional[str] = None  # 本次代码变更的版本备注
-    status: Optional[str] = None  # working / saved（仅允许用户操作触发）
+    name: str | None = None
+    description: str | None = None
+    content: str | None = None
+    code: str | None = None  # 更新代码时自动记录一条版本
+    version_note: str | None = None  # 本次代码变更的版本备注
+    status: str | None = None  # working / saved（仅允许用户操作触发）
 
 
 def _extract_code(content: str) -> str:
@@ -57,7 +56,7 @@ def _row_to_dict(row) -> dict:
         "status": row["status"],
         "source": row["source"],
         "content": row["content"],
-        "code": row["code"] if "code" in row.keys() else "",
+        "code": row.get("code", ""),
         "workflow_id": row["workflow_id"],
         "session_id": row["session_id"],
         "created_at": row["created_at"],

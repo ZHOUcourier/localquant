@@ -7,7 +7,6 @@ CLI 工具按用户偏好顺序排列，通过 shutil.which 探测本机可用�
 
 import asyncio
 import shutil
-from typing import Optional
 
 # 预置供应商（有序）：id → {label, base_url, model, models}
 # base_url 均为 OpenAI 兼容 chat/completions 端点前缀；models 为下拉可选清单
@@ -355,6 +354,7 @@ def _opencode_models() -> list[str]:
             capture_output=True,
             text=True,
             timeout=15,
+            check=False,
         )
         models: list[str] = []
         seen: set[str] = set()
@@ -469,7 +469,7 @@ def list_cli_tools() -> list[dict]:
 
 def build_cli_command(
     cli_id: str, prompt: str, model: str = "", effort: str = ""
-) -> Optional[list[str]]:
+) -> list[str] | None:
     """CLI id + 提示词(+模型/强度) → 完整命令行；未知/不可用返回 None
 
     model/effort 按工具元数据注入到位置参数 prompt 之前（flag 先于正文）；
@@ -507,7 +507,7 @@ async def run_cli(
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         raise RuntimeError(f"CLI 执行超时（{int(timeout)}s）: {cli_id}")
     if proc.returncode != 0 and not stdout:

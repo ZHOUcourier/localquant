@@ -11,7 +11,8 @@
 所有数据均来自 QMT 行情缓存，绝不引入 QMT 以外的数据源。
 """
 
-from typing import Optional, Type
+
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -25,11 +26,11 @@ from backend.services.factor_operators import build_operator_namespace
 
 
 def _build_eval_ns(
-    data: Optional[pd.DataFrame],
+    data: pd.DataFrame | None,
     stock_pool: list[str],
     start_date: str,
     end_date: str,
-) -> tuple[dict, Optional[pd.DataFrame]]:
+) -> tuple[dict, pd.DataFrame | None]:
     """构建公式/代码求值命名空间
 
     优先使用上游传入的行情面板字典（若 data 为面板则并入）；否则按股票池+区间
@@ -77,7 +78,7 @@ def _apply_direction(factor: pd.DataFrame, direction: str) -> pd.DataFrame:
 class FactorFormulaInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     # 可选上游行情/因子面板；留空则按股票池+区间从 QMT 加载
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     stock_pool: list[str] = []
     start_date: str = "20200101"
     end_date: str = "20231231"
@@ -88,8 +89,8 @@ class FactorFormulaInput(BaseModel):
 
 class FactorFormulaOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -110,14 +111,14 @@ class FactorFormulaNode(BaseWorkNode):
     """通过公式表达式构建因子（基于 QMT 行情面板，内置算子）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FactorFormulaInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FactorFormulaOutput
 
-    def run(self, input: FactorFormulaInput) -> Optional[BaseModel]:
+    def run(self, input: FactorFormulaInput) -> BaseModel | None:
         formula = (input.formula or "").strip()
         if not formula:
             raise ValueError(
@@ -137,16 +138,16 @@ class FactorFormulaNode(BaseWorkNode):
         try:
             if len(lines) > 1:
                 exec("\n".join(lines[:-1]), {"__builtins__": {}}, ns)  # noqa: S102
-                factor = eval(lines[-1], {"__builtins__": {}}, ns)  # noqa: S307
+                factor = eval(lines[-1], {"__builtins__": {}}, ns)
             else:
-                factor = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+                factor = eval(formula, {"__builtins__": {}}, ns)
         except Exception as e:
             raise ValueError(f"因子公式计算失败: {e}") from e
 
         if isinstance(factor, pd.Series):
             factor = factor.to_frame(name=input.factor_name or "factor")
         if not isinstance(factor, pd.DataFrame):
-            raise ValueError(
+            raise TypeError(
                 f"公式结果应为 DataFrame/Series，得到 {type(factor).__name__}"
             )
 
@@ -171,7 +172,7 @@ class FactorFormulaNode(BaseWorkNode):
 )
 class FactorCodeInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     stock_pool: list[str] = []
     start_date: str = "20200101"
     end_date: str = "20231231"
@@ -189,8 +190,8 @@ class FactorCodeInput(BaseModel):
 
 class FactorCodeOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -209,7 +210,7 @@ class FactorCodeOutput(BaseModel):
 class FactorCodeNode(BaseWorkNode):
     """通过 Python 代码构建因子（基于 QMT 行情面板，内置算子）"""
 
-    _SAFE_BUILTINS = {
+    _SAFE_BUILTINS: ClassVar[dict] = {
         "print": print,
         "range": range,
         "len": len,
@@ -237,14 +238,14 @@ class FactorCodeNode(BaseWorkNode):
     }
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FactorCodeInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FactorCodeOutput
 
-    def run(self, input: FactorCodeInput) -> Optional[BaseModel]:
+    def run(self, input: FactorCodeInput) -> BaseModel | None:
         code = (input.code or "").strip()
         if not code:
             raise ValueError("因子代码为空，请编写代码并把结果写入 factor_data")
@@ -265,7 +266,7 @@ class FactorCodeNode(BaseWorkNode):
         if isinstance(factor, pd.Series):
             factor = factor.to_frame(name=input.factor_name or "factor")
         if not isinstance(factor, pd.DataFrame):
-            raise ValueError(
+            raise TypeError(
                 "代码未生成 factor_data / df_factor（应为 DataFrame 或 Series）"
             )
 
@@ -287,7 +288,7 @@ class FactorCodeNode(BaseWorkNode):
 )
 class FactorStandardizeInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
     method: str = "zscore"
     weight: float = 1.0
     factor_cols: list[str] = []  # 空 = 对所有数值列
@@ -295,7 +296,7 @@ class FactorStandardizeInput(BaseModel):
 
 class FactorStandardizeOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -314,14 +315,14 @@ class FactorStandardizeNode(BaseWorkNode):
     """因子标准化 + 权重调整（Z-Score / MinMax / Rank）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FactorStandardizeInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FactorStandardizeOutput
 
-    def run(self, input: FactorStandardizeInput) -> Optional[BaseModel]:
+    def run(self, input: FactorStandardizeInput) -> BaseModel | None:
         factor_data = input.factor_data
         if (
             factor_data is None
@@ -374,16 +375,16 @@ class FactorStandardizeNode(BaseWorkNode):
 )
 class FactorNeutralizeInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    industry_data: Optional[pd.DataFrame] = None
-    market_cap_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
+    industry_data: pd.DataFrame | None = None
+    market_cap_data: pd.DataFrame | None = None
     factor_col: str = "factor"
     method: str = "行业+市值"
 
 
 class FactorNeutralizeOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
+    factor_data: pd.DataFrame | None = None
     assumptions: list = []
 
 
@@ -403,14 +404,14 @@ class FactorNeutralizeNode(BaseWorkNode):
     """因子中性化（回归残差法）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return FactorNeutralizeInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return FactorNeutralizeOutput
 
-    def run(self, input: FactorNeutralizeInput) -> Optional[BaseModel]:
+    def run(self, input: FactorNeutralizeInput) -> BaseModel | None:
         factor_data = input.factor_data
         if (
             factor_data is None
@@ -430,7 +431,7 @@ class FactorNeutralizeNode(BaseWorkNode):
             )
 
         # 面板因子：从参考数据快照装配行业与市值（未连线时）
-        from backend.services import market_data, reference_data
+        from backend.services import reference_data
 
         use_ind = method in ("行业+市值", "仅行业")
         use_cap = method in ("行业+市值", "仅市值")
@@ -456,7 +457,7 @@ class FactorNeutralizeNode(BaseWorkNode):
     def _neutralize_panel(
         factor: pd.DataFrame,
         industry_map: dict,
-        market_cap: Optional[pd.DataFrame],
+        market_cap: pd.DataFrame | None,
     ) -> pd.DataFrame:
         """面板因子（index=日期, columns=股票）逐日截面行业哑变量+对数市值回归取残差"""
         ind_ser = pd.Series(industry_map) if industry_map else None

@@ -6,7 +6,8 @@ xtquant 仅 Windows 可用，macOS/Linux 开发环境下自动降级为未连接
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 import pandas as pd
 from loguru import logger
@@ -232,7 +233,7 @@ class QMTClient:
             return []
 
     # 全市场 A 股候选板块名（QMT 各版本命名可能不同，取并集）
-    _WHOLE_MARKET_SECTORS = [
+    _WHOLE_MARKET_SECTORS: ClassVar[list[str]] = [
         "沪深A股",
         "沪深京A股",
         "沪深300",
@@ -297,7 +298,7 @@ class QMTClient:
         period: str = "1d",
         start_time: str = "",
         end_time: str = "",
-        callback: Optional[Callable] = None,
+        callback: Callable | None = None,
     ):
         """下载历史数据到本地"""
         self._ensure_connected()
@@ -315,7 +316,7 @@ class QMTClient:
     # ── 实时行情 ─────────────────────────────────────────────
 
     def subscribe_realtime(
-        self, codes: list[str], callback: Optional[Callable] = None
+        self, codes: list[str], callback: Callable | None = None
     ) -> int:
         """订阅实时行情
 

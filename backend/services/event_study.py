@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from loguru import logger
 
 # 同一股票事件间隔小于该天数视为同一事件（避免连板事件重复计数）
 DEFAULT_MERGE_GAP = 3
@@ -240,9 +239,9 @@ def event_study_analysis(
             "mean": round(mean, 6),
             "t": round(t, 3),
             "t_cluster": round(c_t, 3),
-            "n_clusters": int(len(cluster_means)),
+            "n_clusters": len(cluster_means),
             "positive_ratio": round(float((v > 0).mean()), 4),
-            "n": int(len(v)),
+            "n": len(v),
         }
 
     if not per_event:
@@ -253,7 +252,7 @@ def event_study_analysis(
     end = car_out.get(end_key)
     return {
         "ok": True,
-        "n_events": int(len(per_event)),
+        "n_events": len(per_event),
         "window": [window_before, window_after],
         "car": car_out,
         "bhar_mean": round(float(bhar_vals.mean()), 6),
@@ -273,6 +272,97 @@ def event_study_analysis(
             "CAR 为事件窗口异常收益累计（事件日=0，含当日）；同股票事件间隔 "
             f"{merge_gap} 日内自动合并；t_cluster 为按事件日聚类的稳健 t 值；"
             "事件日价格行为已含在收益序列中，无前视"
+        ),
+    }
+
+
+def calendar_time_portfolio(
+    returns: pd.DataFrame,
+    events: pd.DataFrame,
+    window_after: int = 10,
+    market_returns: pd.Series | None = None,
+    min_events: int = 5,
+    merge_gap: int = DEFAULT_MERGE_GAP,
+) -> dict:
+    """Calendar-time portfolio 事件研究。
+
+    把所有处于事件窗口内（事件日 + window_after）的股票在每个交易日等权合成为
+    一个事件组合，逐日计算组合异常收益（market-adjusted），再聚合到日历月，
+    对月度异常收益序列做时间序列 t 检验。相比单事件 CAR，该方法对事件在时间上
+    高度聚集、窗口相互重叠的情况更稳健。
+    """
+    if returns.empty:
+        return {"ok": False, "note": "无收益面板，无法做 calendar-time 分析", "n_events": 0}
+    ev = events.copy()
+    ev["date"] = pd.to_datetime(ev["date"])
+    ev = ev[ev["code"].isin(returns.columns)]
+    if merge_gap > 0:
+        ev = _merge_duplicate_events(ev, merge_gap)
+    n_events = len(ev)
+    if n_events < min_events:
+        return {
+            "ok": False,
+            "n_events": n_events,
+            "note": f"有效事件仅 {n_events} 个（< {min_events}），统计不可靠",
+        }
+
+    idx = returns.index
+    pos = {d: i for i, d in enumerate(idx)}
+    if market_returns is None:
+        market = returns.mean(axis=1)
+    else:
+        market = market_returns.reindex(idx).fillna(returns.mean(axis=1))
+
+    daily_ars: dict[pd.Timestamp, list[float]] = {}
+    for _, row in ev.iterrows():
+        code, date = row["code"], row["date"]
+        if code not in returns.columns or date not in pos:
+            continue
+        i0 = pos[date]
+        r = returns[code]
+        for d in range(window_after + 1):
+            j = i0 + d
+            if j >= len(idx):
+                break
+            day = idx[j]
+            ri = r.iloc[j]
+            rm = market.iloc[j]
+            if pd.isna(ri) or pd.isna(rm):
+                continue
+            daily_ars.setdefault(day, []).append(float(ri - rm))
+
+    if not daily_ars:
+        return {"ok": False, "n_events": 0, "note": "事件窗口内无可用收益"}
+
+    port = pd.Series(
+        {day: float(np.mean(v)) for day, v in daily_ars.items()}
+    ).sort_index()
+    monthly = port.groupby(port.index.to_period("M")).apply(
+        lambda x: float(np.prod(1.0 + x) - 1.0)
+    )
+    monthly.index = [str(x) for x in monthly.index]
+    vals = monthly.to_numpy(dtype=float)
+    mean_monthly = float(vals.mean()) if len(vals) else 0.0
+    sd = float(vals.std(ddof=1)) if len(vals) > 1 else 0.0
+    t_stat = (
+        float(mean_monthly / (sd / np.sqrt(len(vals))))
+        if sd > 0 and len(vals) > 1
+        else 0.0
+    )
+    annualized = float((1.0 + mean_monthly) ** 12 - 1.0)
+    return {
+        "ok": True,
+        "n_events": int(n_events),
+        "window_after": int(window_after),
+        "n_trading_days": len(port),
+        "n_months": len(monthly),
+        "mean_monthly_abnormal_return": round(mean_monthly, 6),
+        "monthly_abnormal_t_stat": round(t_stat, 3),
+        "annualized_abnormal_return": round(annualized, 6),
+        "monthly_abnormal_returns": monthly.to_dict(),
+        "note": (
+            "Calendar-time portfolio：同一交易日内所有处于事件窗口的股票先等权，"
+            "再按月复利为组合异常收益；月度序列做时间序列 t 检验，适合事件高度聚集的情形"
         ),
     }
 
@@ -297,13 +387,12 @@ def build_event_frame(
         frames.append(_detect_limit_events(close, high, low, up_limit, down_limit, "limit_down"))
     elif event_type == "volume_spike":
         frames.append(_detect_volume_spike(close, volume, volume_k))
-    elif event_type == "dividend":
-        if dividend_events:
-            frames.append(
-                pd.DataFrame(
-                    [{"date": pd.to_datetime(e["date"]), "code": e["code"]} for e in dividend_events]
-                )
+    elif event_type == "dividend" and dividend_events:
+        frames.append(
+            pd.DataFrame(
+                [{"date": pd.to_datetime(e["date"]), "code": e["code"]} for e in dividend_events]
             )
+        )
     if manual_events:
         frames.append(
             pd.DataFrame(

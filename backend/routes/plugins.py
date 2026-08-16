@@ -2,7 +2,6 @@
 
 import inspect
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -15,7 +14,7 @@ router = APIRouter()
 class TrashItem(BaseModel):
     type: str  # group | node | custom_node
     key: str
-    label: Optional[str] = None
+    label: str | None = None
 
 
 class TrashBatchRequest(BaseModel):
@@ -59,22 +58,21 @@ async def restore_palette_items(body: TrashBatchRequest):
     palette_service.restore_items(node_keys, group_keys)
     failed = []
     for i in body.items:
-        if i.type == "custom_node":
-            if not custom_node_service.restore_custom_node(i.key):
-                failed.append(i.key)
+        if i.type == "custom_node" and not custom_node_service.restore_custom_node(i.key):
+            failed.append(i.key)
     return {"ok": True, "failed": failed}
 
 
 class CustomNodeCreate(BaseModel):
     source: str
-    base_name: Optional[str] = None  # fork 时传原节点类名
-    display_name: Optional[str] = None
-    group: Optional[str] = None
+    base_name: str | None = None  # fork 时传原节点类名
+    display_name: str | None = None
+    group: str | None = None
 
 
 class CustomNodeUpdate(BaseModel):
     source: str
-    display_name: Optional[str] = None
+    display_name: str | None = None
 
 
 class LintRequest(BaseModel):
@@ -120,7 +118,7 @@ async def lint_node_code(body: LintRequest):
         ruff_bin = os.path.join(os.path.dirname(sys.executable), "ruff")
         if not os.path.exists(ruff_bin):
             ruff_bin = "ruff"
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: ASYNC221
             [
                 ruff_bin,
                 "check",
@@ -134,6 +132,7 @@ async def lint_node_code(body: LintRequest):
             capture_output=True,
             text=True,
             timeout=15,
+            check=False,
         )
         raw = _json.loads(proc.stdout or "[]")
         diagnostics = [

@@ -40,6 +40,7 @@ def _gpu_info() -> dict:
             capture_output=True,
             text=True,
             timeout=2,
+            check=False,
         )
         if out.returncode == 0 and out.stdout.strip():
             gpus = []

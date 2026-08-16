@@ -1,7 +1,6 @@
 """数据路由 — QMT 连接状态、本地缓存管理、数据下载与质量检查"""
 
 import time
-from typing import Optional
 
 import httpx
 import pandas as pd
@@ -22,7 +21,7 @@ _duckdb = DuckDBService()
 
 class QueryRequest(BaseModel):
     sql: str
-    params: Optional[list] = None
+    params: list | None = None
 
 
 class DownloadRequest(BaseModel):
@@ -90,7 +89,7 @@ async def snapshot_fundamental(req: FundamentalSnapshotRequest):
         raise HTTPException(status_code=400, detail="无待快照品种，请指定 codes 或先下载行情")
     try:
         records = await run_in_threadpool(fundamental.snapshot_fundamental, qmt, codes)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error(f"财务快照失败: {e}")
         raise HTTPException(status_code=500, detail=f"财务快照失败: {e}")
     return {"status": "ok", "codes": len(codes), "records": records}
@@ -386,7 +385,6 @@ async def quality_check():
     QMT 连接时用 QMT 交易日历校验缓存中的非交易日 bar；未连接时不做虚假的
     节假日校验，但会基于「全缓存最晚日期」用工作日近似标记长期停牌/退市标的。
     """
-    import numpy as np
     import pandas as pd
 
     issues: list[str] = []
@@ -620,7 +618,7 @@ _TICKER_INDICES: list[tuple[str, str]] = [
 ]
 
 
-def _quote_from_qmt(code: str) -> Optional[dict]:
+def _quote_from_qmt(code: str) -> dict | None:
     """从 QMT 实时 tick 快照提取指数报价"""
     qmt = market_data._qmt
     if not qmt.connected:
@@ -645,7 +643,7 @@ def _quote_from_qmt(code: str) -> Optional[dict]:
         return None
 
 
-def _quote_from_cache(code: str) -> Optional[dict]:
+def _quote_from_cache(code: str) -> dict | None:
     """QMT 不可用时，从本地日线缓存取最近两日收盘价计算涨跌（非实时）
 
     缓存为不复权 + adjust_factor 存储，读取时按 qfq 口径换算，

@@ -10,7 +10,10 @@ import pytest
 
 from backend.services import event_study as es
 from backend.services import risk
-from backend.services.backtest_analysis import BacktestAnalysisService, backtest_analysis
+from backend.services.backtest_analysis import (
+    BacktestAnalysisService,
+    backtest_analysis,
+)
 
 
 def _make_panels(n_stocks=30, n_days=120, seed=7):
@@ -130,6 +133,32 @@ def test_event_study_merges_close_duplicate_events():
     merged = es._merge_duplicate_events(events, gap=3)
     # 1/2 与 1/3 间隔 1 天合并，1/5 间隔 2 天也合并 → 1 个事件
     assert len(merged) == 1
+
+
+def test_calendar_time_portfolio_aggregates_monthly():
+    panels = _make_panels(n_stocks=20, n_days=90, seed=21)
+    ret = panels["close"].pct_change()
+    dates = ret.index
+    # 20 只股票在 3 个不同交易日发生事件，事件后 10 天注入 +1%/日异常收益
+    codes = list(ret.columns)
+    for i in range(3):
+        for c in codes:
+            ret.loc[dates[20 + i * 10], c] = ret.loc[dates[20 + i * 10], c]
+    events = pd.DataFrame(
+        {
+            "date": [dates[20], dates[30], dates[40]],
+            "code": [codes[0], codes[1], codes[2]],
+        }
+    )
+    market = pd.Series(0.0, index=dates)
+    res = es.calendar_time_portfolio(
+        ret, events, window_after=5, market_returns=market, min_events=2
+    )
+    assert res["ok"] is True
+    assert res["n_events"] == 3
+    assert res["n_months"] >= 1
+    assert "monthly_abnormal_returns" in res
+    assert "monthly_abnormal_t_stat" in res
 
 
 # ── walk-forward 组合回测 ───────────────────────────────────────────
@@ -277,9 +306,9 @@ def test_fundamental_merge_cashflow_aliases():
 
 
 def test_fundamental_snapshot_tables_include_cashflow():
-    from backend.services import fundamental
-
     import inspect
+
+    from backend.services import fundamental
 
     src = inspect.getsource(fundamental.snapshot_fundamental)
     assert "Cashflow" in src

@@ -2,7 +2,6 @@
 
 import numpy as np
 import pandas as pd
-from loguru import logger
 
 
 def _default_equity_codes(market_data) -> list[str]:
@@ -695,14 +694,14 @@ class BacktestAnalysisService:
         failed: list[dict] = []
         for f in factors:
             try:
-                fd = eval(f["formula"], {"__builtins__": {}}, ns)  # noqa: S307
+                fd = eval(f["formula"], {"__builtins__": {}}, ns)
                 if isinstance(fd, pd.Series):
                     fd = fd.to_frame()
                 if isinstance(fd, pd.DataFrame) and not fd.empty:
                     factor_frames[f["factor_name"]] = fd.reindex(index=close.index)
                 else:
                     failed.append({"factor_name": f["factor_name"], "error": "公式未产出有效面板"})
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 failed.append({"factor_name": f["factor_name"], "error": str(e)[:200]})
         if not factor_frames:
             raise ValueError(
@@ -727,12 +726,12 @@ class BacktestAnalysisService:
                 z = (f - f.mean(axis=1)) / f.std(axis=1).replace(0, np.nan)
                 zframes[n] = z
             parts = []
-            for n in zframes:
+            for n, zframe in zframes.items():
                 w_n = wdf[n] if n in wdf.columns else pd.Series(0.0, index=close.index)
-                parts.append(zframes[n].mul(w_n.reindex(zframes[n].index), axis=0))
+                parts.append(zframe.mul(w_n.reindex(zframe.index), axis=0))
             combined = pd.concat(parts).groupby(level=0).sum().reindex(close.index)
             weights = {
-                n: float(wdf[n].abs().mean()) for n in factor_frames if n in wdf
+                n: float(v.abs().mean()) for n, v in wdf.items() if n in factor_frames
             }
         else:
             combined = factor_research.multi_factor_combine(factor_frames, method="equal")
@@ -797,7 +796,7 @@ class BacktestAnalysisService:
                     "contribution": attr["contribution"],
                     "n_obs": attr["n_obs"],
                 }
-        except Exception:  # noqa: BLE001
+        except Exception:
             attribution = None
 
         return {
@@ -895,14 +894,14 @@ class BacktestAnalysisService:
         failed: list[dict] = []
         for f in factors:
             try:
-                fd = eval(f["formula"], {"__builtins__": {}}, ns)  # noqa: S307
+                fd = eval(f["formula"], {"__builtins__": {}}, ns)
                 if isinstance(fd, pd.Series):
                     fd = fd.to_frame()
                 if isinstance(fd, pd.DataFrame) and not fd.empty:
                     factor_frames[f["factor_name"]] = fd.reindex(index=close.index)
                 else:
                     failed.append({"factor_name": f["factor_name"], "error": "公式未产出有效面板"})
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 failed.append({"factor_name": f["factor_name"], "error": str(e)[:200]})
         if not factor_frames:
             raise ValueError(
@@ -973,25 +972,25 @@ class BacktestAnalysisService:
         signals_full = _top_n_signal(combined_full)
 
         reference = market_data.load_reference_panels(close, panels.get("volume"))
-        common_kwargs = dict(
-            prices=close,
-            initial_capital=initial_capital,
-            commission_rate=commission_rate,
-            slippage=slippage,
-            stamp_tax=stamp_tax,
-            normalize="long_only",
-            tradable_mask=reference["tradable_mask"],
-            up_limit=reference["up_limit"],
-            down_limit=reference["down_limit"],
-            high=panels.get("high"),
-            low=panels.get("low"),
-            take_profit=take_profit,
-            stop_loss=stop_loss,
-            trailing_stop=trailing_stop,
-            execute_at=execute_at,
-            open_prices=panels.get("open") if execute_at == "next_open" else None,
-            delisting_loss=delisting_loss,
-        )
+        common_kwargs = {
+            "prices": close,
+            "initial_capital": initial_capital,
+            "commission_rate": commission_rate,
+            "slippage": slippage,
+            "stamp_tax": stamp_tax,
+            "normalize": "long_only",
+            "tradable_mask": reference["tradable_mask"],
+            "up_limit": reference["up_limit"],
+            "down_limit": reference["down_limit"],
+            "high": panels.get("high"),
+            "low": panels.get("low"),
+            "take_profit": take_profit,
+            "stop_loss": stop_loss,
+            "trailing_stop": trailing_stop,
+            "execute_at": execute_at,
+            "open_prices": panels.get("open") if execute_at == "next_open" else None,
+            "delisting_loss": delisting_loss,
+        }
         res = self.run_backtest(signals=signals_oos, **common_kwargs)
         res_full = self.run_backtest(signals=signals_full, **common_kwargs)
 
@@ -1028,13 +1027,17 @@ class BacktestAnalysisService:
                 "sharpe_ratio": tear_full.get("sharpe_ratio"),
                 "max_drawdown": tear_full.get("max_drawdown"),
                 "trading_days": tear_full.get("trading_days"),
-                "note": "全样本参考：同一合成逻辑覆盖全部区间（含训练段建仓，非可交易结果），"
-                "用于对比展示训练段内的拟合虚高",
+                "note": (
+                    "全样本参考：同一合成逻辑覆盖全部区间（含训练段建仓，非可交易结果），"
+                    "用于对比展示训练段内的拟合虚高"
+                ),
             },
             "assumptions": res["assumptions"]
             + [
-                "样本外净值仅覆盖各折测试段；训练窗口内不建仓；"
-                "ic_weighted 时权重只含训练窗口 RankIC，无前视",
+                (
+                    "样本外净值仅覆盖各折测试段；训练窗口内不建仓；"
+                    "ic_weighted 时权重只含训练窗口 RankIC，无前视"
+                ),
             ],
             "n_stocks": int(close.shape[1]),
             "data_date": str(close.index[-1])[:10],
@@ -1101,7 +1104,7 @@ class BacktestAnalysisService:
                         "trade_days": tear["trading_days"],
                     }
                 )
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 rows.append({"params": dict(zip(keys, combo)), "error": str(e)[:200]})
         return {"keys": keys, "rows": rows, "n_combos": len(combos)}
 

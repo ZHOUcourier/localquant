@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Optional
 
 import duckdb
 import pandas as pd
@@ -30,7 +29,7 @@ class DuckDBService:
 
     # ── 核心查询 ─────────────────────────────────────────────
 
-    def query_local(self, sql: str, params: Optional[list] = None) -> dict:
+    def query_local(self, sql: str, params: list | None = None) -> dict:
         """执行 SQL 查询本地 Parquet 数据
 
         支持语法：

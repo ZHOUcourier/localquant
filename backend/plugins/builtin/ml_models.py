@@ -1,6 +1,6 @@
 """机器学习模型节点 — MLP/RF/LGBM/XGB/GRU/SVM/LSTM/CNN/Transformer/GNN/Optuna"""
 
-from typing import Any, Optional, Type
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -15,7 +15,7 @@ from backend.plugins.ui_control import ui
 
 class MLTrainInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = Field(default="target", title="目标列")
     feature_cols: str = Field(default="", title="特征列(逗号分隔，留空=全部数值列)")
     test_ratio: float = Field(default=0.2, title="测试集比例")
@@ -23,12 +23,12 @@ class MLTrainInput(BaseModel):
 
 class MLPredictionOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     predictions: list = Field(default_factory=list, title="预测结果")
-    factor_panel: Optional[pd.DataFrame] = Field(
+    factor_panel: pd.DataFrame | None = Field(
         default=None, title="预测因子面板(index=日期, columns=股票)"
     )
-    return_data: Optional[pd.DataFrame] = Field(
+    return_data: pd.DataFrame | None = Field(
         default=None, title="次日收益面板(供下游因子分析/回测)"
     )
     metrics: dict = Field(default_factory=dict, title="评估指标")
@@ -110,7 +110,7 @@ def _build_factor_panel(
     y_pred: np.ndarray,
     date_col: str,
     code_col: str,
-) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     """将 OOS 预测重塑为 (date × code) 因子面板，并从 close 构造次日收益面板
 
     仅当 df 含 date_col 与 code_col 时产出面板；否则返回 (None, None)（退回 list 输出）。
@@ -201,7 +201,7 @@ def _classification_metrics(y_true, y_pred):
 )
 class MLPInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -232,14 +232,14 @@ class MLPNode(BaseWorkNode):
     """多层感知机模型"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return MLPInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: MLPInput) -> Optional[BaseModel]:
+    def run(self, input: MLPInput) -> BaseModel | None:
         try:
             from sklearn.neural_network import MLPClassifier, MLPRegressor
         except ImportError:
@@ -249,7 +249,7 @@ class MLPNode(BaseWorkNode):
                 metrics={"error": "请安装 scikit-learn: pip install scikit-learn"},
             )
 
-        X, y, fcols = _prepare_xy(input.data, input.feature_cols, input.target_col)
+        X, y, _fcols = _prepare_xy(input.data, input.feature_cols, input.target_col)
         if X is None:
             return MLPredictionOutput(
                 data=pd.DataFrame(), predictions=[], metrics={"error": "数据准备失败"}
@@ -306,7 +306,7 @@ class MLPNode(BaseWorkNode):
 )
 class RFInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -336,14 +336,14 @@ class RFNode(BaseWorkNode):
     """随机森林模型"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return RFInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: RFInput) -> Optional[BaseModel]:
+    def run(self, input: RFInput) -> BaseModel | None:
         try:
             from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
         except ImportError:
@@ -413,7 +413,7 @@ class RFNode(BaseWorkNode):
 )
 class LGBMInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -444,14 +444,14 @@ class LGBMNode(BaseWorkNode):
     """LightGBM 梯度提升树模型"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return LGBMInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: LGBMInput) -> Optional[BaseModel]:
+    def run(self, input: LGBMInput) -> BaseModel | None:
         try:
             import lightgbm as lgb
         except ImportError:
@@ -523,7 +523,7 @@ class LGBMNode(BaseWorkNode):
 )
 class XGBInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -554,14 +554,14 @@ class XGBNode(BaseWorkNode):
     """XGBoost 模型"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return XGBInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: XGBInput) -> Optional[BaseModel]:
+    def run(self, input: XGBInput) -> BaseModel | None:
         try:
             import xgboost as xgb
         except ImportError:
@@ -578,13 +578,13 @@ class XGBNode(BaseWorkNode):
             )
 
         def _factory():
-            common = dict(
-                n_estimators=input.n_estimators,
-                learning_rate=input.learning_rate,
-                max_depth=input.max_depth,
-                random_state=42,
-                verbosity=0,
-            )
+            common = {
+                "n_estimators": input.n_estimators,
+                "learning_rate": input.learning_rate,
+                "max_depth": input.max_depth,
+                "random_state": 42,
+                "verbosity": 0,
+            }
             if input.task_type == "classification":
                 return xgb.XGBClassifier(**common)
             return xgb.XGBRegressor(**common)
@@ -627,7 +627,7 @@ class XGBNode(BaseWorkNode):
 )
 class GRUInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -653,17 +653,17 @@ class GRUNode(BaseWorkNode):
     """GRU 循环神经网络模型"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return GRUInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: GRUInput) -> Optional[BaseModel]:
+    def run(self, input: GRUInput) -> BaseModel | None:
         try:
             import torch
-            import torch.nn as nn
+            from torch import nn
         except ImportError:
             return MLPredictionOutput(
                 data=pd.DataFrame(),
@@ -758,7 +758,7 @@ class GRUNode(BaseWorkNode):
 )
 class SVMInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -782,14 +782,14 @@ class SVMNode(BaseWorkNode):
     """支持向量机模型"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return SVMInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: SVMInput) -> Optional[BaseModel]:
+    def run(self, input: SVMInput) -> BaseModel | None:
         try:
             from sklearn.svm import SVC, SVR
         except ImportError:
@@ -799,7 +799,7 @@ class SVMNode(BaseWorkNode):
                 metrics={"error": "请安装 scikit-learn"},
             )
 
-        X, y, fcols = _prepare_xy(input.data, input.feature_cols, input.target_col)
+        X, y, _fcols = _prepare_xy(input.data, input.feature_cols, input.target_col)
         if X is None:
             return MLPredictionOutput(
                 data=pd.DataFrame(), predictions=[], metrics={"error": "数据准备失败"}
@@ -839,7 +839,7 @@ class SVMNode(BaseWorkNode):
 )
 class LSTMInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -865,17 +865,17 @@ class LSTMNode(BaseWorkNode):
     """LSTM 长短期记忆网络模型"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return LSTMInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: LSTMInput) -> Optional[BaseModel]:
+    def run(self, input: LSTMInput) -> BaseModel | None:
         try:
             import torch
-            import torch.nn as nn
+            from torch import nn
         except ImportError:
             return MLPredictionOutput(
                 data=pd.DataFrame(),
@@ -966,7 +966,7 @@ class LSTMNode(BaseWorkNode):
 )
 class CNNInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -992,17 +992,17 @@ class CNNNode(BaseWorkNode):
     """CNN 卷积神经网络模型（用于时序特征）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return CNNInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: CNNInput) -> Optional[BaseModel]:
+    def run(self, input: CNNInput) -> BaseModel | None:
         try:
             import torch
-            import torch.nn as nn
+            from torch import nn
         except ImportError:
             return MLPredictionOutput(
                 data=pd.DataFrame(),
@@ -1099,7 +1099,7 @@ class CNNNode(BaseWorkNode):
 )
 class TransformerInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -1126,17 +1126,17 @@ class TransformerNode(BaseWorkNode):
     """Transformer 注意力机制模型"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return TransformerInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: TransformerInput) -> Optional[BaseModel]:
+    def run(self, input: TransformerInput) -> BaseModel | None:
         try:
             import torch
-            import torch.nn as nn
+            from torch import nn
         except ImportError:
             return MLPredictionOutput(
                 data=pd.DataFrame(),
@@ -1237,7 +1237,7 @@ class TransformerNode(BaseWorkNode):
 )
 class GNNInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -1262,14 +1262,14 @@ class GNNNode(BaseWorkNode):
     """图神经网络模型（基于 PyG）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return GNNInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MLPredictionOutput
 
-    def run(self, input: GNNInput) -> Optional[BaseModel]:
+    def run(self, input: GNNInput) -> BaseModel | None:
         try:
             import torch
             import torch.nn.functional as F
@@ -1377,7 +1377,7 @@ class GNNNode(BaseWorkNode):
 )
 class OptunaSearchInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     target_col: str = "target"
     feature_cols: str = ""
     test_ratio: float = 0.2
@@ -1388,7 +1388,7 @@ class OptunaSearchInput(BaseModel):
 
 class OptunaSearchOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     best_params: dict = Field(default_factory=dict, title="最优参数")
     best_score: float = Field(default=0.0, title="最优得分")
     trials: list = Field(default_factory=list, title="搜索历史")
@@ -1409,14 +1409,14 @@ class OptunaSearchNode(BaseWorkNode):
     """基于 Optuna 的超参数搜索"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return OptunaSearchInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return OptunaSearchOutput
 
-    def run(self, input: OptunaSearchInput) -> Optional[BaseModel]:
+    def run(self, input: OptunaSearchInput) -> BaseModel | None:
         try:
             import optuna
 
@@ -1429,7 +1429,7 @@ class OptunaSearchNode(BaseWorkNode):
                 trials=[],
             )
 
-        X, y, fcols = _prepare_xy(input.data, input.feature_cols, input.target_col)
+        X, y, _fcols = _prepare_xy(input.data, input.feature_cols, input.target_col)
         if X is None:
             return OptunaSearchOutput(
                 data=pd.DataFrame(), best_params={}, best_score=0.0

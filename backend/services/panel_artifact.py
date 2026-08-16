@@ -66,7 +66,7 @@ def load_panels(token: str, required: list[str] | None = None) -> dict[str, pd.D
         with open(p, "rb") as f:
             panels = pickle.load(f)
         if not isinstance(panels, dict):
-            raise ValueError("面板 artifact 格式错误")
+            raise TypeError("面板 artifact 格式错误")
         for name in required or []:
             if name not in panels:
                 raise ValueError(f"面板缺少 {name}")

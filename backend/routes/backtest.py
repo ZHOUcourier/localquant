@@ -2,8 +2,8 @@
 
 import asyncio
 import json
-from typing import Optional
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 from loguru import logger
 from pydantic import BaseModel
@@ -17,7 +17,7 @@ router = APIRouter()
 # 回测后台任务并发上限（懒创建，避免 import 时绑定事件循环）。
 # 注意：变量与函数不能同名，否则 def 会把变量绑定成函数对象，
 # 调用 _backtest_sem() 时返回函数本身而非 Semaphore。
-_backtest_sem_obj: Optional[asyncio.Semaphore] = None
+_backtest_sem_obj: asyncio.Semaphore | None = None
 
 
 def _backtest_sem() -> asyncio.Semaphore:
@@ -49,7 +49,7 @@ class RunBacktestRequest(BaseModel):
 
 class TearSheetRequest(BaseModel):
     returns: dict  # {date_str: return_value}
-    benchmark_returns: Optional[dict] = None  # {date_str: return_value}
+    benchmark_returns: dict | None = None  # {date_str: return_value}
     risk_free_rate: float = 0.03
 
 
@@ -85,18 +85,14 @@ class RunStrategyRequest(BaseModel):
 # ── 工具函数 ─────────────────────────────────────────────────
 
 
-def _dict_to_series(d: dict) -> "pd.Series":
-    import pandas as pd
-
+def _dict_to_series(d: dict) -> pd.Series:
     s = pd.Series(d)
     s.index = pd.to_datetime(s.index)
     s = s.sort_index()
     return s
 
 
-def _dict_to_df(d: dict) -> "pd.DataFrame":
-    import pandas as pd
-
+def _dict_to_df(d: dict) -> pd.DataFrame:
     return pd.DataFrame(d).apply(pd.to_numeric, errors="coerce")
 
 
@@ -254,7 +250,6 @@ async def run_strategy(req: RunStrategyRequest):
 async def run_backtest(req: RunBacktestRequest):
     """执行向量化回测"""
     try:
-        import pandas as pd
 
         signals_df = _dict_to_df(req.signals)
         prices_df = _dict_to_df(req.prices)
@@ -329,10 +324,10 @@ async def run_backtest(req: RunBacktestRequest):
 class CapacityRequest(BaseModel):
     signals: dict  # {date_str: {code: signal_value}}
     prices: dict  # {date_str: {code: price}}
-    amount: Optional[dict] = None  # {date_str: {code: 成交额}}（建议提供）
+    amount: dict | None = None  # {date_str: {code: 成交额}}（建议提供）
     normalize: str = "long_only"  # 仅支持普通股票多头
     participation_rate: float = 0.1
-    capital_levels: Optional[list[float]] = None
+    capital_levels: list[float] | None = None
     adv_window: int = 20  # 平均成交额滚动窗口（交易日）
     lot_size: int = 100  # A 股整手股数（写入 assumptions，不改变金额口径）
 
@@ -341,7 +336,6 @@ class CapacityRequest(BaseModel):
 async def capacity(req: CapacityRequest):
     """容量分析：信号在参与率约束下可容纳的资金规模（需成交额面板）"""
     try:
-        import pandas as pd
 
         signals_df = _dict_to_df(req.signals)
         prices_df = _dict_to_df(req.prices)
@@ -386,7 +380,7 @@ class PortfolioRequest(BaseModel):
 async def portfolio_backtest(req: PortfolioRequest):
     """因子池 → 组合回测闭环：因子求值 → 合成（等权/IC加权）→ Top-N 做多 →
     回测 → 绩效 → 风格归因（研究主链路一键打通）"""
-    from backend.services.factor_research import extract_formula, factor_research
+    from backend.services.factor_research import extract_formula
 
     db = await get_db()
     try:
@@ -683,7 +677,7 @@ async def list_runs(strategy_id: str = "", session_id: str = "", limit: int = 50
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY created_at DESC LIMIT ?"
-        cursor = await db.execute(sql, (*args, limit))  # noqa: S608
+        cursor = await db.execute(sql, (*args, limit))
         return {"runs": [run_row_to_dict(r) for r in await cursor.fetchall()]}
     finally:
         await db.close()

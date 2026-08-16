@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,7 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
     长假（春节/国庆）按交易日历判定不会误报「数据断档」。
     """
     codes = list_cached_codes(period)
-    today = date.today()
+    today = datetime.now().astimezone().date()
     rows: list[dict] = []
     for code in codes[:max_codes]:
         ts = _cache.get_latest_timestamp(code, period)
@@ -53,7 +53,6 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
 
     # 交易日历（QMT 有则用，未连接用工作日近似）：陈旧判定 = 最近数据日距「最新应交易日」的交易日数
     trade_dates = _trading_calendar()
-    expected = trade_dates[-1] if trade_dates is not None else today
     if latest_ts is not None:
         if trade_dates is not None:
             past = [d for d in trade_dates if d <= latest_ts.date()]
@@ -607,7 +606,7 @@ def dividend_events(
             )
     events.sort(key=lambda e: e["date"], reverse=True)
     if days:
-        cutoff = pd.Timestamp(date.today()) - pd.Timedelta(days=days)
+        cutoff = pd.Timestamp(datetime.now().astimezone().date()) - pd.Timedelta(days=days)
         events = [e for e in events if pd.Timestamp(e["date"]) >= cutoff]
     return events[:limit]
 

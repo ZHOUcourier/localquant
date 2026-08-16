@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-from typing import Optional, Type
-
 import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
@@ -38,9 +36,9 @@ class IntradayFactorInput(BaseModel):
 
 class IntradayFactorOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    factor_data: Optional[pd.DataFrame] = None
-    return_data: Optional[pd.DataFrame] = None
-    meta: Optional[dict] = None
+    factor_data: pd.DataFrame | None = None
+    return_data: pd.DataFrame | None = None
+    meta: dict | None = None
 
 
 @work_node(
@@ -63,14 +61,14 @@ class IntradayFactorNode(BaseWorkNode):
     """通过分钟公式构建日内高频因子（清洗 → 求值 → 折叠日频）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return IntradayFactorInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return IntradayFactorOutput
 
-    def run(self, input: IntradayFactorInput) -> Optional[BaseModel]:
+    def run(self, input: IntradayFactorInput) -> BaseModel | None:
         from backend.services.intraday_cleaner import load_intraday_panels
         from backend.services.intraday_operators import (
             ID_LAST,
@@ -101,9 +99,9 @@ class IntradayFactorNode(BaseWorkNode):
         try:
             if len(lines) > 1:
                 exec("\n".join(lines[:-1]), {"__builtins__": {}}, ns)  # noqa: S102
-                factor = eval(lines[-1], {"__builtins__": {}}, ns)  # noqa: S307
+                factor = eval(lines[-1], {"__builtins__": {}}, ns)
             else:
-                factor = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+                factor = eval(formula, {"__builtins__": {}}, ns)
         except Exception as e:
             raise ValueError(f"分钟因子公式计算失败: {e}") from e
 

@@ -1,10 +1,8 @@
 """第三轮加固回归测试：事件循环 / 下载节点 / SQL 上限 / 配置清洗 / AI 解析"""
 
 import asyncio
-import re
 
 import pytest
-
 
 # ── 数据下载节点：协议白名单 + 保存路径收敛 ──────────────────────
 
@@ -30,7 +28,10 @@ def test_data_download_empty_url_no_crash():
 
 
 def test_formula_calc_rejects_import():
-    from backend.plugins.builtin.data_processing import FormulaCalcInput, FormulaCalcNode
+    from backend.plugins.builtin.data_processing import (
+        FormulaCalcInput,
+        FormulaCalcNode,
+    )
 
     out = FormulaCalcNode().run(FormulaCalcInput(data=None, formula="import os"))
     assert out.data is not None  # 不崩溃，原样返回
@@ -39,7 +40,10 @@ def test_formula_calc_rejects_import():
 def test_formula_calc_basic_math_works():
     import pandas as pd
 
-    from backend.plugins.builtin.data_processing import FormulaCalcInput, FormulaCalcNode
+    from backend.plugins.builtin.data_processing import (
+        FormulaCalcInput,
+        FormulaCalcNode,
+    )
 
     df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
     out = FormulaCalcNode().run(
@@ -76,7 +80,7 @@ def test_duckdb_service_rejects_write_keywords():
 
 
 def test_duckdb_service_caps_rows():
-    from backend.services.duckdb_service import DuckDBService, MAX_RESULT_ROWS
+    from backend.services.duckdb_service import MAX_RESULT_ROWS, DuckDBService
 
     svc = DuckDBService()
     res = svc.query_local("SELECT range AS x FROM range(100000)")

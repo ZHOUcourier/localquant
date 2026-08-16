@@ -54,7 +54,7 @@ def _synthetic_formula(field: str = "close") -> str:
 
 class TestWalkForward:
     def test_validation_on_synthetic_signal(self):
-        factor, close, volume = _make_panels()
+        factor, close, _volume = _make_panels()
         return_data = close.pct_change()
         res = svc.walk_forward_validation(
             factor, return_data, train_days=200, test_days=60, n_splits=2, period=1
@@ -112,7 +112,7 @@ class TestScanFactors:
     def test_scan_stream_events(self, tmp_path, monkeypatch):
         from backend.services import market_data
 
-        factor, close, volume = _make_panels(n_dates=120, n_stocks=60)
+        _factor, close, volume = _make_panels(n_dates=120, n_stocks=60)
         panels = {"close": close, "volume": volume}
 
         monkeypatch.setattr(market_data, "list_cached_codes", lambda *a, **k: list(close.columns))
@@ -219,8 +219,9 @@ class TestScanFactors:
 
 class TestFactorHealth:
     def test_health_with_history(self, tmp_path, monkeypatch):
-        from backend import database
         from pathlib import Path
+
+        from backend import database
 
         db_path = str(tmp_path / "health.db")
         monkeypatch.setattr(database, "DB_PATH", Path(db_path))

@@ -3,7 +3,7 @@
 import json
 import re
 import time
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
 
 import numpy as np
 import pandas as pd
@@ -95,7 +95,7 @@ _LATEX_FUNCS = {
 }
 
 
-def extract_formula(description: Optional[str]) -> str:
+def extract_formula(description: str | None) -> str:
     """从因子描述中提取公式文本"""
     if not description:
         return ""
@@ -122,7 +122,7 @@ def formula_to_latex(formula: str) -> str:
             low = tok.lower()
             if nxt == "(":
                 op_name = _LATEX_FUNCS.get(low, low.replace("_", "\\_"))
-                if op_name.startswith("\\\\") or op_name.startswith("\\"):
+                if op_name.startswith(("\\\\", "\\")):
                     out.append(op_name)
                 else:
                     out.append(f"\\operatorname{{{op_name}}}")
@@ -194,7 +194,7 @@ class FactorResearchService:
         self,
         factor_data: pd.DataFrame,
         return_data: pd.DataFrame,
-        periods: list[int] = None,
+        periods: list[int] | None = None,
         mask: pd.DataFrame | None = None,
     ) -> dict:
         """IC 分析
@@ -397,7 +397,7 @@ class FactorResearchService:
         self,
         factor_data: pd.DataFrame,
         return_data: pd.DataFrame,
-        periods: list[int] = None,
+        periods: list[int] | None = None,
         n_groups: int = 5,
         method: str = "rank_ic",
         mask: pd.DataFrame | None = None,
@@ -879,9 +879,9 @@ class FactorResearchService:
     def multi_factor_combine(
         self,
         factors: dict[str, pd.DataFrame],
-        weights: dict[str, float] = None,
+        weights: dict[str, float] | None = None,
         method: str = "equal",
-        return_data: pd.DataFrame = None,
+        return_data: pd.DataFrame | None = None,
         ic_window: int = 120,
     ) -> pd.DataFrame:
         """多因子合成
@@ -1014,8 +1014,8 @@ class FactorResearchService:
         abs_ic = pd.DataFrame({name: s for name, s in ics.items()}).sort_index()
         total = abs_ic.abs().sum(axis=1).replace(0, np.nan)
         w = abs_ic.abs().div(total, axis=0) * np.sign(abs_ic)
-        for name in ics:
-            out_ic[name] = ics[name]
+        for name, series in ics.items():
+            out_ic[name] = series
             out_w[name] = w[name].dropna()
         return out_w, out_ic
 
@@ -1037,7 +1037,7 @@ class FactorResearchService:
         out: dict[str, dict] = {}
         gross_total = self.quantile_analysis(factor_data, return_data, n_groups)
         mean_gross = gross_total.get("mean_return_by_group", {})
-        for lab in gd.keys():
+        for lab in gd:
             label = lab[1:]  # G1 → 1
             turnover = float(tov.get(lab, 0.0))
             daily = gd[lab].dropna()
@@ -1062,10 +1062,10 @@ class FactorResearchService:
         self,
         page: int = 1,
         page_size: int = 30,
-        category_code: Optional[str] = None,
-        sort_field: Optional[str] = None,
+        category_code: str | None = None,
+        sort_field: str | None = None,
         sort_order: str = "desc",
-        search: Optional[str] = None,
+        search: str | None = None,
     ) -> dict:
         """分页查询预置因子列表"""
         db = await get_db()
@@ -1144,7 +1144,7 @@ class FactorResearchService:
         finally:
             await db.close()
 
-    async def get_preset_factor_detail(self, factor_id: int) -> Optional[dict]:
+    async def get_preset_factor_detail(self, factor_id: int) -> dict | None:
         """获取单个预置因子详情（附公式文本/LaTeX/代码三种形式）"""
         db = await get_db()
         try:
@@ -1206,7 +1206,7 @@ class FactorResearchService:
         finally:
             await db.close()
 
-    async def recalculate_preset_factor(self, factor_id: int) -> Optional[dict]:
+    async def recalculate_preset_factor(self, factor_id: int) -> dict | None:
         """手动重算因子 IC 指标 — 采用「覆盖更新」语义
 
         行为约定（前端会明确标注）：
@@ -1447,7 +1447,7 @@ class FactorResearchService:
                     ns.update({f"FUND_{f.upper()}": p for f, p in fund.items()})
             except Exception:
                 pass
-            factor_df = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+            factor_df = eval(formula, {"__builtins__": {}}, ns)
             if isinstance(factor_df, pd.Series):
                 factor_df = factor_df.to_frame()
             if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
@@ -1513,7 +1513,7 @@ class FactorResearchService:
             )
             panels, meta = loaded["panels"], loaded["meta"]
             ns = build_intraday_namespace(panels, meta)
-            factor_df = eval(formula, {"__builtins__": {}}, ns)  # noqa: S307
+            factor_df = eval(formula, {"__builtins__": {}}, ns)
             if isinstance(factor_df, pd.Series):
                 factor_df = factor_df.to_frame()
             if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
@@ -1631,7 +1631,7 @@ class FactorResearchService:
             "ic_std": float(base.get("ic_std", 0.0)),
             "t_stat": float(base.get("ic_tstat", 0.0)),
             "positive_ratio": float(base.get("ic_positive_ratio", 0.0)),
-            "n_cross_sections": int(len(base.get("ic_series", []))),
+            "n_cross_sections": len(base.get("ic_series", [])),
             "long_short_cum": ls_cum,
             "monotonicity": float(quantile.get("monotonicity", 0.0)),
             "annualized_return": annual_return,
@@ -1712,14 +1712,12 @@ class FactorResearchService:
         intraday_targets = [
             t for t in targets if self._is_intraday_formula(t["formula"])
         ]
-        daily_targets = [t for t in targets if t not in intraday_targets]
         intraday_panels = None
         intraday_ns = None
         if intraday_targets:
             try:
                 from backend.services.intraday_cleaner import load_intraday_panels
                 from backend.services.intraday_operators import (
-                    ID_LAST,
                     build_intraday_namespace,
                 )
 
@@ -1736,7 +1734,7 @@ class FactorResearchService:
                         ).last().sort_index(),
                     }
                     intraday_ns = build_intraday_namespace(loaded["panels"], loaded["meta"])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(f"批量扫描：分钟面板加载失败，日内因子将报错: {e}")
 
         # 2. 加载面板（一次）+ 构造求值命名空间。
@@ -1771,7 +1769,7 @@ class FactorResearchService:
                         },
                     )
                     return
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"扫描内存预估失败，继续执行: {e}")
 
         try:
@@ -1822,7 +1820,7 @@ class FactorResearchService:
                 if item in intraday_targets:
                     if intraday_ns is None:
                         return {**item, "ok": False, "error": "分钟面板不可用（无 5m 缓存）"}
-                    factor_df = eval(item["formula"], {"__builtins__": {}}, intraday_ns)  # noqa: S307
+                    factor_df = eval(item["formula"], {"__builtins__": {}}, intraday_ns)
                     if isinstance(factor_df, pd.Series):
                         factor_df = factor_df.to_frame()
                     if isinstance(factor_df, pd.DataFrame) and not factor_df.empty:
@@ -1850,7 +1848,7 @@ class FactorResearchService:
                         "elapsed_ms": int((time.perf_counter() - t0) * 1000),
                         "intraday": True,
                     }
-                factor_df = eval(item["formula"], {"__builtins__": {}}, ns)  # noqa: S307
+                factor_df = eval(item["formula"], {"__builtins__": {}}, ns)
                 if isinstance(factor_df, pd.Series):
                     factor_df = factor_df.to_frame()
                 if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
@@ -1873,7 +1871,7 @@ class FactorResearchService:
                     "n_stocks": int(factor_df.shape[1]),
                     "n_dates": int(factor_df.shape[0]),
                 }
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return {**item, "ok": False, "error": str(e)[:300]}
 
         ok_count = 0
@@ -2293,7 +2291,6 @@ class FactorResearchService:
         """
         import time as _time
 
-        global _CROWDING_CACHE
         now = _time.time()
         if (
             _CROWDING_CACHE["data_date"]
@@ -2320,8 +2317,6 @@ class FactorResearchService:
             _CROWDING_CACHE.update({"ts": now, "data_date": "", "payload": payload})
             return payload
         factor_df = res["factor_df"]
-        return_data = res["return_data"]
-        mask = res.get("mask")
         dates = factor_df.index
         from backend.services import reference_data
         from backend.services.factor_operators import build_operator_namespace
@@ -2332,7 +2327,7 @@ class FactorResearchService:
         factors: dict[str, pd.DataFrame] = {formulas[0]["factor_name"]: factor_df}
         for item in formulas[1:]:
             try:
-                fd = eval(item["formula"], {"__builtins__": {}}, ns)  # noqa: S307
+                fd = eval(item["formula"], {"__builtins__": {}}, ns)
                 if isinstance(fd, pd.Series):
                     fd = fd.to_frame()
                 if isinstance(fd, pd.DataFrame) and not fd.empty:
@@ -2373,7 +2368,7 @@ def _sse(event_type: str, data: dict) -> str:
     import json
     from datetime import datetime
 
-    data.setdefault("timestamp", datetime.now().isoformat())
+    data.setdefault("timestamp", datetime.now().astimezone().isoformat())
     payload = json.dumps(data, ensure_ascii=False, default=str)
     return f"event: {event_type}\ndata: {payload}\n\n"
 

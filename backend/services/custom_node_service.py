@@ -15,7 +15,7 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional, Type
+from typing import Any
 
 from loguru import logger
 
@@ -34,26 +34,26 @@ def _custom_dir() -> Path:
     return d
 
 
-def _exec_in_isolated_registry(source: str) -> dict[str, Type[BaseWorkNode]]:
+def _exec_in_isolated_registry(source: str) -> dict[str, type[BaseWorkNode]]:
     """在隔离注册表中执行源码，返回其中定义的所有 @work_node 类
 
     通过临时替换 registry 模块的全局 ALL_WORK_NODES，
     保证执行过程不会覆盖/污染真正的全局注册表。
     """
-    captured: dict[str, Type[BaseWorkNode]] = {}
+    captured: dict[str, type[BaseWorkNode]] = {}
     original = reg.ALL_WORK_NODES
     reg.ALL_WORK_NODES = captured
     try:
         namespace: dict[str, Any] = {"__name__": f"custom_node_{uuid.uuid4().hex[:8]}"}
-        exec(compile(source, "<custom_node>", "exec"), namespace)
+        exec(compile(source, "<custom_node>", "exec"), namespace)  # noqa: S102
     finally:
         reg.ALL_WORK_NODES = original
     return captured
 
 
 def _pick_node_class(
-    captured: dict[str, Type[BaseWorkNode]], base_name: Optional[str]
-) -> Type[BaseWorkNode]:
+    captured: dict[str, type[BaseWorkNode]], base_name: str | None
+) -> type[BaseWorkNode]:
     """从隔离注册表中挑选目标节点类"""
     if not captured:
         raise ValueError("源码中未找到 @work_node 装饰的节点类")
@@ -71,12 +71,12 @@ def _pick_node_class(
 
 
 def _apply_meta(
-    cls: Type[BaseWorkNode],
+    cls: type[BaseWorkNode],
     register_name: str,
-    display_name: Optional[str],
-    group: Optional[str],
+    display_name: str | None,
+    group: str | None,
     source_file: Path,
-    base_name: Optional[str],
+    base_name: str | None,
 ) -> None:
     """将注册名/显示名等元数据绑定到类上"""
     cls.__work_node_name__ = register_name
@@ -97,9 +97,9 @@ def _unique_register_name(base: str) -> str:
 
 def create_custom_node(
     source: str,
-    base_name: Optional[str] = None,
-    display_name: Optional[str] = None,
-    group: Optional[str] = None,
+    base_name: str | None = None,
+    display_name: str | None = None,
+    group: str | None = None,
 ) -> dict:
     """创建自定义节点（fork 内置节点 或 全新节点），返回节点 schema
 
@@ -143,7 +143,7 @@ def create_custom_node(
 def update_custom_node(
     register_name: str,
     source: str,
-    display_name: Optional[str] = None,
+    display_name: str | None = None,
 ) -> dict:
     """更新已存在的自定义节点源码（保持注册名不变）"""
     d = _custom_dir()

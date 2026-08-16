@@ -13,8 +13,7 @@
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Optional
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -41,7 +40,7 @@ def _path(name: str):
     return REFERENCE_DIR / name
 
 
-def _read(name: str) -> Optional[pd.DataFrame]:
+def _read(name: str) -> pd.DataFrame | None:
     p = REFERENCE_DIR / name
     if not p.exists():
         return None
@@ -119,7 +118,7 @@ def snapshot_index_constituents(qmt, sector: str) -> int:
     stocks = qmt.get_sector_stocks(sector)
     if not stocks:
         return 0
-    today = date.today().isoformat()
+    today = datetime.now().astimezone().date().isoformat()
     rows = pd.DataFrame({"date": today, "index_name": sector, "code": stocks})
     _append_dedup(_CONSTITUENTS_FILE, rows, ["date", "index_name", "code"])
     return len(stocks)
@@ -171,7 +170,7 @@ def snapshot_industry(qmt) -> int:
     sw1 = [s for s in sectors if s.startswith("SW1")]
     if not sw1:
         return 0
-    today = date.today().isoformat()
+    today = datetime.now().astimezone().date().isoformat()
     records: list[dict] = []
     for sector in sw1:
         industry = sector[3:] or sector  # "SW1食品饮料" → "食品饮料"
@@ -189,7 +188,7 @@ _FLOAT_SHARE_FIELDS = ["circulating_capital", "float_capital", "floatCapital"]
 _TOTAL_SHARE_FIELDS = ["total_capital", "totalCapital"]
 
 
-def _pick_field(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
+def _pick_field(df: pd.DataFrame, candidates: list[str]) -> str | None:
     lower = {c.lower(): c for c in df.columns}
     for cand in candidates:
         if cand.lower() in lower:
@@ -241,7 +240,7 @@ def snapshot_instrument(qmt, codes: list[str]) -> int:
     if not codes:
         return 0
     details = qmt.get_instrument_detail(codes)
-    today = date.today().isoformat()
+    today = datetime.now().astimezone().date().isoformat()
     records: list[dict] = []
     for code, d in details.items():
         if not isinstance(d, dict):
@@ -283,7 +282,7 @@ def snapshot_universe_pools(qmt) -> dict[str, int]:
     for sector in _HSGT_SECTORS:
         if sector in names:
             pools["hsgt"].extend(qmt.get_sector_stocks(sector))
-    today = date.today().isoformat()
+    today = datetime.now().astimezone().date().isoformat()
     for pool, codes in pools.items():
         uniq = sorted(set(codes))
         if not uniq:
@@ -312,7 +311,7 @@ def load_universe_pool(pool: str, as_of: str = "") -> set[str]:
 
 def load_universe_pool_mask(
     pool: str, dates
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """标的池逐日 as-of 成分掩码：True=池内（index=日期, columns=代码）
 
     基于 universe 快照（date, pool, code）：从快照日起生效并前向填充；
@@ -334,7 +333,7 @@ def load_universe_pool_mask(
     aligned = pivot.reindex(all_dates).ffill().reindex(target)
     return aligned
 
-def _parse_date(value) -> Optional[str]:
+def _parse_date(value) -> str | None:
     """把 '20240101' / '2024-01-01' / datetime / epoch(ms|s) 解析为 'YYYY-MM-DD'，失败返回 None"""
     if value is None or value == "" or value == 0:
         return None
@@ -398,7 +397,7 @@ def load_industry_map(as_of: str = "") -> dict[str, str]:
     return dict(zip(latest["code"], latest["industry"]))
 
 
-def load_index_membership(index_name: str) -> Optional[pd.DataFrame]:
+def load_index_membership(index_name: str) -> pd.DataFrame | None:
     """指数成分 as-of 掩码：DataFrame(index=快照日, columns=code, bool)
 
     使用时按交易日 ffill 即得逐日成员；早于首次快照的日期无记录。
@@ -425,7 +424,7 @@ def list_snapshot_indices() -> list[str]:
     return sorted(df["index_name"].unique().tolist())
 
 
-def build_market_cap_panel(close_panel: pd.DataFrame) -> Optional[pd.DataFrame]:
+def build_market_cap_panel(close_panel: pd.DataFrame) -> pd.DataFrame | None:
     """流通市值面板 = 流通股本（按变动日 ffill）× 收盘价；无股本数据返回 None"""
     cap = _read(_CAPITAL_FILE)
     if cap is None or cap.empty:
@@ -452,7 +451,7 @@ def build_market_cap_panel(close_panel: pd.DataFrame) -> Optional[pd.DataFrame]:
     return aligned * close_panel[common]
 
 
-def build_turnover_panel(volume_panel, close_panel) -> Optional[pd.DataFrame]:
+def build_turnover_panel(volume_panel, close_panel) -> pd.DataFrame | None:
     """换手率面板 = 成交股数 / 流通股本（按变动日 ffill）；无股本/成交数据返回 None"""
     cap = _read(_CAPITAL_FILE)
     if cap is None or cap.empty:
@@ -481,7 +480,7 @@ def build_turnover_panel(volume_panel, close_panel) -> Optional[pd.DataFrame]:
     return volume_panel[common].div(aligned.replace(0, np.inf)) * 100.0
 
 
-def load_instrument_frame() -> Optional[pd.DataFrame]:
+def load_instrument_frame() -> pd.DataFrame | None:
     """最新合约详情：DataFrame(index=code, columns=[name, list_date, up_stop, down_stop])
 
     仅取实际存在的列（导入的历史快照可能缺 up_stop/down_stop）。
@@ -494,7 +493,7 @@ def load_instrument_frame() -> Optional[pd.DataFrame]:
     return latest.set_index("code")[keep]
 
 
-def build_st_status(dates, codes) -> Optional[pd.DataFrame]:
+def build_st_status(dates, codes) -> pd.DataFrame | None:
     """逐日 as-of ST 状态：True=ST（index=日期, columns=代码）
 
     基于 instrument 快照（date, code, name）：ST 状态从「含 ST 名称的快照日」起

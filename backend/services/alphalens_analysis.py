@@ -12,11 +12,9 @@
 - sector_map：{股票代码: 行业名}（可选；无则不做分组分析，自动降级）
 """
 
-from typing import Optional
 
 import numpy as np
 import pandas as pd
-from loguru import logger
 
 
 def _synth_prices(return_data: pd.DataFrame) -> pd.DataFrame:
@@ -33,9 +31,9 @@ def _records(df: pd.DataFrame) -> list[dict]:
 def full_alphalens_analysis(
     factor_data: pd.DataFrame,
     return_data: pd.DataFrame,
-    periods: Optional[list[int]] = None,
+    periods: list[int] | None = None,
     quantiles: int = 5,
-    sector_map: Optional[dict] = None,
+    sector_map: dict | None = None,
 ) -> dict:
     """AlphaLens 式因子分析报告（JSON），字段供前端 ECharts 渲染
 

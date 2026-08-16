@@ -1,8 +1,7 @@
 """FastAPI 后端入口"""
 
-from contextlib import asynccontextmanager
-
 import asyncio
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,19 +51,6 @@ async def lifespan(app: FastAPI):
         _scheduler_task = asyncio.create_task(scheduler_loop())
         logger.info("Daily scheduler started")
 
-    # 启动时顺带清理过期的工作流运行产物（最佳努力，不阻塞启动）
-    try:
-        from backend.services import workflow_service
-
-        cleaned = workflow_service.cleanup_workflow_artifacts(keep_days=30)
-        if cleaned["removed_dirs"]:
-            logger.info(
-                f"工作流运行产物清理：{cleaned['removed_dirs']} 个目录 / "
-                f"{cleaned['removed_files']} 个文件"
-            )
-    except Exception:
-        logger.debug("启动时清理工作流运行产物失败（非致命）", exc_info=True)
-
     yield
 
     # Shutdown
@@ -95,16 +81,14 @@ from backend.routes import (
     experiment,
     explorer,
     factor,
+    ops,
     plugins,
     qube,
     regime,
+    risk,
     strategy,
     system,
     workflow,
-)
-from backend.routes import (
-    ops,
-    risk,
 )
 from backend.routes import (
     settings as settings_routes,

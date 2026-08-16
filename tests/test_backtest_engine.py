@@ -4,7 +4,6 @@
 全部使用手工构造的小面板，不依赖 QMT。
 """
 
-import numpy as np
 import pandas as pd
 import pytest
 

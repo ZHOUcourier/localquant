@@ -1,9 +1,8 @@
 """数据探索服务 — 使用 DuckDB 查询本地 Parquet 数据"""
+import math
+
 import duckdb
 import pandas as pd
-import math
-from pathlib import Path
-from typing import Optional
 from loguru import logger
 
 from backend.config import settings
@@ -15,7 +14,7 @@ class DataExplorerService:
     def __init__(self):
         self.cache_dir = settings.cache_dir
     
-    def query(self, sql: str, params: Optional[list] = None) -> dict:
+    def query(self, sql: str, params: list | None = None) -> dict:
         """执行 SQL 查询本地 Parquet 数据"""
         try:
             conn = duckdb.connect()
@@ -43,7 +42,7 @@ class DataExplorerService:
             logger.error(f"Query failed: {e}")
             return {"columns": [], "data": [], "row_count": 0, "error": str(e)}
     
-    def market_scan(self, date: str, conditions: list[str] = None) -> dict:
+    def market_scan(self, date: str, conditions: list[str] | None = None) -> dict:
         """全市场扫描"""
         cache_pattern = str(self.cache_dir / "1d" / "*.parquet")
         where_parts = [f"CAST(index AS VARCHAR) LIKE '{date}%'"]
@@ -53,7 +52,7 @@ class DataExplorerService:
         sql = f"SELECT * FROM read_parquet('{cache_pattern}') WHERE {where_clause}"
         return self.query(sql)
     
-    def cross_section_analysis(self, date: str, field: str, codes: Optional[list[str]] = None) -> dict:
+    def cross_section_analysis(self, date: str, field: str, codes: list[str] | None = None) -> dict:
         """横截面分析"""
         cache_pattern = str(self.cache_dir / "1d" / "*.parquet")
         where_parts = [f"CAST(index AS VARCHAR) LIKE '{date}%'"]
@@ -104,7 +103,7 @@ class DataExplorerService:
             safe_code = code.replace(".", "_")
             file_path = self.cache_dir / period / f"{safe_code}.parquet"
             if not file_path.exists():
-                report["issues"].append({"code": code, "issue": "missing_file", "message": f"缓存文件不存在"})
+                report["issues"].append({"code": code, "issue": "missing_file", "message": "缓存文件不存在"})
                 continue
             report["checked_codes"] += 1
             sql = f"SELECT COUNT(*) as total, COUNT(*) - COUNT(close) as null_close FROM read_parquet('{file_path}')"

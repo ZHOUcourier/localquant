@@ -150,8 +150,8 @@ def load_intraday_panels(
           "missing": [code...]
         }
     """
-    from backend.data.cache import DataCache
     from backend.config import settings
+    from backend.data.cache import DataCache
 
     cache = _cache if _cache is not None else DataCache(settings.cache_dir)
     if not codes:

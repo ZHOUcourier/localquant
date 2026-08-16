@@ -2,7 +2,6 @@
 
 保持向后兼容：其他模块仍可从 backend.engine.registry 导入 registry。
 """
-from typing import Any, Optional, Type
 
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import ALL_WORK_NODES, get_node_by_name
@@ -11,7 +10,7 @@ from backend.plugins.registry import ALL_WORK_NODES, get_node_by_name
 class NodeRegistry:
     """全局节点注册表（代理到 ALL_WORK_NODES）"""
 
-    def get(self, node_type: str) -> Optional[Type[BaseWorkNode]]:
+    def get(self, node_type: str) -> type[BaseWorkNode] | None:
         """根据类名获取节点类"""
         return get_node_by_name(node_type)
 

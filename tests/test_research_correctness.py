@@ -199,12 +199,12 @@ def test_mask_new_stock_filtered_per_date(ref_dir):
         {"close": close, "volume": volume}, min_list_days=20
     )
     # 上市后 20 天内（2024-01-15 ~ 2024-02-03）排除
-    assert mask.loc["2024-01-16", "NEW.SH"] == False  # noqa: E712
-    assert mask.loc["2024-02-02", "NEW.SH"] == False  # noqa: E712
+    assert mask.loc["2024-01-16", "NEW.SH"] == False
+    assert mask.loc["2024-02-02", "NEW.SH"] == False
     # 20 天之后恢复可交易
-    assert mask.loc["2024-02-05", "NEW.SH"] == True  # noqa: E712
+    assert mask.loc["2024-02-05", "NEW.SH"] == True
     # 老股全程可交易（无 NaN 污染：无上市日信息/非次新的股票不得被排除）
-    assert (mask["OLD.SZ"] == True).all()  # noqa: E712
+    assert (mask["OLD.SZ"] == True).all()
     assert mask["OLD.SZ"].notna().all()
     assert mask["NEW.SH"].notna().all()
 
@@ -237,10 +237,10 @@ def test_st_status_point_in_time(ref_dir):
     status = reference_data.build_st_status(idx, ["A.SH", "B.SZ"])
     assert status is not None
     # 快照日之前 A 不是 ST；快照日起生效
-    assert status.loc["2024-03-08", "A.SH"] == False  # noqa: E712
-    assert status.loc["2024-03-11", "A.SH"] == True  # noqa: E712
-    assert status.loc["2024-03-12", "A.SH"] == True  # noqa: E712
-    assert (status["B.SZ"] == False).all()  # noqa: E712
+    assert status.loc["2024-03-08", "A.SH"] == False
+    assert status.loc["2024-03-11", "A.SH"] == True
+    assert status.loc["2024-03-12", "A.SH"] == True
+    assert (status["B.SZ"] == False).all()
 
 
 def test_mask_excludes_st_only_after_snapshot(ref_dir):
@@ -263,9 +263,9 @@ def test_mask_excludes_st_only_after_snapshot(ref_dir):
     reference_data.import_reference_snapshot("instrument", "2024-03-11", snap)
 
     mask = market_data.build_cross_section_mask({"close": close, "volume": volume})
-    assert mask.loc["2024-01-05", "A.SH"] == True  # noqa: E712
-    assert mask.loc["2024-03-12", "A.SH"] == False  # noqa: E712
-    assert (mask["B.SZ"] == True).all()  # noqa: E712
+    assert mask.loc["2024-01-05", "A.SH"] == True
+    assert mask.loc["2024-03-12", "A.SH"] == False
+    assert (mask["B.SZ"] == True).all()
     assert mask.notna().all().all()  # 无 NaN 污染（NaN 会被下游误判为不可交易）
 
 
@@ -279,7 +279,7 @@ def test_limit_prices_follow_st_status(ref_dir):
     )
     reference_data.import_reference_snapshot("instrument", "2024-03-11", snap)
 
-    up, down = reference_data.build_limit_prices(close)
+    up, _down = reference_data.build_limit_prices(close)
     # 2024-03-08（快照日前）→ 昨收 ×1.10
     assert up.loc["2024-03-08", "A.SH"] == pytest.approx(10.0 * 1.10)
     # 2024-03-11（快照日生效后）→ 昨收 ×1.05
@@ -333,8 +333,8 @@ def test_import_constituents_enables_history(ref_dir):
     assert "沪深300" in reference_data.list_snapshot_indices()
     members = reference_data.load_index_membership("沪深300")
     assert members is not None
-    assert members.loc["2015-01-05", "600000.SH"] == True  # noqa: E712
-    assert members.loc["2015-01-05", "000001.SZ"] == True  # noqa: E712
+    assert members.loc["2015-01-05", "600000.SH"] == True
+    assert members.loc["2015-01-05", "000001.SZ"] == True
 
 
 def test_import_instrument_st_history(ref_dir):
@@ -346,7 +346,7 @@ def test_import_instrument_st_history(ref_dir):
     status = reference_data.build_st_status(
         pd.bdate_range("2015-06-01", periods=5), ["C.SZ"]
     )
-    assert status.loc["2015-06-01", "C.SZ"] == True  # noqa: E712
+    assert status.loc["2015-06-01", "C.SZ"] == True
 
 
 def test_import_margin_pool_as_of(ref_dir):
@@ -357,8 +357,8 @@ def test_import_margin_pool_as_of(ref_dir):
     mask = reference_data.load_universe_pool_mask("margin", idx)
     assert mask is not None
     assert pd.isna(mask.loc["2024-01-02", "600000.SH"])  # 早于首次快照 → NaN
-    assert mask.loc["2024-01-10", "600000.SH"] == True  # noqa: E712
-    assert mask.loc["2024-01-10", "000001.SZ"] == True  # noqa: E712
+    assert mask.loc["2024-01-10", "600000.SH"] == True
+    assert mask.loc["2024-01-10", "000001.SZ"] == True
     # 池外代码：reindex 后为 NaN，调用方按需 fillna(False)（见 portfolio_backtest）
     outer = mask.reindex(columns=["999999.SH"])
     assert pd.isna(outer.loc["2024-01-10", "999999.SH"])
@@ -433,7 +433,7 @@ def test_rolling_ic_weights_excludes_same_day_ic():
     ).sort_index()
     expected = ics.shift(1).rolling(10, min_periods=3).mean()
 
-    w, ic = factor_research._rolling_ic_weights(
+    w, _ic = factor_research._rolling_ic_weights(
         {"F": fac}, ret, ic_window=10, min_window=3
     )
     got = w["F"].abs()  # 单因子：权重 = |IC|/|IC| × sign
@@ -525,7 +525,6 @@ def test_node_cache_key_tracks_data_version(tmp_path, monkeypatch):
 
     # 修改数据文件（mtime 变化）→ 缓存键再变
     import os
-    import time as _time
 
     (tmp_path / "1d" / "000001_SZ.parquet").write_bytes(b"y")
     os.utime(tmp_path / "1d" / "000001_SZ.parquet", (1, 1))

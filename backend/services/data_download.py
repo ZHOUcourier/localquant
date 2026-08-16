@@ -16,8 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Any, AsyncGenerator
+from typing import Any
 
 from loguru import logger
 
@@ -25,7 +26,7 @@ from backend.services import market_data, reference_data
 
 
 def _sse(event_type: str, data: dict[str, Any]) -> str:
-    data.setdefault("timestamp", datetime.now().isoformat())
+    data.setdefault("timestamp", datetime.now().astimezone().isoformat())
     payload = json.dumps(data, ensure_ascii=False, default=str)
     return f"event: {event_type}\ndata: {payload}\n\n"
 
@@ -48,7 +49,6 @@ def _download_one(code: str, period: str, start: str, end: str) -> int:
     增量缓存自洽）；旧版前复权缓存（无 adjust_factor 列）无法逆推不复权价，
     合并前整体丢弃重建，保证帧内口径一致。
     """
-    from backend.data.converter import normalize_timestamp
     from backend.services import market_data
 
     qmt = market_data._qmt

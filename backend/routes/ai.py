@@ -11,7 +11,7 @@ Base URL，仅自定义（BYOK）需要用户自填；也可切换为本机 CLI 
 import json
 import re
 import urllib.parse
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -161,7 +161,7 @@ NODE_CODE_SYSTEM = """你是 LocalQuant 量化投研平台的工作流节点开�
 class NodeCodeRequest(BaseModel):
     source: str
     instruction: str
-    node_name: Optional[str] = None
+    node_name: str | None = None
 
 
 @router.post("/node-code")
@@ -239,7 +239,7 @@ def _build_node_catalog() -> str:
 
 class WorkflowAIRequest(BaseModel):
     instruction: str
-    current_workflow: Optional[dict[str, Any]] = None  # 现有画布（可选，用于修改场景）
+    current_workflow: dict[str, Any] | None = None  # 现有画布（可选，用于修改场景）
 
 
 @router.post("/workflow")
@@ -331,11 +331,11 @@ FACTOR_ADVICE_SYSTEM = """你是量化因子研究专家。用户会提供一个
 
 class FactorAdviceRequest(BaseModel):
     factor_name: str
-    factor_code: Optional[str] = None
-    formula: Optional[str] = None
-    description: Optional[str] = None
+    factor_code: str | None = None
+    formula: str | None = None
+    description: str | None = None
     metrics: dict[str, Any] = {}
-    validation: Optional[dict[str, Any]] = None  # walk-forward 样本外验证结果（可选）
+    validation: dict[str, Any] | None = None  # walk-forward 样本外验证结果（可选）
 
 
 def _format_validation(validation: dict[str, Any]) -> str:
@@ -350,7 +350,7 @@ def _format_validation(validation: dict[str, Any]) -> str:
         f"- OOS IC 均值: {agg.get('oos_ic_mean')}（t 值 {agg.get('oos_ic_tstat')}，|t|≥2 才显著）",
         f"- OOS ICIR: {agg.get('oos_ic_ir')}；in-sample 与 OOS 同向一致性: {agg.get('oos_sign_consistency')}",
         f"- OOS 多空累计: {agg.get('oos_long_short_total')}（均值每折 {agg.get('oos_long_short_mean_fold')}）",
-        f"- 测试段 IC 衰减: " + " / ".join(
+        "- 测试段 IC 衰减: " + " / ".join(
             f"p{d['period']}={d['ic']}" for d in agg.get("ic_decay_oos", [])
         ),
     ]
@@ -402,7 +402,7 @@ FACTOR_REPORT_SYSTEM = """你是量化因子研究专家。用户会提供一个
 
 
 class FactorReportRequest(BaseModel):
-    factor_name: Optional[str] = None
+    factor_name: str | None = None
     summary: dict[str, Any] = {}
     group_perf: list[dict[str, Any]] = []
 
@@ -503,7 +503,7 @@ class ExploreSQLRequest(BaseModel):
 class ExploreInsightRequest(BaseModel):
     columns: list[str]
     rows: list[list[Any]]
-    context: Optional[str] = None
+    context: str | None = None
 
 
 @router.post("/explore-sql")

@@ -1,5 +1,4 @@
 # 数据处理节点
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -25,7 +24,7 @@ from backend.plugins.ui_control import ui
 )
 class DataFilterInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     column: str = Field(default="", title="列名")
     operator: str = Field(default=">", title="运算符")
     value: str = Field(default="", title="筛选值")
@@ -33,7 +32,7 @@ class DataFilterInput(BaseModel):
 
 class DataFilterOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -56,7 +55,7 @@ class DataFilterNode(BaseWorkNode):
     def output_model(cls):
         return DataFilterOutput
 
-    def run(self, input: DataFilterInput) -> Optional[BaseModel]:
+    def run(self, input: DataFilterInput) -> BaseModel | None:
         df = input.data
         if df is None or (isinstance(df, pd.DataFrame) and df.empty):
             return DataFilterOutput(data=pd.DataFrame())
@@ -110,13 +109,13 @@ class DataFilterNode(BaseWorkNode):
 )
 class ColumnSelectInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     columns: str = Field(default="", title="选择列(逗号分隔)")
 
 
 class ColumnSelectOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -138,7 +137,7 @@ class ColumnSelectNode(BaseWorkNode):
     def output_model(cls):
         return ColumnSelectOutput
 
-    def run(self, input: ColumnSelectInput) -> Optional[BaseModel]:
+    def run(self, input: ColumnSelectInput) -> BaseModel | None:
         df = input.data
         if df is None or (isinstance(df, pd.DataFrame) and df.empty):
             return ColumnSelectOutput(data=pd.DataFrame())
@@ -173,14 +172,14 @@ class ColumnSelectNode(BaseWorkNode):
 )
 class FormulaCalcInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     formula: str = Field(default="", title="计算公式(Python表达式)")
     output_column: str = Field(default="result", title="输出列名")
 
 
 class FormulaCalcOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 # 公式/代码节点只提供受限内置函数，防止执行任意系统操作（与因子构建节点同款白名单）
@@ -229,7 +228,7 @@ class FormulaCalcNode(BaseWorkNode):
     def output_model(cls):
         return FormulaCalcOutput
 
-    def run(self, input: FormulaCalcInput) -> Optional[BaseModel]:
+    def run(self, input: FormulaCalcInput) -> BaseModel | None:
         df = input.data
         if df is None or (isinstance(df, pd.DataFrame) and df.empty):
             return FormulaCalcOutput(data=pd.DataFrame())
@@ -261,15 +260,15 @@ class FormulaCalcNode(BaseWorkNode):
 )
 class MergeDataInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
-    data2: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
+    data2: pd.DataFrame | None = None
     merge_type: str = Field(default="inner", title="合并方式")
     on_column: str = Field(default="", title="关联列")
 
 
 class MergeDataOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -292,7 +291,7 @@ class MergeDataNode(BaseWorkNode):
     def output_model(cls):
         return MergeDataOutput
 
-    def run(self, input: MergeDataInput) -> Optional[BaseModel]:
+    def run(self, input: MergeDataInput) -> BaseModel | None:
         df1 = input.data
         df2 = input.data2
 
@@ -327,7 +326,7 @@ class MergeDataNode(BaseWorkNode):
 )
 class SortFilterInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     sort_column: str = Field(default="", title="排序列")
     ascending: str = Field(default="True", title="升序")
     top_n: int = Field(default=0, title="取前N条(0=全部)")
@@ -335,7 +334,7 @@ class SortFilterInput(BaseModel):
 
 class SortFilterOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -357,7 +356,7 @@ class SortFilterNode(BaseWorkNode):
     def output_model(cls):
         return SortFilterOutput
 
-    def run(self, input: SortFilterInput) -> Optional[BaseModel]:
+    def run(self, input: SortFilterInput) -> BaseModel | None:
         df = input.data
         if df is None or (isinstance(df, pd.DataFrame) and df.empty):
             return SortFilterOutput(data=pd.DataFrame())
@@ -390,13 +389,13 @@ class SortFilterNode(BaseWorkNode):
 )
 class CodeExecInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     code: str = Field(default="", title="Python代码")
 
 
 class CodeExecOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -419,7 +418,7 @@ class CodeExecNode(BaseWorkNode):
     def output_model(cls):
         return CodeExecOutput
 
-    def run(self, input: CodeExecInput) -> Optional[BaseModel]:
+    def run(self, input: CodeExecInput) -> BaseModel | None:
         df = input.data if input.data is not None else pd.DataFrame()
         if not input.code.strip():
             return CodeExecOutput(data=df.copy())

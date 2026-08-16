@@ -207,6 +207,55 @@ async def delete_sql_query(query_id: int):
         await db.close()
 
 
+FIELD_DICTIONARY = {
+    "open": "开盘价（原始价）",
+    "high": "最高价（原始价）",
+    "low": "最低价（原始价）",
+    "close": "收盘价（原始价）",
+    "volume": "成交量（股/手，以 QMT 返回单位为准）",
+    "amount": "成交额（元）",
+    "adjust_factor": "复权因子（后复权价/原始价；前复权=close×factor/最新factor）",
+    "turnover": "换手率（需股本快照）",
+}
+
+SQL_TEMPLATES = [
+    {
+        "id": "recent_daily",
+        "name": "单只股票最近 30 个交易日日线",
+        "sql": "SELECT * FROM read_parquet('data/cache/1d/000001_SZ.parquet') ORDER BY index DESC LIMIT 30;",
+        "note": "把文件名中的 000001_SZ 替换为你的股票代码（. 换成 _）",
+    },
+    {
+        "id": "limit_move_scan",
+        "name": "某日全市场涨幅榜",
+        "sql": "SELECT filename AS code, close FROM read_parquet('data/cache/1d/*.parquet', filename=true) WHERE CAST(index AS VARCHAR) LIKE '2026-08-07%' ORDER BY close DESC LIMIT 50;",
+        "note": "示例按收盘价排序；真正的涨幅榜需用 LAG 或 pct_change 计算",
+    },
+    {
+        "id": "volume_spike",
+        "name": "某日成交量前 50",
+        "sql": "SELECT filename AS code, volume, amount FROM read_parquet('data/cache/1d/*.parquet', filename=true) WHERE CAST(index AS VARCHAR) LIKE '2026-08-07%' ORDER BY volume DESC LIMIT 50;",
+    },
+    {
+        "id": "index_ohlc",
+        "name": "指数最近 60 日",
+        "sql": "SELECT * FROM read_parquet('data/cache/1d/000300_SH.parquet') ORDER BY index DESC LIMIT 60;",
+    },
+]
+
+
+@router.get("/schema")
+async def explorer_schema():
+    """数据字典与查询模板：帮助快速知道每个周期有哪些字段、如何写 SQL"""
+    tables = (await list_tables()).get("tables", [])
+    for t in tables:
+        t["fields"] = [
+            {"name": c, "description": FIELD_DICTIONARY.get(c, "")}
+            for c in t.get("columns", [])
+        ]
+    return {"tables": tables, "field_dictionary": FIELD_DICTIONARY, "templates": SQL_TEMPLATES}
+
+
 @router.get("/tables")
 async def list_tables():
     """列出本地可查询的数据表（各周期的 Parquet 缓存）
@@ -361,17 +410,14 @@ async def market_scan(body: ScanRequest):
             if pd.isna(v):
                 ok = False
                 break
-            if op == ">" and not v > val:
-                ok = False
-            elif op == "<" and not v < val:
-                ok = False
-            elif op == ">=" and not v >= val:
-                ok = False
-            elif op == "<=" and not v <= val:
-                ok = False
-            elif op == "==" and not v == val:
-                ok = False
-            elif op == "!=" and not v != val:
+            if (
+                (op == ">" and v <= val)
+                or (op == "<" and v >= val)
+                or (op == ">=" and v < val)
+                or (op == "<=" and v > val)
+                or (op == "==" and v != val)
+                or (op == "!=" and v == val)
+            ):
                 ok = False
             if not ok:
                 break
@@ -592,7 +638,7 @@ async def regression_analysis(body: RegressionRequest):
             "y1": float(beta * x.max() + alpha),
         },
         "stats": {
-            "样本数量": int(len(df)),
+            "样本数量": len(df),
             "Beta": round(float(beta), 4),
             "Alpha": round(float(alpha), 4),
             "R": round(r, 4),
@@ -787,7 +833,7 @@ async def correlation_matrix(body: CorrelationMatrixRequest):
         "codes": ordered,
         "matrix": matrix,
         "missing": missing,
-        "n_obs": int(len(rets)),
+        "n_obs": len(rets),
     }
 
 
@@ -908,7 +954,7 @@ async def pair_spread(body: PairSpreadRequest):
             "当前比价": round(float(ratio.iloc[-1]), 4),
             "比价均值": round(float(ratio.mean()), 4),
             "|Z|>2 占比(%)": round(float((zscore.abs() > 2).mean()) * 100, 2),
-            "样本数": int(len(zscore)),
+            "样本数": len(zscore),
         },
         "ratio": {
             "x": [str(d.date()) for d in ratio.index],
@@ -983,7 +1029,7 @@ async def rolling_corr(body: RollingCorrRequest):
             "相关均值": round(float(out["corr"].mean()), 3),
             "当前 Beta": round(float(out["beta"].iloc[-1]), 3),
             "Beta 均值": round(float(out["beta"].mean()), 3),
-            "样本数": int(len(out)),
+            "样本数": len(out),
         },
         "x": [str(d.date()) for d in out.index],
         "corr": [round(float(v), 3) for v in out["corr"]],
@@ -1077,6 +1123,80 @@ async def event_study(body: EventStudyRequest):
         rets,
         events,
         window_before=body.window_before,
+        window_after=body.window_after,
+        market_returns=market_returns,
+        min_events=body.min_events,
+    )
+    result["event_type"] = body.event_type
+    result["n_detected"] = len(events)
+    result["n_stocks"] = int(close.shape[1])
+    result["data_start"] = str(close.index[0])[:10]
+    result["data_end"] = str(close.index[-1])[:10]
+    return result
+
+
+@router.post("/event-study/calendar-time")
+async def event_study_calendar_time(body: EventStudyRequest):
+    """Calendar-time portfolio 事件研究：事件组合按月聚合后的时间序列检验。
+
+    适用于事件在时间上高度聚集、窗口重叠的研究场景；与单事件 CAR 互补。
+    """
+    from backend.services.event_study import build_event_frame, calendar_time_portfolio
+
+    pool = [c.strip() for c in body.codes.split(",") if c.strip()]
+    if not pool:
+        pool = market_data.list_cached_codes("1d", exclude_indices=True)
+    try:
+        panels = market_data.load_price_panels(
+            codes=pool, start_date=body.start_date, end_date=body.end_date
+        )
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    close = panels["close"]
+    volume = panels.get("volume")
+    high = panels.get("high")
+    low = panels.get("low")
+    rets = market_data.build_return_panel(close)
+
+    up = down = None
+    if body.event_type in ("limit_up", "limit_down"):
+        reference = market_data.load_reference_panels(close, volume)
+        up, down = reference["up_limit"], reference["down_limit"]
+
+    dividend = None
+    if body.event_type == "dividend":
+        dividend = market_data.dividend_events(
+            period=body.period, codes=list(close.columns), days=3650, limit=100000
+        )
+
+    events = build_event_frame(
+        event_type=body.event_type,
+        close=close,
+        volume=volume,
+        high=high,
+        low=low,
+        up_limit=up,
+        down_limit=down,
+        dividend_events=dividend,
+        manual_events=body.events or None,
+        volume_k=body.volume_k,
+    )
+    market_returns = None
+    benchmark_code = body.benchmark_code.strip()
+    if benchmark_code:
+        try:
+            bench = market_data.load_price_panels(
+                codes=[benchmark_code],
+                start_date=body.start_date,
+                end_date=body.end_date,
+            )
+            market_returns = market_data.build_return_panel(bench["close"]).iloc[:, 0]
+        except Exception as e:
+            return {"ok": False, "error": f"基准行情加载失败 {benchmark_code}: {e}"}
+
+    result = calendar_time_portfolio(
+        rets,
+        events,
         window_after=body.window_after,
         market_returns=market_returns,
         min_events=body.min_events,

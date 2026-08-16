@@ -20,7 +20,7 @@
 输出索引 ↔ 字段名 的映射由 get_return_names() 提供，供 graph.py 转换连线。
 """
 
-from typing import Any, Optional, Type, Union, get_args, get_origin
+from typing import Any, Union, get_args, get_origin
 
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
@@ -171,10 +171,10 @@ def _input_spec(name: str, field, ui_conf: dict) -> tuple[Any, dict, bool]:
 # ---------------------------------------------------------------------------
 
 
-def node_to_object_info(node_cls: Type[BaseWorkNode]) -> dict[str, Any]:
+def node_to_object_info(node_cls: type[BaseWorkNode]) -> dict[str, Any]:
     """单个节点类 → ComfyUI object_info 条目（V1 schema）"""
-    input_cls: Optional[Type[BaseModel]] = node_cls.input_model()
-    output_cls: Optional[Type[BaseModel]] = node_cls.output_model()
+    input_cls: type[BaseModel] | None = node_cls.input_model()
+    output_cls: type[BaseModel] | None = node_cls.output_model()
     ui_meta: dict = getattr(input_cls, "__ui_metadata__", {}) if input_cls else {}
 
     required: dict[str, Any] = {}

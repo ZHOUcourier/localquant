@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-import backend.database as database
+from backend import database
 from backend.routes import qube as qube_routes
 from backend.services import tokenize
 

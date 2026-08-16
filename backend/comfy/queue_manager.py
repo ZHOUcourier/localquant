@@ -12,7 +12,7 @@ import asyncio
 import json
 import time
 from collections import OrderedDict
-from typing import Any, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -89,11 +89,11 @@ class ComfyQueue:
 
     def __init__(self) -> None:
         self._pending: list[QueueItem] = []
-        self._running: Optional[QueueItem] = None
+        self._running: QueueItem | None = None
         self._counter = 0
         self._wakeup = asyncio.Event()
-        self._history: "OrderedDict[str, dict]" = OrderedDict()
-        self._worker_task: Optional[asyncio.Task] = None
+        self._history: OrderedDict[str, dict] = OrderedDict()
+        self._worker_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------
     # 队列操作

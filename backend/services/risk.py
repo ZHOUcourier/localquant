@@ -693,7 +693,7 @@ def historical_scenario_stress(
         out[name] = {
             "start": start,
             "end": end,
-            "n_days": int(len(win)),
+            "n_days": len(win),
             "cum_return_pct": round(cum * 100, 2),
             "max_drawdown_pct": round(dd * 100, 2),
             "worst_day_pct": round(float(np.min(daily)) * 100, 2),
@@ -728,7 +728,7 @@ def strategy_regression_attribution(
         }
     """
     sf = pd.concat(
-        [df.rename(columns=lambda c: name) for name, df in style_returns.items()],
+        [df.rename(columns=lambda c, name=name: name) for name, df in style_returns.items()],
         axis=1,
     ).sort_index()
     ret = strategy_returns.dropna().sort_index()
@@ -780,5 +780,5 @@ def strategy_regression_attribution(
         "alpha_annual": round(float((1 + alpha_daily) ** 252 - 1), 4),
         "alpha_ir": round(alpha_ir, 4),
         "r2": round(r2, 4),
-        "n_obs": int(len(common)),
+        "n_obs": len(common),
     }

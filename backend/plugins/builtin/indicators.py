@@ -1,10 +1,9 @@
 """技术指标节点 — 基于 pandas_ta 计算各类技术指标"""
 
-from typing import Optional, Type
 
 import pandas as pd
 import pandas_ta as ta
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
@@ -15,7 +14,7 @@ from backend.plugins.ui_control import ui
 
 class DataFrameIO(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 def _node_params(input) -> dict:
@@ -38,14 +37,14 @@ def _node_params(input) -> dict:
 )
 class MAInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     period: int = 20
     ma_type: str = "SMA"
 
 
 class MAOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -60,11 +59,11 @@ class MANode(BaseWorkNode):
     """简单/指数移动平均线"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return MAInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MAOutput
 
     def run(self, input) -> dict:
@@ -93,7 +92,7 @@ class MANode(BaseWorkNode):
 )
 class MACDInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     fast_period: int = 12
     slow_period: int = 26
     signal_period: int = 9
@@ -101,7 +100,7 @@ class MACDInput(BaseModel):
 
 class MACDOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -116,11 +115,11 @@ class MACDNode(BaseWorkNode):
     """MACD 指标（DIF / DEA / MACD 柱）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return MACDInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return MACDOutput
 
     def run(self, input) -> dict:
@@ -145,13 +144,13 @@ class MACDNode(BaseWorkNode):
 @ui(period={"input_type": "number_field"})
 class RSIInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     period: int = 14
 
 
 class RSIOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -166,11 +165,11 @@ class RSINode(BaseWorkNode):
     """相对强弱指标"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return RSIInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return RSIOutput
 
     def run(self, input) -> dict:
@@ -190,13 +189,13 @@ class RSINode(BaseWorkNode):
 @ui(period={"input_type": "number_field"})
 class KDJInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     period: int = 9
 
 
 class KDJOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -211,11 +210,11 @@ class KDJNode(BaseWorkNode):
     """KDJ 随机指标（基于 Stochastic）"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return KDJInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return KDJOutput
 
     def run(self, input) -> dict:
@@ -256,14 +255,14 @@ class KDJNode(BaseWorkNode):
 )
 class BOLLInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     period: int = 20
     std_dev: float = 2.0
 
 
 class BOLLOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -278,11 +277,11 @@ class BOLLNode(BaseWorkNode):
     """布林带指标"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return BOLLInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return BOLLOutput
 
     def run(self, input) -> dict:
@@ -306,13 +305,13 @@ class BOLLNode(BaseWorkNode):
 @ui(period={"input_type": "number_field"})
 class ATRInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     period: int = 14
 
 
 class ATROutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -327,11 +326,11 @@ class ATRNode(BaseWorkNode):
     """平均真实波幅"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return ATRInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return ATROutput
 
     def run(self, input) -> dict:
@@ -351,14 +350,14 @@ class ATRNode(BaseWorkNode):
 @ui(formula={"input_type": "code_editor", "language": "python"})
 class CustomFormulaInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
     formula: str = "df['close'] * 2"
     output_col: str = "custom"
 
 
 class CustomFormulaOutput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    data: Optional[pd.DataFrame] = None
+    data: pd.DataFrame | None = None
 
 
 @work_node(
@@ -376,11 +375,11 @@ class CustomFormulaNode(BaseWorkNode):
     """基于自定义公式计算指标"""
 
     @classmethod
-    def input_model(cls) -> Optional[Type[BaseModel]]:
+    def input_model(cls) -> type[BaseModel] | None:
         return CustomFormulaInput
 
     @classmethod
-    def output_model(cls) -> Optional[Type[BaseModel]]:
+    def output_model(cls) -> type[BaseModel] | None:
         return CustomFormulaOutput
 
     def run(self, input) -> dict:
@@ -402,12 +401,12 @@ class CustomFormulaNode(BaseWorkNode):
             eval_ctx[col.lower()] = result[col]
 
         try:
-            expr_result = eval(formula, {"__builtins__": {}}, eval_ctx)  # noqa: S307
+            expr_result = eval(formula, {"__builtins__": {}}, eval_ctx)
             if isinstance(expr_result, pd.Series):
                 result[output_col] = expr_result
             else:
                 result[output_col] = expr_result
-        except Exception as e:
+        except Exception:
             result[output_col] = float("nan")
 
         return {"data": result}

@@ -1,6 +1,6 @@
 """数据相关 Pydantic 模型"""
+
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class DataDownloadRequest(BaseModel):
@@ -29,7 +29,7 @@ class CrossSectionRequest(BaseModel):
     """横截面分析请求"""
     date: str
     field: str
-    codes: Optional[list[str]] = None
+    codes: list[str] | None = None
 
 
 class AnomalyRequest(BaseModel):

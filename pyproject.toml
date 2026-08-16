@@ -53,3 +53,8 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+# 本地投研平台允许在“可选增强失败不应拖垮主流程”处使用宽泛异常捕获；
+# 这些位置均有日志或明确回退语义，不适合再逐异常类型展开。
+[tool.ruff.lint]
+ignore = ["BLE001", "S110", "S112"]

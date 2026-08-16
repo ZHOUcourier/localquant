@@ -10,11 +10,10 @@
 """
 
 import asyncio
-import json
 import os
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -392,7 +391,7 @@ def save_factors(conn: sqlite3.Connection, factors: list[dict]):
     """保存因子数据"""
     inserted = 0
     skipped = 0
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).isoformat()
 
     for f in factors:
         code = f.get("factorCode")
@@ -479,7 +478,7 @@ async def main():
     print(
         f"\n🔑 Token 已配置: {token[:8]}...{token[-4:]}"
         if len(token) > 12
-        else f"\n🔑 Token 已配置"
+        else "\n🔑 Token 已配置"
     )
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)

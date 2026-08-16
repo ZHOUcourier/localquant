@@ -1,6 +1,6 @@
 """回测 Pydantic 模型"""
-from pydantic import BaseModel, Field
-from typing import Optional
+
+from pydantic import BaseModel
 
 
 class BacktestRequest(BaseModel):
@@ -28,6 +28,6 @@ class BacktestResult(BaseModel):
     profit_loss_ratio: float
     total_trades: int
     # 详细数据路径（存文件）
-    equity_curve_path: Optional[str] = None
-    trades_path: Optional[str] = None
-    monthly_returns_path: Optional[str] = None
+    equity_curve_path: str | None = None
+    trades_path: str | None = None
+    monthly_returns_path: str | None = None

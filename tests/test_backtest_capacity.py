@@ -26,7 +26,7 @@ def _make_panels(n_dates: int = 100, n_stocks: int = 5) -> tuple[pd.DataFrame, p
 
 
 def test_cost_breakdown_matches_merged():
-    prices, amount, signals = _make_panels()
+    prices, _amount, signals = _make_panels()
     r = svc.run_backtest(
         signals=signals,
         prices=prices,

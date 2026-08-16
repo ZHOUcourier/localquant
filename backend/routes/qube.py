@@ -14,7 +14,6 @@ import pathlib
 import time
 import urllib.parse
 import uuid
-from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -132,15 +131,15 @@ QUBE_ENV_KEYS = {
 
 
 class QubeConfigUpdate(BaseModel):
-    qube_provider: Optional[str] = None
-    qube_model: Optional[str] = None
-    qube_effort: Optional[str] = None
-    qube_api_key: Optional[str] = None
-    qube_base_url: Optional[str] = None
-    qube_engine: Optional[str] = None  # api / cli
-    qube_cli: Optional[str] = None
-    qube_cli_model: Optional[str] = None
-    qube_cli_effort: Optional[str] = None
+    qube_provider: str | None = None
+    qube_model: str | None = None
+    qube_effort: str | None = None
+    qube_api_key: str | None = None
+    qube_base_url: str | None = None
+    qube_engine: str | None = None  # api / cli
+    qube_cli: str | None = None
+    qube_cli_model: str | None = None
+    qube_cli_effort: str | None = None
 
 
 def _mask(key: str) -> str:
@@ -238,8 +237,8 @@ async def create_session():
 
 
 class SessionUpdate(BaseModel):
-    title: Optional[str] = None
-    pinned: Optional[bool] = None
+    title: str | None = None
+    pinned: bool | None = None
 
 
 @router.patch("/sessions/{session_id}")
@@ -262,7 +261,7 @@ async def rename_session(session_id: str, body: SessionUpdate):
     try:
         keys = ", ".join(f"{k} = ?" for k in fields)
         cursor = await db.execute(
-            f"UPDATE qube_sessions SET {keys} WHERE id = ?",  # noqa: S608
+            f"UPDATE qube_sessions SET {keys} WHERE id = ?",
             (*fields.values(), session_id),
         )
         await db.commit()
@@ -356,13 +355,13 @@ async def list_messages(session_id: str):
         await db.close()
 
 
-async def _save_message(  # noqa: PLR0913
+async def _save_message(
     session_id: str,
     role: str,
     content: str,
-    tool_calls: Optional[dict] = None,
+    tool_calls: dict | None = None,
     is_first_user: bool = False,
-    usage: Optional[dict] = None,
+    usage: dict | None = None,
 ) -> None:
     now = int(time.time())
     db = await get_db()
@@ -808,7 +807,7 @@ async def _stream_reply(
     session_id: str,
     history: list[dict],
     user_content: str,
-    api_cfg: Optional[tuple[str, str, str]],
+    api_cfg: tuple[str, str, str] | None,
 ):
     """共享流式应答生成器（chat / edit / regenerate 复用）。
 
@@ -1321,10 +1320,10 @@ async def create_skill(body: SkillCreate):
 
 
 class SkillUpdate(BaseModel):
-    display_name: Optional[str] = None
-    description: Optional[str] = None
-    category: Optional[str] = None
-    prompt: Optional[str] = None
+    display_name: str | None = None
+    description: str | None = None
+    category: str | None = None
+    prompt: str | None = None
 
 
 async def _require_user_skill(db, skill_id: int):
@@ -1355,7 +1354,7 @@ async def update_skill(skill_id: int, body: SkillUpdate):
         if fields:
             keys = ", ".join(f"{k} = ?" for k in fields)
             await db.execute(
-                f"UPDATE qube_skills SET {keys} WHERE id = ?",  # noqa: S608
+                f"UPDATE qube_skills SET {keys} WHERE id = ?",
                 (*fields.values(), skill_id),
             )
             await db.commit()
@@ -1410,9 +1409,9 @@ async def get_qube_factor(factor_id: str):
 
 
 class QubeFactorUpdate(BaseModel):
-    name: Optional[str] = None
-    code_type: Optional[str] = None
-    code: Optional[str] = None
+    name: str | None = None
+    code_type: str | None = None
+    code: str | None = None
 
 
 @router.put("/factors/{factor_id}")
@@ -1432,7 +1431,7 @@ async def update_qube_factor(factor_id: str, body: QubeFactorUpdate):
     try:
         keys = ", ".join(f"{k} = ?" for k in fields)
         cursor = await db.execute(
-            f"UPDATE qube_factors SET {keys} WHERE id = ?",  # noqa: S608
+            f"UPDATE qube_factors SET {keys} WHERE id = ?",
             (*fields.values(), factor_id),
         )
         await db.commit()
@@ -1532,7 +1531,7 @@ async def list_factor_analyses(
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY created_at DESC LIMIT ?"
-        cursor = await db.execute(sql, (*args, limit))  # noqa: S608
+        cursor = await db.execute(sql, (*args, limit))
         return {"analyses": [analysis_row_to_dict(r) for r in await cursor.fetchall()]}
     finally:
         await db.close()

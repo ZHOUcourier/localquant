@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 from loguru import logger
@@ -17,7 +16,7 @@ from backend.config import settings
 class DataCache:
     """基于 Parquet 的本地数据缓存"""
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Path | None = None):
         self._cache_dir = cache_dir or settings.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -32,7 +31,7 @@ class DataCache:
 
     # ── 读取 ─────────────────────────────────────────────────
 
-    def get(self, code: str, period: str) -> Optional[pd.DataFrame]:
+    def get(self, code: str, period: str) -> pd.DataFrame | None:
         """读取缓存数据，不存在则返回 None"""
         path = self._get_path(code, period)
         if not path.exists():
@@ -83,7 +82,7 @@ class DataCache:
 
     # ── 查询 ─────────────────────────────────────────────────
 
-    def get_latest_timestamp(self, code: str, period: str) -> Optional[str]:
+    def get_latest_timestamp(self, code: str, period: str) -> str | None:
         """获取缓存中最新一条数据的时间戳（字符串形式）"""
         df = self.get(code, period)
         if df is None or df.empty:

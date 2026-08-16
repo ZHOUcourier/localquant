@@ -76,7 +76,7 @@ async def _update(table: str, row_id: str, **fields) -> None:
     try:
         keys = ", ".join(f"{k} = ?" for k in fields)
         await db.execute(
-            f"UPDATE {table} SET {keys} WHERE id = ?",  # noqa: S608
+            f"UPDATE {table} SET {keys} WHERE id = ?",
             (*fields.values(), row_id),
         )
         await db.commit()
@@ -191,9 +191,9 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
                 if len(lines) > 1:
                     exec_ctx = dict(ctx)
                     exec("\n".join(lines[:-1]), {"__builtins__": {}}, exec_ctx)  # noqa: S102
-                    factor = eval(lines[-1], {"__builtins__": {}}, exec_ctx)  # noqa: S307
+                    factor = eval(lines[-1], {"__builtins__": {}}, exec_ctx)
                 else:
-                    factor = eval(code, {"__builtins__": {}}, ctx)  # noqa: S307
+                    factor = eval(code, {"__builtins__": {}}, ctx)
             else:
                 exec_ctx = dict(ctx)
                 exec(code, {"__builtins__": __builtins__}, exec_ctx)  # noqa: S102
@@ -208,7 +208,7 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
             if isinstance(factor, pd.Series):
                 factor = factor.to_frame()
             if not isinstance(factor, pd.DataFrame):
-                raise ValueError(
+                raise TypeError(
                     f"因子结果应为 DataFrame，得到 {type(factor).__name__}"
                 )
             factor = factor.dropna(how="all")
@@ -436,7 +436,7 @@ async def execute_backtest_run(run_id: str) -> dict:
         prices = panels["close"]
         log_lines.append(
             f"[INFO] 行情加载完成：{prices.shape[1]} 只标的 · "
-            f"{str(prices.index[0].date())} → {str(prices.index[-1].date())}"
+            f"{prices.index[0].date()!s} → {prices.index[-1].date()!s}"
         )
 
         # 5. simulation：沙箱执行信号 + 向量化回测
@@ -514,7 +514,7 @@ async def execute_backtest_run(run_id: str) -> dict:
             for ts, drow in dw.iterrows():
                 eq = float(equity.get(ts, init_balance))
                 for sym, w in drow.items():
-                    if w != w or abs(w) < 1e-6:
+                    if pd.isna(w) or abs(w) < 1e-6:
                         continue
                     price = (
                         float(prices.at[ts, sym])

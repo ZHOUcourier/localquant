@@ -1,14 +1,14 @@
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-from backend.models.experiment import ExperimentCreate, ExperimentCompareRequest
+
+from backend.models.experiment import ExperimentCompareRequest, ExperimentCreate
 from backend.services.experiment_service import experiment_service
 
 router = APIRouter()
 
 
 @router.get("/")
-async def list_experiments(source: Optional[str] = None, limit: int = 50, offset: int = 0):
+async def list_experiments(source: str | None = None, limit: int = 50, offset: int = 0):
     return await experiment_service.list_experiments(source=source, limit=limit, offset=offset)
 
 
