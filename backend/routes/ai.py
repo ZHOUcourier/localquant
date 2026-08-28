@@ -484,13 +484,15 @@ async def ai_factor_code(body: FactorCodeRequest):
 EXPLORE_SQL_SYSTEM = """你是 DuckDB SQL 专家。用户会用自然语言描述对本地行情数据的查询需求，你输出一条可直接执行的 DuckDB SELECT 语句。
 
 ## 数据结构
-- 行情数据以 Parquet 存储，每只股票一个文件：data/cache/1d/000001_SZ.parquet（文件名即股票代码，'.' 换成 '_'）
-- 典型列：open, high, low, close, volume, amount；日期在索引列（可用 read_parquet 后的隐式列名，建议 SELECT *）
-- 多文件查询：read_parquet('data/cache/1d/*.parquet', filename=true)，filename 列可提取股票代码
+- 行情已注册为统一只读视图，按周期命名：日线是 `quotes_1d`，分钟线是 `quotes_5m` 等（见下方"当前本地数据"里每个周期的 view 名）。
+- 视图列：`trade_date`（交易日期，时间戳）、`code`（股票代码，如 000001.SZ）、`open`、`high`、`low`、`close`、`volume`、`amount`、`adjust_factor`。
+- 按股票过滤用 `code = '000001.SZ'`；按日期过滤用 `trade_date`，例如 `CAST(trade_date AS VARCHAR) LIKE '2026-08-07%'` 或 `CAST(trade_date AS DATE) = '2026-08-07'`。
+- 跨股票查询直接 `FROM quotes_1d`（视图已含 code 列，无需 filename）。
 {tables_info}
 
 ## 要求
 - 只输出一条 SELECT 语句，不要任何解释或 markdown 围栏
+- 优先使用上述视图与列名，不要用 read_parquet 或猜测其它索引列名
 - 结果行数用 LIMIT 控制在 500 以内"""
 
 EXPLORE_INSIGHT_SYSTEM = """你是量化数据分析师。用户会提供一段查询结果数据（列名+前若干行），请用中文给出简洁的数据解读：关键统计特征、异常点、可能的投研含义。控制在 250 字以内，不要编造数据中不存在的信息。"""
@@ -516,10 +518,19 @@ async def ai_explore_sql(body: ExploreSQLRequest):
 
     tables = (await list_tables()).get("tables", [])
     if tables:
-        lines = [
-            f"- 周期 {t['period']}：{t['stock_count']} 只股票，列 {t['columns']}，区间 {t['sample_range']}"
-            for t in tables
-        ]
+        lines = []
+        for t in tables:
+            if t.get("kind") == "quotes":
+                lines.append(
+                    f"- 周期 {t['period']}：行情视图 {t.get('view', '')}，"
+                    f"{t.get('stock_count', 0)} 只股票，列 {t.get('columns', [])}，"
+                    f"区间 {t.get('sample_range', '')}"
+                )
+            else:
+                lines.append(
+                    f"- {t.get('period', '')}：参考元数据快照（{t.get('note', '')}），"
+                    "不是行情价格表，勿用于行情查询"
+                )
         tables_info = "## 当前本地数据\n" + "\n".join(lines)
     else:
         tables_info = "## 当前本地数据\n（暂无缓存数据）"

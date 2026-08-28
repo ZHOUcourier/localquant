@@ -11,6 +11,8 @@ import { useQuery } from '@tanstack/vue-query'
 interface TableInfo {
   period: string
   path: string
+  view?: string
+  kind?: string
   stock_count: number
   columns: string[]
   sample_range: string
@@ -29,7 +31,10 @@ const { data, isLoading } = useQuery({
   staleTime: 60 * 1000,
 })
 
-const tables = computed(() => data.value?.tables ?? [])
+// 概览卡片只展示行情表（reference 等元数据快照无 view/stock_count，不是行情）
+const tables = computed(() =>
+  (data.value?.tables ?? []).filter((t) => t.kind === 'quotes'),
+)
 </script>
 
 <template>
@@ -58,9 +63,9 @@ const tables = computed(() => data.value?.tables ?? [])
         </span>
       </div>
       <div class="mb-2 text-xs text-[#646262]">
-        SQL 路径：
+        SQL 查询：
         <code class="rounded-[3px] bg-[#201d1d] px-1.5 py-0.5 text-[11px] text-[#fdfcfc]">
-          read_parquet('{{ t.path }}')
+          SELECT trade_date, code, close FROM {{ t.view }} LIMIT 20
         </code>
       </div>
       <div class="mb-2 flex flex-wrap gap-1">

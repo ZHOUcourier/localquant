@@ -10,7 +10,7 @@ interface QueryResult {
   error?: string
 }
 
-const sql = ref("SELECT * FROM read_parquet('data/cache/1d/*.parquet') LIMIT 20;")
+const sql = ref("SELECT trade_date, code, open, high, low, close, volume FROM quotes_1d ORDER BY trade_date DESC LIMIT 20;")
 const result = ref<QueryResult | null>(null)
 const loading = ref(false)
 // AI：自然语言生成 SQL / 结果解读

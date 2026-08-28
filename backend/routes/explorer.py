@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from backend.config import settings
 from backend.database import get_db
 from backend.services import market_data
-from backend.services.duckdb_service import DuckDBService
+from backend.services.duckdb_service import DuckDBService, quote_view
 
 router = APIRouter()
 
@@ -208,6 +208,8 @@ async def delete_sql_query(query_id: int):
 
 
 FIELD_DICTIONARY = {
+    "trade_date": "交易日期（时间戳；日频为当日 00:00，分钟频为 bar 结束时刻）",
+    "code": "股票代码（如 000001.SZ，由缓存文件名解析）",
     "open": "开盘价（原始价）",
     "high": "最高价（原始价）",
     "low": "最低价（原始价）",
@@ -218,28 +220,30 @@ FIELD_DICTIONARY = {
     "turnover": "换手率（需股本快照）",
 }
 
+# 行情统一走 quotes_<周期> 视图（由 DuckDBService 注册）：
+# 视图已把日期索引规范为 trade_date、文件名解析为 code，可直接按列查询。
 SQL_TEMPLATES = [
     {
         "id": "recent_daily",
         "name": "单只股票最近 30 个交易日日线",
-        "sql": "SELECT * FROM read_parquet('data/cache/1d/000001_SZ.parquet') ORDER BY index DESC LIMIT 30;",
-        "note": "把文件名中的 000001_SZ 替换为你的股票代码（. 换成 _）",
+        "sql": "SELECT trade_date, code, open, high, low, close, volume, amount FROM quotes_1d WHERE code = '000001.SZ' ORDER BY trade_date DESC LIMIT 30;",
+        "note": "把 000001.SZ 换成你的股票代码",
     },
     {
         "id": "limit_move_scan",
-        "name": "某日全市场涨幅榜",
-        "sql": "SELECT filename AS code, close FROM read_parquet('data/cache/1d/*.parquet', filename=true) WHERE CAST(index AS VARCHAR) LIKE '2026-08-07%' ORDER BY close DESC LIMIT 50;",
-        "note": "示例按收盘价排序；真正的涨幅榜需用 LAG 或 pct_change 计算",
+        "name": "某日全市场收盘价榜",
+        "sql": "SELECT code, close FROM quotes_1d WHERE CAST(trade_date AS VARCHAR) LIKE '2026-08-07%' ORDER BY close DESC LIMIT 50;",
+        "note": "把日期换成目标交易日；真正的涨幅榜需用 LAG 计算环比涨幅",
     },
     {
         "id": "volume_spike",
         "name": "某日成交量前 50",
-        "sql": "SELECT filename AS code, volume, amount FROM read_parquet('data/cache/1d/*.parquet', filename=true) WHERE CAST(index AS VARCHAR) LIKE '2026-08-07%' ORDER BY volume DESC LIMIT 50;",
+        "sql": "SELECT code, volume, amount FROM quotes_1d WHERE CAST(trade_date AS VARCHAR) LIKE '2026-08-07%' ORDER BY volume DESC LIMIT 50;",
     },
     {
         "id": "index_ohlc",
         "name": "指数最近 60 日",
-        "sql": "SELECT * FROM read_parquet('data/cache/1d/000300_SH.parquet') ORDER BY index DESC LIMIT 60;",
+        "sql": "SELECT trade_date, open, high, low, close, volume FROM quotes_1d WHERE code = '000300.SH' ORDER BY trade_date DESC LIMIT 60;",
     },
 ]
 
@@ -249,9 +253,13 @@ async def explorer_schema():
     """数据字典与查询模板：帮助快速知道每个周期有哪些字段、如何写 SQL"""
     tables = (await list_tables()).get("tables", [])
     for t in tables:
+        cols = list(t.get("columns", []))
+        # 行情视图额外暴露 trade_date / code（这两列不在 Parquet 值列清单里）
+        if t.get("kind") == "quotes":
+            cols = ["trade_date", "code"] + cols
         t["fields"] = [
             {"name": c, "description": FIELD_DICTIONARY.get(c, "")}
-            for c in t.get("columns", [])
+            for c in cols
         ]
     return {"tables": tables, "field_dictionary": FIELD_DICTIONARY, "templates": SQL_TEMPLATES}
 
@@ -323,6 +331,7 @@ async def list_tables():
                 {
                     "period": period_dir.name,
                     "path": f"data/cache/{period_dir.name}/*.parquet",
+                    "view": quote_view(period_dir.name),
                     "kind": "quotes",
                     "stock_count": len(files),
                     "columns": columns,
