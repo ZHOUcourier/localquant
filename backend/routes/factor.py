@@ -259,7 +259,10 @@ async def compute_factor(req: FactorComputeRequest):
     # 构建公式求值命名空间：基础字段 + vwap/returns + 全部量化算子
     # （RANK/DELAY/DELTA/CORR/TS_RANK/DECAYLINEAR 等，大小写均可），
     # 使因子库中的 Alpha101/Alpha191 公式可直接运行。
-    from backend.services.factor_operators import build_operator_namespace
+    from backend.services.factor_operators import (
+        build_operator_namespace,
+        eval_factor_formula,
+    )
 
     eval_ctx = build_operator_namespace(
         aug,
@@ -284,7 +287,7 @@ async def compute_factor(req: FactorComputeRequest):
                 exec("\n".join(formula_lines[:-1]), {"__builtins__": {}}, exec_ctx)  # noqa: S102
                 factor = eval(formula_lines[-1], {"__builtins__": {}}, exec_ctx)
             else:
-                factor = eval(req.formula, {"__builtins__": {}}, eval_ctx)
+                factor = eval_factor_formula(req.formula, eval_ctx)
         else:
             if not req.code.strip():
                 raise ValueError("因子代码为空")
@@ -969,11 +972,13 @@ async def intraday_compute(req: IntradayComputeRequest):
         if ln.strip() and not ln.strip().startswith("#")
     ]
     try:
+        from backend.services.factor_operators import eval_factor_formula
+
         if len(lines) > 1:
             exec("\n".join(lines[:-1]), {"__builtins__": {}}, ns)  # noqa: S102
             factor = eval(lines[-1], {"__builtins__": {}}, ns)
         else:
-            factor = eval(formula, {"__builtins__": {}}, ns)
+            factor = eval_factor_formula(formula, ns)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"分钟因子公式计算失败: {e}")
 
@@ -1091,7 +1096,9 @@ async def intraday_ic_by_time(req: IntradayIcByTimeRequest):
             continue
         ns = build_intraday_namespace(t_panels, meta)
         try:
-            factor = eval(formula, {"__builtins__": {}}, ns)
+            from backend.services.factor_operators import eval_factor_formula
+
+            factor = eval_factor_formula(formula, ns)
         except Exception as e:
             raise HTTPException(
                 status_code=400, detail=f"时刻 {t} 公式计算失败: {e}"

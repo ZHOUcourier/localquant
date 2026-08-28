@@ -32,6 +32,16 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
 
+    # 回填预置因子公式可执行性状态（静态分类，毫秒级；失败不阻塞启动）
+    try:
+        from backend.services.factor_research import factor_research
+
+        n = await factor_research.refresh_formula_statuses()
+        if n:
+            logger.info(f"Formula statuses classified for {n} preset factors")
+    except Exception as e:
+        logger.warning(f"公式可执行性状态回填失败（不影响启动）: {e}")
+
     # 加载插件
     from backend.plugins.loader import load_all_nodes
 

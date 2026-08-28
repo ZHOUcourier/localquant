@@ -249,6 +249,20 @@ const tabs = computed<{ key: TabKey; label: string }[]>(() => [
   { key: 'ai', label: '✦ AI 分析' },
 ])
 
+// 公式可执行性门控：静态不可执行时禁用重算（如实说明原因，不假装"数据不足"）
+const recalcBlock = computed<string | null>(() => {
+  switch (factor.value?.formula_status) {
+    case 'missing_formula':
+      return '该因子无可执行公式（参数化指标/数据字段型），不支持本地重算'
+    case 'syntax_error':
+      return '公式源文本损坏或含无法自动翻译的方言，暂不支持本地重算'
+    case 'unsupported':
+      return '公式引用了求值环境不存在的名字，暂不支持本地重算'
+    default:
+      return null
+  }
+})
+
 async function handleRecalc() {
   if (!props.factorId) return
   recalcMsg.value = null
@@ -503,13 +517,17 @@ function typeBadgeClass(t?: string): string {
               <span class="text-xs font-medium text-[#201d1d]">重新计算 IC 指标</span>
               <button
                 type="button"
-                :disabled="recalcMutation.isPending.value"
+                :disabled="recalcMutation.isPending.value || !!recalcBlock"
+                :title="recalcBlock || undefined"
                 class="flex items-center gap-1 rounded-[4px] bg-[#201d1d] px-3 py-1 text-xs text-[#fdfcfc] transition-colors hover:bg-[#0f0000] disabled:opacity-50 cursor-pointer"
                 @click="handleRecalc"
               >
                 <RefreshCw :size="11" :class="recalcMutation.isPending.value ? 'animate-spin' : ''" />
                 {{ recalcMutation.isPending.value ? '重算中...' : '重算（覆盖更新）' }}
               </button>
+            </div>
+            <div v-if="recalcBlock" class="mb-2 rounded-[4px] border border-[rgba(255,59,48,0.3)] bg-[rgba(255,59,48,0.06)] px-2 py-1.5 text-[11px] text-[#c62d23]">
+              {{ recalcBlock }}
             </div>
             <div class="text-[11px] leading-relaxed text-[#646262]">
               <span class="font-medium text-[#cc7f08]">覆盖，不另存：</span>

@@ -97,11 +97,13 @@ class IntradayFactorNode(BaseWorkNode):
             if ln.strip() and not ln.strip().startswith("#")
         ]
         try:
+            from backend.services.factor_operators import eval_factor_formula
+
             if len(lines) > 1:
                 exec("\n".join(lines[:-1]), {"__builtins__": {}}, ns)  # noqa: S102
                 factor = eval(lines[-1], {"__builtins__": {}}, ns)
             else:
-                factor = eval(formula, {"__builtins__": {}}, ns)
+                factor = eval_factor_formula(formula, ns)
         except Exception as e:
             raise ValueError(f"分钟因子公式计算失败: {e}") from e
 

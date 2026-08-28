@@ -22,7 +22,10 @@ from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
 from backend.plugins.ui_control import ui
 from backend.services import market_data
-from backend.services.factor_operators import build_operator_namespace
+from backend.services.factor_operators import (
+    build_operator_namespace,
+    eval_factor_formula,
+)
 
 
 def _build_eval_ns(
@@ -140,7 +143,7 @@ class FactorFormulaNode(BaseWorkNode):
                 exec("\n".join(lines[:-1]), {"__builtins__": {}}, ns)  # noqa: S102
                 factor = eval(lines[-1], {"__builtins__": {}}, ns)
             else:
-                factor = eval(formula, {"__builtins__": {}}, ns)
+                factor = eval_factor_formula(formula, ns)
         except Exception as e:
             raise ValueError(f"因子公式计算失败: {e}") from e
 

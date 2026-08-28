@@ -147,6 +147,40 @@ function stageBadge(h: HealthItem | undefined): string {
   return `<span class="rounded-[3px] px-1.5 py-0.5 text-[10px] font-medium ${base}">${h.stage} ${h.trend_label || ''}</span>`
 }
 
+// 公式可执行性徽标：仅非可执行状态显示（可执行不展示，避免噪音）
+function formulaStatusBadge(
+  status: string | null | undefined,
+): { label: string; cls: string; title: string } | null {
+  switch (status) {
+    case 'syntax_error':
+      return {
+        label: '公式语法错误',
+        cls: 'border-[rgba(255,59,48,0.35)] bg-[rgba(255,59,48,0.10)] text-[#c62d23]',
+        title: '公式含无法自动翻译的方言或源文本损坏，暂不支持本地重算',
+      }
+    case 'unsupported':
+      return {
+        label: '公式暂不支持',
+        cls: 'border-[rgba(204,127,8,0.35)] bg-[rgba(204,127,8,0.10)] text-[#cc7f08]',
+        title: '公式引用了求值环境不存在的名字，暂不支持本地重算',
+      }
+    case 'missing_formula':
+      return {
+        label: '无公式',
+        cls: 'border-[rgba(15,0,0,0.12)] bg-[#f1eeee] text-[#9a9898]',
+        title: '参数化指标/数据字段型因子，无可执行公式，不支持本地重算',
+      }
+    case 'needs_fundamental':
+      return {
+        label: '需财务数据',
+        cls: 'border-[rgba(59,130,246,0.35)] bg-[rgba(59,130,246,0.10)] text-[#2563eb]',
+        title: '公式依赖财务快照（fund_*），请先在数据管理页拉取财务数据再重算',
+      }
+    default:
+      return null
+  }
+}
+
 // 记录每个因子的卡片/行元素，用于 App Store 卡片展开动画的起点坐标
 const cardEls = new Map<number, HTMLElement>()
 function setCardRef(id: number, el: unknown) {
@@ -393,6 +427,12 @@ function cardPerfMetrics(f: PresetFactor) {
                 class="rounded-[3px] border px-1 py-px text-[10px] font-medium"
                 :class="f.metric_source === 'local_recalc' ? 'border-[rgba(46,142,108,0.35)] bg-[rgba(46,142,108,0.10)] text-[#2E8E6C]' : 'border-[rgba(204,127,8,0.35)] bg-[rgba(204,127,8,0.10)] text-[#cc7f08]'"
               >{{ f.metric_source === 'local_recalc' ? '本地重算' : '外部参考' }}</span>
+              <span
+                v-if="formulaStatusBadge(f.formula_status)"
+                class="rounded-[3px] border px-1 py-px text-[10px] font-medium"
+                :class="formulaStatusBadge(f.formula_status)?.cls"
+                :title="formulaStatusBadge(f.formula_status)?.title"
+              >{{ formulaStatusBadge(f.formula_status)?.label }}</span>
             </span>
             <span class="flex shrink-0 items-center gap-1 text-[11px] text-[#646262]">
               <span v-if="healthLoaded && healthMap.get(f.id)" v-html="stageBadge(healthMap.get(f.id))" />
@@ -479,6 +519,12 @@ function cardPerfMetrics(f: PresetFactor) {
                 class="ml-1 rounded-[3px] border px-1 py-px text-[10px] font-medium"
                 :class="f.metric_source === 'local_recalc' ? 'border-[rgba(46,142,108,0.35)] bg-[rgba(46,142,108,0.10)] text-[#2E8E6C]' : 'border-[rgba(204,127,8,0.35)] bg-[rgba(204,127,8,0.10)] text-[#cc7f08]'"
               >{{ f.metric_source === 'local_recalc' ? '本地重算' : '外部参考' }}</span>
+              <span
+                v-if="formulaStatusBadge(f.formula_status)"
+                class="ml-1 rounded-[3px] border px-1 py-px text-[10px] font-medium"
+                :class="formulaStatusBadge(f.formula_status)?.cls"
+                :title="formulaStatusBadge(f.formula_status)?.title"
+              >{{ formulaStatusBadge(f.formula_status)?.label }}</span>
             </td>
             <td class="px-3 py-2">
               <span class="inline-flex items-center gap-1 text-xs text-[#646262]">

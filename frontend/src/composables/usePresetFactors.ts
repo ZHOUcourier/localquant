@@ -27,6 +27,18 @@ export interface PresetFactor {
   metric_source?: 'external_ref' | 'local_recalc' | string
   metric_sample?: Record<string, unknown>
   sample_warning?: string | null
+  /** 公式可执行性状态：
+   *  executable=可直接重算；needs_fundamental=需财务快照；
+   *  unsupported=引用了求值环境不存在的名字；syntax_error=方言无法自动翻译；
+   *  missing_formula=无公式（参数化指标/数据字段型） */
+  formula_status?:
+    | 'executable'
+    | 'needs_fundamental'
+    | 'unsupported'
+    | 'syntax_error'
+    | 'missing_formula'
+    | string
+    | null
 }
 
 export interface PresetFactorCategory {

@@ -506,6 +506,23 @@ async def main():
     save_categories(conn, categories)
     save_factors(conn, factors)
 
+    # 3.5 回填公式可执行性状态（静态分类，不依赖行情；失败不中断抓取）
+    try:
+        from backend.services.factor_research import classify_formula_status
+
+        cur = conn.execute("SELECT id, description FROM preset_factors")
+        rows = cur.fetchall()
+        for fid, desc in rows:
+            status, _detail = classify_formula_status(desc)
+            conn.execute(
+                "UPDATE preset_factors SET formula_status = ? WHERE id = ?",
+                (status, fid),
+            )
+        conn.commit()
+        print(f"  🧮 公式可执行性状态已回填 {len(rows)} 条")
+    except Exception as e:
+        print(f"  ⚠️  公式可执行性回填失败（将在后端启动时补）: {e}")
+
     # 4. 验证
     verify_data(conn)
     conn.close()

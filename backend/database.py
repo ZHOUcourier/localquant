@@ -136,6 +136,10 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE preset_factors ADD COLUMN metric_sample_json TEXT DEFAULT '{}'"
             )
+        if "formula_status" not in preset_factor_cols:
+            await db.execute(
+                "ALTER TABLE preset_factors ADD COLUMN formula_status TEXT"
+            )
 
         # 策略库表（QUBE 对话产出 / 工作流快照；status: working=工作中, saved=已保存）
         await db.execute("""

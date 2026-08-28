@@ -179,7 +179,10 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
         def _eval_factor():
             import pandas as pd
 
-            from backend.services.factor_operators import build_operator_namespace
+            from backend.services.factor_operators import (
+                build_operator_namespace,
+                eval_factor_formula,
+            )
 
             ctx = build_operator_namespace(panels)
             if code_type == "formula":
@@ -193,7 +196,7 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
                     exec("\n".join(lines[:-1]), {"__builtins__": {}}, exec_ctx)  # noqa: S102
                     factor = eval(lines[-1], {"__builtins__": {}}, exec_ctx)
                 else:
-                    factor = eval(code, {"__builtins__": {}}, ctx)
+                    factor = eval_factor_formula(code, ctx)
             else:
                 exec_ctx = dict(ctx)
                 exec(code, {"__builtins__": __builtins__}, exec_ctx)  # noqa: S102

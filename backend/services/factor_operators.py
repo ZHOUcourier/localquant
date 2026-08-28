@@ -14,6 +14,39 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from backend.services.formula_normalizer import normalize_formula
+
+
+class FormulaError(Exception):
+    """公式求值错误（结构化分类，供上层如实报告，不谎报为"数据不足"）
+
+    code ∈ syntax_error / undefined_name / runtime_error
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def eval_factor_formula(formula: str, ns: dict):
+    """公式求值统一入口：方言规范化 → 受限 eval。
+
+    仅用于「单表达式公式」；多行用户代码（含赋值语句）不得走这里。
+    规范化只做确定性语法翻译（三元/?/&&/||/^/MATLAB 点运算等），不改变公式含义。
+    """
+    expr = normalize_formula(formula) if isinstance(formula, str) else formula
+    try:
+        return eval(expr, {"__builtins__": {}}, ns)
+    except FormulaError:
+        raise
+    except SyntaxError as e:
+        raise FormulaError("syntax_error", f"公式语法错误（规范化后仍不可解析）：{e}") from e
+    except NameError as e:
+        raise FormulaError("undefined_name", f"公式引用了未定义的名字：{e}") from e
+    except Exception as e:
+        raise FormulaError("runtime_error", f"公式求值失败：{e}") from e
+
 
 def _as_int(n) -> int:
     return int(n)
@@ -507,14 +540,62 @@ def SUMIF(a, b, n):
     return SUM(masked, n)
 
 
-def REGBETA(a, b, n):
-    """滚动回归斜率 beta = cov(a,b)/var(b)"""
-    return COV(a, b, n) / VAR(b, n)
+def SEQUENCE(n=20):
+    """Alpha191 SEQUENCE：返回 1..n 的时间轴坡道序列，配合 REGBETA/REGRESI 做
+    「对时间轴滚动回归」（如 regbeta(mean(close,6), sequence(6))）。"""
+    return np.arange(1, int(n) + 1, dtype=float)
 
 
-def REGRESI(a, b, n):
-    """滚动回归残差近似：a - beta*b"""
+def _rolling_ramp_beta(a, ramp: np.ndarray):
+    """a 对固定坡道 ramp(1..n) 的滚动回归斜率（窗口长度 = len(ramp)）
+
+    slope = (n·Σ(i·a) − Σi·Σa) / (n·Σi² − (Σi)²)，rolling.apply 实现。
+    """
+    n = len(ramp)
+    ramp = np.asarray(ramp, dtype=float)
+    s_x = float(ramp.sum())
+    denom = n * float((ramp**2).sum()) - s_x * s_x
+    sum_a = a.rolling(n, min_periods=n).sum()
+    sum_ax = a.rolling(n, min_periods=n).apply(
+        lambda w: float(np.dot(w, ramp)), raw=True
+    )
+    return (n * sum_ax - s_x * sum_a) / denom
+
+
+def _rolling_ramp_resid(a, beta, ramp: np.ndarray):
+    """坡道回归残差：a_t − (截距 + 斜率×n)，窗口对齐最后一期"""
+    n = len(ramp)
+    mean_x = (n + 1) / 2
+    mean_a = a.rolling(n, min_periods=n).sum() / n
+    intercept = mean_a - beta * mean_x
+    return a - intercept - beta * n
+
+
+def REGBETA(a, b, n=None):
+    """滚动回归斜率 beta。
+
+    两种形态：
+    - b 为面板：beta = cov(a,b)/var(b)，n 为窗口（原语义）；
+    - b 为 SEQUENCE 坡道或 SEQUENCE 函数本身：对时间轴 1..n 回归，
+      窗口取坡道长度（两参）或第三参数（三参，如 regbeta(close, sequence, 20)）。
+    """
+    if callable(b):
+        return _rolling_ramp_beta(a, SEQUENCE(n))
+    if isinstance(b, np.ndarray) and b.ndim == 1:
+        return _rolling_ramp_beta(a, b)
+    return COV(a, b, _as_int(n)) / VAR(b, _as_int(n))
+
+
+def REGRESI(a, b, n=None):
+    """滚动回归残差。
+
+    b 为面板时为 a − beta×b（原语义）；b 为 SEQUENCE 时取对时间轴回归的残差。
+    """
     beta = REGBETA(a, b, n)
+    if callable(b):
+        return _rolling_ramp_resid(a, beta, SEQUENCE(n))
+    if isinstance(b, np.ndarray) and b.ndim == 1:
+        return _rolling_ramp_resid(a, beta, b)
     return a - beta * b
 
 
@@ -929,6 +1010,27 @@ def build_operator_namespace(
     if amount is not None and volume is not None:
         vwap = amount.div(volume.replace(0, np.nan))
 
+    # Alpha191 方言兼容的派生面板（与 build_return_panel 同口径 ffill 后再差分）
+    open_p = panels.get("open")
+    high_p = panels.get("high")
+    low_p = panels.get("low")
+    returns_panel = close.ffill().pct_change().fillna(0.0) if close is not None else None
+    prev_close = DELAY(close, 1) if close is not None else None
+    hd_panel = high_p - DELAY(high_p, 1) if high_p is not None else None
+    ld_panel = DELAY(low_p, 1) - low_p if low_p is not None else None
+    tr_panel = None
+    if high_p is not None and low_p is not None and prev_close is not None:
+        tr_panel = np.maximum(
+            high_p - low_p,
+            np.maximum((high_p - prev_close).abs(), (low_p - prev_close).abs()),
+        )
+    # GTJA Alpha191 定义：DTM/DBM 以开盘价相对前收的跳空幅度度量
+    dtm_panel = dbm_panel = None
+    if open_p is not None:
+        prev_open = DELAY(open_p, 1)
+        dtm_panel = IF(open_p <= prev_open, 0.0, np.maximum(open_p - prev_open, 0.0))
+        dbm_panel = IF(open_p >= prev_open, 0.0, np.maximum(prev_open - open_p, 0.0))
+
     ns: dict = {
         "np": np,
         "pd": pd,
@@ -949,15 +1051,39 @@ def build_operator_namespace(
         "VWAP": vwap,
         # 与 build_return_panel 同口径：停牌/缺口前向填充后收益为 0，
         # 复牌日跳空计入，避免公式内 returns 与研究返回面板不一致。
-        "returns": close.ffill().pct_change().fillna(0.0) if close is not None else None,
-        "RETURNS_": close.ffill().pct_change().fillna(0.0) if close is not None else None,
+        "returns": returns_panel,
+        "RETURNS_": returns_panel,
+        # Alpha101 别名：RET 即收益面板
+        "ret": returns_panel,
+        "RET": returns_panel,
         "adv20": ADV(volume, 20) if volume is not None else None,
         "ADV20": ADV(volume, 20) if volume is not None else None,
         # 派生参考面板（可基线提供）：市值 / 换手率 / 行业映射（供 INDUSTRY_NEUTRALIZE）
         "market_cap": panels.get("market_cap"),
         "MARKET_CAP": panels.get("market_cap"),
+        # Alpha101 别名：CAP 即流通市值面板；VOL 即成交量
+        "CAP": panels.get("market_cap"),
+        "cap": panels.get("market_cap"),
+        "vol": volume,
+        "VOL": volume,
         "turnover": panels.get("turnover"),
         "TURNOVER": panels.get("turnover"),
+        # Alpha101 别名：CLOSE5/OPEN5 = 5 日前收盘/开盘价
+        "CLOSE5": close.shift(5) if close is not None else None,
+        "close5": close.shift(5) if close is not None else None,
+        "OPEN5": open_p.shift(5) if open_p is not None else None,
+        "open5": open_p.shift(5) if open_p is not None else None,
+        # Alpha191 中间量：hd/ld/tr（DMI 类）、dtm/dbm（开盘跳空幅度）
+        "hd": hd_panel,
+        "HD": hd_panel,
+        "ld": ld_panel,
+        "LD": ld_panel,
+        "tr": tr_panel,
+        "TR": tr_panel,
+        "dtm": dtm_panel,
+        "DTM": dtm_panel,
+        "dbm": dbm_panel,
+        "DBM": dbm_panel,
         # 基本面（公告日点位）字段：fund_pe / fund_pb / fund_eps / fund_roe ...
         **({f: p for f, p in fundamental.items()} if fundamental else {}),
         **({f.upper(): p for f, p in fundamental.items()} if fundamental else {}),
@@ -1056,6 +1182,7 @@ def build_operator_namespace(
         "SUMIF": SUMIF,
         "REGBETA": REGBETA,
         "REGRESI": REGRESI,
+        "SEQUENCE": SEQUENCE,
         "ADV": ADV,
         "RSI": RSI,
         "MACD": MACD,

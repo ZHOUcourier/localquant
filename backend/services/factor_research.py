@@ -105,6 +105,78 @@ def extract_formula(description: str | None) -> str:
     return ""
 
 
+# ── 公式可执行性静态分类（不请求数据、不做求值）────────────────
+
+FORMULA_STATUS_VALUES = (
+    "executable",  # 可直接求值
+    "needs_fundamental",  # 可解析，但依赖 fund_* 财务快照
+    "unsupported",  # 可解析，但引用求值命名空间不存在的名字
+    "syntax_error",  # 方言规范化后仍不可解析
+    "missing_formula",  # 无公式（参数化指标/数据字段型因子）
+)
+
+_NAME_KEYSETS: tuple[set, set] | None = None
+
+
+def _formula_name_keysets() -> tuple[set, set]:
+    """(日频, 日内) 求值命名空间键集；用极小面板一次性构建，供静态名字检查"""
+    global _NAME_KEYSETS
+    if _NAME_KEYSETS is None:
+        from backend.services.factor_operators import build_operator_namespace
+
+        idx = pd.bdate_range("2024-01-02", periods=3)
+        mini = pd.DataFrame({"X": [1.0, 2.0, 3.0]}, index=idx)
+        panels = {
+            k: mini.copy() for k in ("open", "high", "low", "close", "volume", "amount")
+        }
+        daily = set(build_operator_namespace(panels).keys())
+        try:
+            from backend.services.intraday_operators import build_intraday_namespace
+
+            intraday = set(build_intraday_namespace(panels).keys()) | daily
+        except Exception:
+            intraday = daily
+        _NAME_KEYSETS = (daily, intraday)
+    return _NAME_KEYSETS
+
+
+def classify_formula_status(description: str | None) -> tuple[str, str]:
+    """静态分类预置因子公式的可执行性，返回 (status, detail)。
+
+    只做语法与名字检查，不求值、不访问行情，可在启动时批量执行。
+    """
+    import ast
+
+    from backend.services.formula_normalizer import normalize_formula
+
+    formula = extract_formula(description)
+    if not formula.strip():
+        return "missing_formula", "无可执行公式（参数化指标/数据字段型因子），不支持本地重算"
+    normalized = normalize_formula(formula)
+    try:
+        tree = ast.parse(normalized)
+    except SyntaxError as e:
+        return "syntax_error", f"公式含无法自动翻译的方言或源文本损坏：{e.msg}"
+    keyset_daily, keyset_intraday = _formula_name_keysets()
+    keyset = (
+        keyset_intraday
+        if FactorResearchService._is_intraday_formula(formula)
+        else keyset_daily
+    )
+    missing = sorted(
+        {
+            node.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and node.id not in keyset
+        }
+    )
+    if not missing:
+        return "executable", ""
+    if all(name.lower().startswith("fund_") for name in missing):
+        return "needs_fundamental", "公式依赖财务快照（fund_*），请先在数据管理页拉取财务数据再重算"
+    return "unsupported", "公式引用了求值环境不存在的名字: " + ", ".join(missing[:6])
+
+
 def formula_to_latex(formula: str) -> str:
     """将因子公式字符串转为 LaTeX 表达式（供前端 KaTeX 渲染）
 
@@ -1206,6 +1278,31 @@ class FactorResearchService:
         finally:
             await db.close()
 
+    async def refresh_formula_statuses(self) -> int:
+        """批量回填预置因子的公式可执行性状态（只处理未分类的行）
+
+        静态分类：不请求行情、不求值；启动时与因子抓取后调用。
+        返回本次分类的行数。
+        """
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT id, description FROM preset_factors WHERE formula_status IS NULL"
+            )
+            rows = await cursor.fetchall()
+            if not rows:
+                return 0
+            for row in rows:
+                status, _detail = classify_formula_status(row["description"])
+                await db.execute(
+                    "UPDATE preset_factors SET formula_status = ? WHERE id = ?",
+                    (status, row["id"]),
+                )
+            await db.commit()
+            return len(rows)
+        finally:
+            await db.close()
+
     async def recalculate_preset_factor(self, factor_id: int) -> dict | None:
         """手动重算因子 IC 指标 — 采用「覆盖更新」语义
 
@@ -1223,6 +1320,37 @@ class FactorResearchService:
             if not row:
                 return None
             factor = dict(row)
+
+            # 可执行性门控：静态不可执行的公式不进入重算（不落历史快照），
+            # 如实告知原因，而不是统一谎报"数据不足"
+            status, detail = classify_formula_status(factor.get("description"))
+            await db.execute(
+                "UPDATE preset_factors SET formula_status = ? WHERE id = ?",
+                (status, factor_id),
+            )
+            await db.commit()
+            factor["formula_status"] = status
+            if status in ("missing_formula", "syntax_error", "unsupported"):
+                factor["recalc_mode"] = status
+                factor["recalc_message"] = detail
+                try:
+                    from backend.services.provenance import record_provenance
+
+                    await record_provenance(
+                        kind="factor",
+                        entity_id=str(factor_id),
+                        entity_name=factor.get("factor_name", ""),
+                        params={
+                            "factor_code": factor.get("factor_code", ""),
+                            "formula_status": status,
+                        },
+                        metrics={},
+                        notes=detail,
+                        source="noop",
+                    )
+                except Exception as e:
+                    logger.warning(f"记录因子溯源失败: {e}")
+                return factor
 
             # 覆盖前留存历史快照
             await self._ensure_history_table(db)
@@ -1265,7 +1393,8 @@ class FactorResearchService:
                 sets = ", ".join(f"{k} = ?" for k in metrics)
                 await db.execute(
                     f"UPDATE preset_factors SET {sets}, start_date = ?, data_date = ?, "
-                    "metric_source = 'local_recalc', metric_sample_json = ? WHERE id = ?",
+                    "metric_source = 'local_recalc', formula_status = 'executable', "
+                    "metric_sample_json = ? WHERE id = ?",
                     (
                         *metrics.values(),
                         recalc.get("start_date"),
@@ -1286,7 +1415,14 @@ class FactorResearchService:
                     f"{recalc['n_dates']} 个交易日的行情真实重算 IC 指标，旧值已存入历史快照。"
                 )
             else:
-                factor["recalc_mode"] = "insufficient_data"
+                code = recalc.get("code") or "insufficient_data"
+                mode_map = {
+                    "missing_formula": "missing_formula",
+                    "syntax_error": "syntax_error",
+                    "undefined_name": "unsupported",
+                    "runtime_error": "runtime_error",
+                }
+                factor["recalc_mode"] = mode_map.get(code, "insufficient_data")
                 factor["recalc_message"] = recalc.get(
                     "message",
                     "本地行情数据不足，未重算 — 请先在数据管理页下载足够的股票与区间数据。",
@@ -1416,12 +1552,20 @@ class FactorResearchService:
             数据不足或公式报错时 ok=False（message 说明原因，不伪造数据）。
         """
         if not formula:
-            return {"ok": False, "message": "无可解析公式，暂不支持本地分析"}
+            return {
+                "ok": False,
+                "code": "missing_formula",
+                "message": "该因子无可执行公式（参数化指标/数据字段型），不支持本地重算",
+            }
         if self._is_intraday_formula(formula):
             return self._eval_intraday_on_local(formula, start_date, end_date)
         try:
             from backend.services import market_data, reference_data
-            from backend.services.factor_operators import build_operator_namespace
+            from backend.services.factor_operators import (
+                FormulaError,
+                build_operator_namespace,
+                eval_factor_formula,
+            )
 
             codes = market_data.list_cached_codes("1d", exclude_indices=True)
             if len(codes) < 30:
@@ -1447,7 +1591,7 @@ class FactorResearchService:
                     ns.update({f"FUND_{f.upper()}": p for f, p in fund.items()})
             except Exception:
                 pass
-            factor_df = eval(formula, {"__builtins__": {}}, ns)
+            factor_df = eval_factor_formula(formula, ns)
             if isinstance(factor_df, pd.Series):
                 factor_df = factor_df.to_frame()
             if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
@@ -1470,9 +1614,16 @@ class FactorResearchService:
                 "n_stocks": len(close.columns),
                 "n_dates": len(close.index),
             }
+        except FormulaError as e:
+            logger.warning(f"公式因子本地求值失败（{e.code}）: {e.message}")
+            return {"ok": False, "code": e.code, "message": e.message}
         except Exception as e:
             logger.warning(f"公式因子本地求值失败: {e}")
-            return {"ok": False, "message": f"本地分析失败: {e}"}
+            return {
+                "ok": False,
+                "code": "runtime_error",
+                "message": f"本地分析失败: {e}",
+            }
 
     @staticmethod
     def _is_intraday_formula(formula: str) -> bool:
@@ -1513,7 +1664,9 @@ class FactorResearchService:
             )
             panels, meta = loaded["panels"], loaded["meta"]
             ns = build_intraday_namespace(panels, meta)
-            factor_df = eval(formula, {"__builtins__": {}}, ns)
+            from backend.services.factor_operators import eval_factor_formula
+
+            factor_df = eval_factor_formula(formula, ns)
             if isinstance(factor_df, pd.Series):
                 factor_df = factor_df.to_frame()
             if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
@@ -1555,7 +1708,11 @@ class FactorResearchService:
         """
         res = self.eval_formula_on_local(formula)
         if not res.get("ok"):
-            return {"ok": False, "message": res.get("message", "")}
+            return {
+                "ok": False,
+                "code": res.get("code", "runtime_error"),
+                "message": res.get("message", ""),
+            }
         report = self.full_factor_analysis(
             res["factor_df"].dropna(how="all"),
             res["return_data"],
@@ -1789,7 +1946,10 @@ class FactorResearchService:
                 return
 
         from backend.services import reference_data
-        from backend.services.factor_operators import build_operator_namespace
+        from backend.services.factor_operators import (
+            build_operator_namespace,
+            eval_factor_formula,
+        )
 
         ns = build_operator_namespace(
             panels, industry_map=reference_data.load_industry_map()
@@ -1820,7 +1980,7 @@ class FactorResearchService:
                 if item in intraday_targets:
                     if intraday_ns is None:
                         return {**item, "ok": False, "error": "分钟面板不可用（无 5m 缓存）"}
-                    factor_df = eval(item["formula"], {"__builtins__": {}}, intraday_ns)
+                    factor_df = eval_factor_formula(item["formula"], intraday_ns)
                     if isinstance(factor_df, pd.Series):
                         factor_df = factor_df.to_frame()
                     if isinstance(factor_df, pd.DataFrame) and not factor_df.empty:
@@ -1848,7 +2008,7 @@ class FactorResearchService:
                         "elapsed_ms": int((time.perf_counter() - t0) * 1000),
                         "intraday": True,
                     }
-                factor_df = eval(item["formula"], {"__builtins__": {}}, ns)
+                factor_df = eval_factor_formula(item["formula"], ns)
                 if isinstance(factor_df, pd.Series):
                     factor_df = factor_df.to_frame()
                 if not isinstance(factor_df, pd.DataFrame) or factor_df.empty:
@@ -2319,7 +2479,10 @@ class FactorResearchService:
         factor_df = res["factor_df"]
         dates = factor_df.index
         from backend.services import reference_data
-        from backend.services.factor_operators import build_operator_namespace
+        from backend.services.factor_operators import (
+            build_operator_namespace,
+            eval_factor_formula,
+        )
 
         ns = build_operator_namespace(
             res["panels"], industry_map=reference_data.load_industry_map()
@@ -2327,7 +2490,7 @@ class FactorResearchService:
         factors: dict[str, pd.DataFrame] = {formulas[0]["factor_name"]: factor_df}
         for item in formulas[1:]:
             try:
-                fd = eval(item["formula"], {"__builtins__": {}}, ns)
+                fd = eval_factor_formula(item["formula"], ns)
                 if isinstance(fd, pd.Series):
                     fd = fd.to_frame()
                 if isinstance(fd, pd.DataFrame) and not fd.empty:

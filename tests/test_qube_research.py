@@ -172,7 +172,9 @@ def test_factor_analysis_error_marks_stage(qube_db, monkeypatch):
         finally:
             await db.close()
         aid = await qube_research.create_factor_analysis(fid, "s1", {})
-        with pytest.raises(NameError):
+        from backend.services.factor_operators import FormulaError
+
+        with pytest.raises(FormulaError):
             await qube_research.execute_factor_analysis(aid)
         db = await database.get_db()
         try:

@@ -261,7 +261,9 @@ class FormulaInputNode(BaseWorkNode):
             eval_ctx[col.lower()] = result[col]
 
         try:
-            expr_result = eval(input.formula, {"__builtins__": {}}, eval_ctx)
+            from backend.services.factor_operators import eval_factor_formula
+
+            expr_result = eval_factor_formula(input.formula, eval_ctx)
             if isinstance(expr_result, pd.Series):
                 result[input.output_col] = expr_result
             elif isinstance(expr_result, pd.DataFrame):
