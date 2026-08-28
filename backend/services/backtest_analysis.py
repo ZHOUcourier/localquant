@@ -41,7 +41,9 @@ class BacktestAnalysisService:
         max_gross_exposure: float = 1.0,
     ) -> dict:
         """
-        向量化回测（权重空间，T 日信号 → 执行）。
+        向量化回测（权重空间）。执行口径统一为「T 日信号 → T+1 执行」：
+        信号在 T 日收盘算出，于 T+1 成交，自成交时点起计收益；信号当日不产生收益。
+        这样可杜绝"用算出信号的那个价格成交"的隐性前视。
 
         Parameters
         ----------
@@ -71,11 +73,14 @@ class BacktestAnalysisService:
         trailing_stop : float（默认 0=关闭）
             移动止损比例：单仓从建仓后最高点回撤达该比例即止（仅作用于盈利仓 r_prev>=1）。
         execute_at : str
-            next_close=信号日收盘执行（默认，日频 T 信号→当日收盘建仓，等价 T+1 持有）；
-            tail=尾盘执行（信号日收盘建仓，涨跌停判定取信号日；与 next_close 在收盘价
-            口径下收益数学等价，差异在可成交性判定与风控触发日）；
-            next_open=次日开盘执行（需 open_prices，成交日按开→收计收益，更贴近打板/
-            竞价类策略）。
+            next_close=T+1 收盘成交（默认）：T 日信号 → T+1 收盘建仓，自 T+1 收盘起
+            赚收→收收益（信号当日与建仓当日均不计收益）；
+            tail=信号日收盘建仓（尾盘执行）：T 日信号 → T 日收盘建仓，涨跌停/可成交性
+            判定取信号日；收益口径与 next_close 一致（持仓前移一期），比 next_close
+            早一日建仓；
+            next_open=T+1 开盘成交（需 open_prices）：T 日信号 → T+1 开盘建仓，成交日
+            新仓按开→收计收益、存量持仓按收→收、卖出部分按隔夜收→开，更贴近打板/
+            竞价类策略。
         open_prices : DataFrame | None
             开盘价面板（execute_at=next_open 时使用）。
         delisting_loss : float（默认 0.0）
@@ -127,13 +132,14 @@ class BacktestAnalysisService:
                 "max_gross_exposure 不能超过 1.0：本系统仅支持普通股票多头投资，"
                 "任何情况下总仓位都不允许超过 100%。"
             )
+        exposure_limit = float(max_gross_exposure)
         weights = self._normalize_weights(signals, normalize)
         gross_before = weights.abs().sum(axis=1).replace(0.0, np.nan)
         gross_max = float(gross_before.max(skipna=True)) if gross_before.notna().any() else 0.0
-        if gross_max > float(max_gross_exposure) + 1e-12:
+        if gross_max > exposure_limit + 1e-12:
             worst_ts = gross_before.idxmax(skipna=True)
             raise ValueError(
-                f"组合总仓位超过 100%：{gross_max:.2f} > {float(max_gross_exposure):.2f}（日期 {worst_ts.date()}）。"
+                f"组合总仓位超过 100%：{gross_max:.2f} > {exposure_limit:.2f}（日期 {worst_ts.date()}）。"
                 "本系统仅支持普通股票多头投资，请检查信号是否被正确归一为 long_only 权重。"
             )
         if (signals < 0).to_numpy().any():
@@ -141,12 +147,13 @@ class BacktestAnalysisService:
                 "策略信号中出现负值：已按普通多头规则视为不买入（负信号清零），不做空、不融券"
             )
 
-        # 信号延迟执行：next_close/tail=当日收盘，next_open=次日开盘
+        # 执行时点：next_close/next_open = T 日信号次日成交（targets 右移一期），
+        # tail = 信号日收盘建仓（targets 不移位）；收益统一按「前一日持仓 × 当日涨幅」计
         if execute_at == "tail":
             targets = weights.copy()
             assumptions.append(
                 "尾盘执行（tail）：信号日收盘建仓，涨跌停/可成交性判定取信号日；"
-                "收盘价口径下与 next_close 收益数学等价，差异在可成交判定与风控触发日"
+                "比 next_close 早一日建仓"
             )
         else:
             targets = weights.shift(1).fillna(0.0)
@@ -160,7 +167,7 @@ class BacktestAnalysisService:
                         index=common_idx, columns=common_cols
                     )
             else:
-                assumptions.append("T 日信号当日收盘执行（next_close，默认）")
+                assumptions.append("T 日信号 T+1 收盘成交（next_close，默认）")
 
         # 可交易 / 一字板掩码（对齐到回测面板；缺失处理方式记入 assumptions）
         tradable_arr = self._align_mask(
@@ -190,12 +197,14 @@ class BacktestAnalysisService:
         delisting_events: list[dict] = []
 
         # 风控开启时，逐仓维护「建仓以来累计收益」r_prev 与「持仓期最高」peak_prev
-        # （基准 1.0；按当日收盘更新 → 于当日收盘判定、次日 T+1 触发卖出，避免用当日盘中价前视）
+        # （基准 1.0；新建仓当日不计波动，按当日收盘逐日更新 → 按 T-1 收盘判定、T 日执行，
+        # 不使用当日盘中价，避免前视）
         manage = bool(take_profit or stop_loss or trailing_stop)
         r_prev = np.ones(n_assets)
         peak_prev = np.ones(n_assets)
         risk_lock = np.zeros(n_assets, dtype=bool)  # True=风控退出后，信号归零前保持空仓
         blocked_trades = 0
+        budget_shrink = 0  # 冻结旧仓挤占预算、买入被迫缩减的天数
 
         for t in range(n_days):
             desired = np.nan_to_num(tgt_arr[t]).copy()
@@ -256,6 +265,21 @@ class BacktestAnalysisService:
                 actual[forced] = 0.0
             if (buy_blocked | sell_blocked).any():
                 blocked_trades += int((buy_blocked | sell_blocked).sum())
+            # 总仓位硬约束：冻结/一字板/清算后若 Σ|w| 仍超限（旧仓卖不出、买入侧又按计划
+            # 全额成交所致），只等比缩减买入增量至预算内；卖出与冻结仓位不动。
+            # 保证任何情况下 Σ|w| ≤ exposure_limit（普通多头不加杠杆、不融资）。
+            gross_now = float(actual.sum())  # long_only 权重全非负
+            if gross_now > exposure_limit + 1e-12:
+                excess = gross_now - exposure_limit
+                buy_inc = np.maximum(actual - prev, 0.0)
+                total_buy = float(buy_inc.sum())
+                if total_buy > 1e-15:
+                    scale = max(0.0, 1.0 - excess / total_buy)
+                    buying = actual > prev
+                    actual[buying] = (
+                        prev[buying] + (actual[buying] - prev[buying]) * scale
+                    )
+                    budget_shrink += 1
             trade = actual - prev
             # 强制清算不是市场交易：不计入换手与成本（损失已由 delisting_pnl 单独入账）
             trade[dead_arr[t]] = 0.0
@@ -265,6 +289,8 @@ class BacktestAnalysisService:
             prev = actual
 
             # 收盘后更新持仓收益轨迹（符号感知：多头× 价涨利润，空头×价跌）
+            # 新建仓当日（T+1 才成交）尚无持仓收益，r_prev 重置为基准 1.0，
+            # 自次日起逐日累计 —— 避免把建仓当日波动计入而提前触发止盈/止损
             if manage:
                 sign_prev = np.where(prev > 0, 1.0, np.where(prev < 0, -1.0, 0.0))
                 hold_after = actual != 0.0
@@ -275,7 +301,7 @@ class BacktestAnalysisService:
                     r_prev * pnl,
                     np.where(
                         hold_after,
-                        1.0 + np.sign(actual) * np.nan_to_num(pr_arr[t]),
+                        1.0,
                         r_prev,
                     ),
                 )
@@ -295,6 +321,13 @@ class BacktestAnalysisService:
             assumptions.append(
                 f"涨停/跌停一字板共 {int(blocked_trades)} 次调仓无法按计划成交，"
                 f"当期持仓保持不动、该笔调仓意图不保留（不做挂单顺延推演）"
+            )
+
+        if budget_shrink:
+            assumptions.append(
+                f"共 {budget_shrink} 个交易日因冻结旧仓（停牌/一字跌停）挤占预算，"
+                f"买入权重被等比缩减以守住 {exposure_limit:.0%} 总仓位上限"
+                "（不追单、不加杠杆，未成交部分如实放弃）"
             )
 
         n_dead = int(dead_arr.any(axis=0).sum())
@@ -325,6 +358,17 @@ class BacktestAnalysisService:
         positions = pd.DataFrame(pos_arr, index=common_idx, columns=common_cols)
         trades = pd.DataFrame(buy_arr + sell_arr, index=common_idx, columns=common_cols)
 
+        # 仓位边界不变量：预算约束后任何交易日都应满足 Σ|w| ≤ exposure_limit，
+        # 一旦越界说明引擎逻辑有缺陷 —— 视为错误抛出，而不是输出带杠杆的结果
+        gross_check = positions.abs().sum(axis=1)
+        over = gross_check[gross_check > exposure_limit + 1e-9]
+        if len(over):
+            worst = over.idxmax()
+            raise RuntimeError(
+                f"回测引擎内部错误：{worst.date()} 总仓位 {float(over[worst]):.6f} "
+                f"超过上限 {exposure_limit:.2f}。预算约束应已消除越界，请报告复现场景。"
+            )
+
         # 成本拆分：佣金（买卖双向）/ 滑点（买卖双向）/ 印花税（仅卖出）
         # 与原合并口径完全一致：buy×(c+s) + sell×(c+s+t) = (buy+sell)×c + (buy+sell)×s + sell×t
         turnover_series = trades.sum(axis=1)
@@ -337,30 +381,34 @@ class BacktestAnalysisService:
             costs, commission_costs, slippage_costs, stamp_costs, turnover_series
         )
 
-        # 策略日收益：positions 为当日收盘持仓 → 赚次日起的收益（pos 前移一期）
+        # 策略日收益：positions[t] 为成交日持仓；第 t 日收益 = positions[t-1] × 第 t 日涨幅
+        # − 第 t 日交易成本（T 日信号 → T+1 成交，最早赚 T+1 收盘→T+2 收盘的涨幅，无前视）
         # 强制清算损失 delisting_pnl 计入清算当日（末日价 ×(1-loss) 变现于当日收盘）
-        if execute_at == "tail":
-            # 尾盘执行：当日收盘建仓，当日无收益（收益从次日起）
+        held_prev = positions.shift(1).fillna(0.0)
+        if execute_at == "next_open" and open_prices is not None:
+            # T+1 开盘成交：三段归属 —— 存量持仓赚收→收、新买部分赚开→收、
+            # 卖出部分赚隔夜收→开（持有到开盘卖出），避免整仓误用开盘收益
+            op = open_prices.reindex(index=common_idx, columns=common_cols)
+            ret_oc = (prices / op.replace(0, np.nan) - 1.0).fillna(0.0)
+            ret_co = (op / prices.shift(1).replace(0, np.nan) - 1.0).fillna(0.0)
+            pos_prev_arr = held_prev.to_numpy()
+            pos_curr_arr = positions.to_numpy()
+            held_arr = np.minimum(pos_prev_arr, pos_curr_arr)
             strategy_returns = (
-                positions.shift(1).fillna(0.0) * price_returns
-            ).sum(axis=1) - costs + pd.Series(delisting_pnl, index=common_idx)
-        elif execute_at == "next_open" and open_prices is not None:
-            # 次日开盘执行：T 信号 → T+1 开盘成交，成交日按「开→收」计收益，非成交日按「收→收」
-            op = open_prices.reindex(common_idx).fillna(0.0)
-            intraday = (prices / op.replace(0, np.nan) - 1.0).fillna(0.0)
-            traded = positions.diff().abs() > 1e-12
-            eff = pd.DataFrame(
-                np.where(traded, intraday, price_returns),
-                index=common_idx,
-                columns=common_cols,
-            )
-            strategy_returns = (
-                (positions * eff).sum(axis=1) - costs
+                pd.Series(
+                    (held_arr * pr_arr).sum(axis=1)
+                    + ((pos_curr_arr - held_arr) * ret_oc.to_numpy()).sum(axis=1)
+                    + ((pos_prev_arr - held_arr) * ret_co.to_numpy()).sum(axis=1),
+                    index=common_idx,
+                )
+                - costs
                 + pd.Series(delisting_pnl, index=common_idx)
             )
         else:
+            # next_close（默认）/ tail：当日收益 = 前一日持仓 × 当日收→收涨幅
             strategy_returns = (
-                (positions * price_returns).sum(axis=1) - costs
+                (held_prev * price_returns).sum(axis=1)
+                - costs
                 + pd.Series(delisting_pnl, index=common_idx)
             )
 
@@ -376,6 +424,7 @@ class BacktestAnalysisService:
             "max_net_exposure": float(net_series.max()),
             "min_net_exposure": float(net_series.min()),
             "gross_exposure_limit": float(max_gross_exposure),
+            "budget_shrink_days": int(budget_shrink),
         }
         min_equity = float(equity_curve.min())
         if min_equity <= 0:
@@ -671,7 +720,10 @@ class BacktestAnalysisService:
              tear_sheet, cost_summary, attribution, factor_weights, failed}
         """
         from backend.services import market_data, reference_data, risk
-        from backend.services.factor_operators import build_operator_namespace
+        from backend.services.factor_operators import (
+            build_operator_namespace,
+            eval_factor_formula,
+        )
         from backend.services.factor_research import factor_research
 
         codes = stock_pool or _default_equity_codes(market_data)
@@ -694,7 +746,7 @@ class BacktestAnalysisService:
         failed: list[dict] = []
         for f in factors:
             try:
-                fd = eval(f["formula"], {"__builtins__": {}}, ns)
+                fd = eval_factor_formula(f["formula"], ns)
                 if isinstance(fd, pd.Series):
                     fd = fd.to_frame()
                 if isinstance(fd, pd.DataFrame) and not fd.empty:
@@ -871,7 +923,10 @@ class BacktestAnalysisService:
              drawdown, assumptions, in_sample_reference, failed}
         """
         from backend.services import market_data, reference_data
-        from backend.services.factor_operators import build_operator_namespace
+        from backend.services.factor_operators import (
+            build_operator_namespace,
+            eval_factor_formula,
+        )
         from backend.services.factor_research import factor_research
 
         codes = stock_pool or _default_equity_codes(market_data)
@@ -894,7 +949,7 @@ class BacktestAnalysisService:
         failed: list[dict] = []
         for f in factors:
             try:
-                fd = eval(f["formula"], {"__builtins__": {}}, ns)
+                fd = eval_factor_formula(f["formula"], ns)
                 if isinstance(fd, pd.Series):
                     fd = fd.to_frame()
                 if isinstance(fd, pd.DataFrame) and not fd.empty:

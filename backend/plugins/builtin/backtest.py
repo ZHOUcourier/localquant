@@ -71,6 +71,7 @@ class BacktestOutput(BaseModel):
     benchmark_curve: dict = {}  # 基准净值曲线（如提供基准）
     assumptions: list = []  # 未能处理的假设清单（停牌/涨跌停等）
     delisting_events: list = []  # 数据提前截止标的的强制清算明细（退市/缓存截断）
+    leverage_summary: dict = {}  # 仓位边界报告（Σ|w| 峰值/均值、上限、预算缩减天数）
     report: dict = {}  # 回测综合报告（供工作流内弹窗可视化，与因子分析同构）
     initial_capital: float = 0.0
 
@@ -86,6 +87,7 @@ class BacktestOutput(BaseModel):
         "volume/high/low 为可选连线：提供后启用停牌冻结与一字板不可成交处理，未提供时不处理并在 assumptions 中明示",
         "normalize 固定为 long_only：只做普通股票多头，正信号按日归一为满仓组合（Σw≤1），负信号视为不买入；不融资、不融券、不做空",
         "佣金率默认 0.001，滑点 0.001，卖出印花税 0.0005（与回测引擎/其余入口口径一致）；T 日信号 T+1 执行；指标按 252 交易日年化",
+        "总仓位硬约束：停牌/一字板冻结旧仓时买入按预算缩减，任何情况下 Σ|w| ≤ 100%（不融资、不加杠杆），缩减天数见 leverage_summary/assumptions",
         "止盈/止损/移动止损（0 关闭）：单仓逐仓风控，基于 T-1 收盘判定、T 日执行，避免当日盘中前视；命中会覆盖信号目标为平仓",
         "移动止损 trailing_stop 仅对盈利仓生效：自建仓后最高点回撤达比例即止（锁盈）",
         "提供 benchmark 时额外输出跟踪误差/信息比率等相对基准指标",
@@ -186,6 +188,7 @@ class BacktestNode(BaseWorkNode):
             "benchmark": metrics.get("benchmark"),
             "assumptions": assumptions,
             "delisting_events": result.get("delisting_events", []),
+            "leverage_summary": result.get("leverage_summary", {}),
             "initial_capital": init_cap,
             "trading_days": metrics.get("trading_days", 0),
         }
@@ -205,6 +208,7 @@ class BacktestNode(BaseWorkNode):
             benchmark_curve=benchmark_curve,
             assumptions=assumptions,
             delisting_events=result.get("delisting_events", []),
+            leverage_summary=result.get("leverage_summary", {}),
             report=report,
             initial_capital=result["initial_capital"],
         )

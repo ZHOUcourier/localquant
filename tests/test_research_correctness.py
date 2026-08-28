@@ -43,22 +43,42 @@ def test_build_return_panel_captures_resume_gap():
 
 
 def test_backtest_realizes_resume_gap():
-    """回测持仓跨越停牌：复牌日跳空损失必须入账（旧行为：损失丢失）"""
-    idx = _dates(4)
-    prices = pd.DataFrame({"A": [100.0, np.nan, 90.0, 90.0]}, index=idx)
-    signals = pd.DataFrame({"A": [1.0, 1.0, 1.0, 1.0]}, index=idx)
+    """持仓跨越停牌：复牌日跳空损失必须入账（先建仓 → 停牌冻结 → 复牌跳空）"""
+    idx = _dates(5)
+    prices = pd.DataFrame({"A": [100.0, 100.0, np.nan, 90.0, 90.0]}, index=idx)
+    signals = pd.DataFrame({"A": [1.0] * 5}, index=idx)
     tradable = pd.DataFrame(
-        {"A": [True, False, True, True]}, index=idx  # day1 停牌
+        {"A": [True, True, False, True, True]}, index=idx  # day2 停牌
     )
     result = svc.run_backtest(
         signals, prices, commission_rate=0.0, slippage=0.0,
         stamp_tax=0.0, tradable_mask=tradable,
     )
     r = result["strategy_returns"]
-    assert r.iloc[1] == pytest.approx(0.0)      # 停牌日冻结
-    assert r.iloc[2] == pytest.approx(-0.10)    # 复牌日跳空损失入账
-    assert r.iloc[3] == pytest.approx(0.0)
+    pos = result["positions"]
+    assert pos.iloc[1]["A"] == pytest.approx(1.0)   # day1 T+1 建仓
+    assert pos.iloc[2]["A"] == pytest.approx(1.0)   # day2 停牌，冻结持有
+    assert r.iloc[2] == pytest.approx(0.0)          # 停牌日无行情
+    assert r.iloc[3] == pytest.approx(-0.10)        # 复牌日跳空损失入账
+    assert r.iloc[4] == pytest.approx(0.0)
     assert result["equity_curve"].iloc[-1] == pytest.approx(1_000_000 * 0.9)
+
+
+def test_backtest_suspension_before_entry_means_no_exposure():
+    """T+1 语义：信号发出后首个成交日恰逢停牌 → 买不进，全程无敞口、净值不变
+    （停牌在建仓之前时不承受复牌跳空，这是正确而非遗漏的行为）"""
+    idx = _dates(4)
+    prices = pd.DataFrame({"A": [100.0, np.nan, 90.0, 90.0]}, index=idx)
+    signals = pd.DataFrame({"A": [1.0, 0.0, 0.0, 0.0]}, index=idx)
+    tradable = pd.DataFrame(
+        {"A": [True, False, True, True]}, index=idx  # day1（建仓执行日）停牌
+    )
+    result = svc.run_backtest(
+        signals, prices, commission_rate=0.0, slippage=0.0,
+        stamp_tax=0.0, tradable_mask=tradable,
+    )
+    assert (result["positions"].abs() < 1e-12).all().all()
+    assert result["equity_curve"].iloc[-1] == pytest.approx(1_000_000)
 
 
 # ── P0-2 数据截止强制清算（退市处理）─────────────────────────
@@ -77,8 +97,8 @@ def test_backtest_forced_liquidation_at_data_end():
     )
     r = result["strategy_returns"]
     pos = result["positions"]
-    # day1/day2 正常持有收益 10%
-    assert r.iloc[1] == pytest.approx(0.10)
+    # day1 T+1 建仓（无收益）；day2 持有收益 10%
+    assert r.iloc[1] == pytest.approx(0.0)
     assert r.iloc[2] == pytest.approx(0.10)
     # day3（截止后首日）：强制清算，损失 0.3 × 权重 1.0
     assert r.iloc[3] == pytest.approx(-0.30)
@@ -97,9 +117,9 @@ def test_backtest_forced_liquidation_at_data_end():
     assert "强制清算" in joined
     assert "退市" in joined
 
-    # 累计：1.1 × 1.1 × 0.7 - 1
+    # 累计：1.1 × 0.7 - 1（建仓日无收益）
     assert result["equity_curve"].iloc[-1] == pytest.approx(
-        1_000_000 * 1.1 * 1.1 * 0.7
+        1_000_000 * 1.1 * 0.7
     )
 
 
