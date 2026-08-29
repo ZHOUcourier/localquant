@@ -4,7 +4,7 @@ import json
 import pickle
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from backend.config import settings
 from backend.plugins.base import BaseWorkNode
@@ -19,7 +19,9 @@ from backend.plugins.ui_control import ui
 class OutputInput(BaseModel):
     """输出节点输入"""
 
-    data: dict  # DataFrame dict: {col: {index: value}}
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # 支持面板 dict {col:{index:value}}、一维 dict {index:scalar}、DataFrame、Series
+    data: dict | pd.DataFrame | pd.Series = {}
     output_name: str = "output"
     format: str = "table"  # "table" / "csv" / "json"
 
@@ -63,7 +65,17 @@ class OutputNode(BaseWorkNode):
         return OutputOutput
 
     def run(self, input: OutputInputUI) -> OutputOutput:
-        df = pd.DataFrame(input.data)
+        data = input.data
+        if isinstance(data, pd.DataFrame):
+            df = data
+        elif isinstance(data, pd.Series):
+            df = data.to_frame(name=data.name or "value")
+        elif isinstance(data, dict):
+            # 一维 {index: 标量}（如净值曲线）按 Series 处理，否则按面板 {col:{index:val}}
+            flat = bool(data) and all(not isinstance(v, (dict, list)) for v in data.values())
+            df = pd.Series(data, name="value").to_frame() if flat else pd.DataFrame(data)
+        else:
+            df = pd.DataFrame(data)
         try:
             df.index = pd.to_datetime(df.index)
         except Exception:
@@ -113,11 +125,23 @@ class OutputNode(BaseWorkNode):
 class StockRankInput(BaseModel):
     """股票排名输入"""
 
-    factor_data_1: dict = {}  # DataFrame dict
-    factor_data_2: dict = {}  # DataFrame dict
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    factor_data_1: dict | pd.DataFrame = {}  # 因子面板（dict 或 DataFrame）
+    factor_data_2: dict | pd.DataFrame = {}  # 因子面板（dict 或 DataFrame）
     top_n: int = 30
     sort_field: str = ""  # 排序字段（空则取最后一列）
     ascending: bool = False  # 默认降序（得分高的在前）
+
+
+def _to_panel(value) -> pd.DataFrame | None:
+    """把面板输入（dict 或 DataFrame）统一成 DataFrame；空值返回 None"""
+    if value is None:
+        return None
+    if isinstance(value, pd.DataFrame):
+        return value
+    if isinstance(value, dict) and value:
+        return pd.DataFrame(value)
+    return None
 
 
 @ui(
@@ -160,16 +184,17 @@ class StockRankNode(BaseWorkNode):
         return StockRankOutput
 
     def run(self, input: StockRankInputUI) -> StockRankOutput:
-        # 合并多个因子数据
+        # 合并多个因子数据（dict 或 DataFrame 均可）
         dfs = []
         for fd in [input.factor_data_1, input.factor_data_2]:
-            if fd:
-                df_part = pd.DataFrame(fd)
-                try:
-                    df_part.index = pd.to_datetime(df_part.index)
-                except Exception:
-                    pass
-                dfs.append(df_part)
+            df_part = _to_panel(fd)
+            if df_part is None or df_part.empty:
+                continue
+            try:
+                df_part.index = pd.to_datetime(df_part.index)
+            except Exception:
+                pass
+            dfs.append(df_part)
 
         if not dfs:
             return StockRankOutput(result={}, row_count=0, columns=[])

@@ -1,7 +1,7 @@
 # QMT 数据获取节点
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
@@ -31,22 +31,28 @@ class QMTKlineInput(BaseModel):
 
 
 class QMTKlineOutput(BaseModel):
-    kline_data: dict = Field(default_factory=dict, title="K线数据")
-
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # 面板 DataFrame（index=交易日, columns=股票代码），可直接连线给回测/因子节点
+    open: pd.DataFrame | None = None
+    high: pd.DataFrame | None = None
+    low: pd.DataFrame | None = None
+    close: pd.DataFrame | None = None
+    volume: pd.DataFrame | None = None
+    amount: pd.DataFrame | None = None
+    # 兼容旧连线：{字段: {日期: {代码: 值}}}
+    kline_data: dict = Field(default_factory=dict, title="K线数据(兼容)")
 
 
 @work_node(
     name="QMT行情数据",
     group="01-数据获取",
     box_color="orange",
-    description="获取QMT行情K线数据，支持日K/周K/月K/分钟K等多种周期，输出按股票代码组织的K线字典",
+    description="获取行情K线并组装为面板（本地缓存优先，QMT 在线时增量补齐），输出 open/high/low/close/volume/amount 面板供下游连线",
     example="QMT行情数据 → 因子构建 / 技术指标 / 回测",
     notes=[
-        "需本地有 QMT 行情缓存或 QMT 客户端在线，否则返回空数据",
-        "输出 kline_data 为 {股票代码: K线字典} 结构，只能通过连线传给下游",
-        "股票代码用逗号分隔，如 000001.SZ,600000.SH",
+        "本地缓存优先：无 QMT 连接时也能从 data/cache 缓存读取；股票代码留空时取该周期全部本地缓存标的",
+        "输出 open/high/low/close/volume/amount 面板（index=交易日, columns=股票代码），可直接连线给回测/因子节点",
+        "股票代码用逗号分隔，如 000001.SZ,600000.SH；无缓存且无 QMT 时给出明确报错",
     ],
 )
 class QMTKlineNode(BaseWorkNode):
@@ -59,23 +65,45 @@ class QMTKlineNode(BaseWorkNode):
         return QMTKlineOutput
 
     def run(self, input: BaseModel) -> BaseModel | None:
-        from backend.data import qmt_client
+        from backend.services import market_data
 
         codes = [c.strip() for c in input.code_list.split(",") if c.strip()]
         if not codes:
-            return QMTKlineOutput(kline_data={})
+            codes = market_data.list_cached_codes(input.period, exclude_indices=True)
+        if not codes:
+            raise ValueError(
+                "QMT行情：股票代码为空且本地无该周期缓存 — "
+                "请先在数据管理下载行情，或在 code_list 填入代码"
+            )
 
-        data = qmt_client.get_kline(
-            codes,
-            input.period,
-            input.start_date,
-            input.end_date,
-            dividend_type=input.dividend_type,
+        adjust = {"front": "qfq", "back": "hfq", "none": "none"}.get(
+            input.dividend_type, "qfq"
         )
-        result = {}
-        for code, df in data.items():
-            result[code] = df.to_dict()
-        return QMTKlineOutput(kline_data=result)
+        panels = market_data.load_price_panels(
+            codes=codes,
+            start_date=input.start_date,
+            end_date=input.end_date,
+            period=input.period,
+            adjust=adjust,
+        )
+        close = panels.get("close")
+        if close is None or close.empty:
+            raise ValueError("QMT行情：未取到行情数据，请先下载缓存或连接 QMT")
+
+        kline_data = {
+            field: market_data.panel_to_dict(panel)
+            for field, panel in panels.items()
+            if panel is not None
+        }
+        return QMTKlineOutput(
+            open=panels.get("open"),
+            high=panels.get("high"),
+            low=panels.get("low"),
+            close=close,
+            volume=panels.get("volume"),
+            amount=panels.get("amount"),
+            kline_data=kline_data,
+        )
 
 
 # ============================================================

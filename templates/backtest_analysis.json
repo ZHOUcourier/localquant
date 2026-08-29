@@ -1,16 +1,16 @@
 {
   "name": "回测分析模板",
-  "description": "策略回测完整流程：数据准备 → 信号生成 → 回测执行 → 绩效分析",
+  "description": "策略回测完整流程：行情数据（本地缓存）→ 因子信号 → 回测执行 → 结果输出",
   "nodes": [
     {
       "uuid": "n1",
       "name": "QMTKlineNode",
-      "title": "获取历史K线",
+      "title": "行情数据(本地缓存)",
       "positionX": 50,
       "positionY": 100,
       "width": 240,
       "height": 180,
-      "static_input_data": { "period": "1d", "start_date": "20220101" }
+      "static_input_data": { "period": "1d", "start_date": "20230101" }
     },
     {
       "uuid": "n2",
@@ -20,7 +20,10 @@
       "positionY": 100,
       "width": 240,
       "height": 180,
-      "static_input_data": { "formula": "" }
+      "static_input_data": {
+        "formula": "RANK(close / DELAY(close, 5) - 1)",
+        "start_date": "20230101"
+      }
     },
     {
       "uuid": "n3",
@@ -50,27 +53,41 @@
   "links": [
     {
       "uuid": "l1",
-      "previous_node_uuid": "n1",
-      "output_field_name": "kline_data",
-      "next_node_uuid": "n2",
-      "input_field_name": "data"
-    },
-    {
-      "uuid": "l2",
       "previous_node_uuid": "n2",
       "output_field_name": "factor_data",
       "next_node_uuid": "n3",
       "input_field_name": "signals"
     },
     {
-      "uuid": "l3",
+      "uuid": "l2",
       "previous_node_uuid": "n1",
-      "output_field_name": "kline_data",
+      "output_field_name": "close",
       "next_node_uuid": "n3",
       "input_field_name": "prices"
     },
     {
+      "uuid": "l3",
+      "previous_node_uuid": "n1",
+      "output_field_name": "volume",
+      "next_node_uuid": "n3",
+      "input_field_name": "volume"
+    },
+    {
       "uuid": "l4",
+      "previous_node_uuid": "n1",
+      "output_field_name": "high",
+      "next_node_uuid": "n3",
+      "input_field_name": "high"
+    },
+    {
+      "uuid": "l5",
+      "previous_node_uuid": "n1",
+      "output_field_name": "low",
+      "next_node_uuid": "n3",
+      "input_field_name": "low"
+    },
+    {
+      "uuid": "l6",
       "previous_node_uuid": "n3",
       "output_field_name": "equity_curve",
       "next_node_uuid": "n4",

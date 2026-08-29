@@ -17,12 +17,13 @@ class BacktestInput(BaseModel):
     """回测输入"""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    signals: dict = {}  # 信号面板 dict: {col: {index: value}}
-    prices: dict = {}  # 价格面板 dict: {col: {index: value}}
-    benchmark: dict = {}  # 可选基准收益/收盘序列 {index: value}
-    volume: dict = {}  # 可选成交量面板（用于停牌推断）
-    high: dict = {}  # 可选最高价面板（用于一字板判定）
-    low: dict = {}  # 可选最低价面板（用于一字板判定）
+    # 面板输入同时接受 dict({日期:{代码:值}}) 与 DataFrame（index=日期, columns=代码）
+    signals: dict | pd.DataFrame = {}  # 信号面板
+    prices: dict | pd.DataFrame = {}  # 价格面板
+    benchmark: dict | pd.DataFrame = {}  # 可选基准收益/收盘序列
+    volume: dict | pd.DataFrame = {}  # 可选成交量面板（用于停牌推断）
+    high: dict | pd.DataFrame = {}  # 可选最高价面板（用于一字板判定）
+    low: dict | pd.DataFrame = {}  # 可选最低价面板（用于一字板判定）
     initial_capital: float = 1_000_000.0
     commission_rate: float = 0.001  # 默认佣金率（与回测引擎/其余入口一致）
     slippage: float = 0.001
@@ -32,6 +33,17 @@ class BacktestInput(BaseModel):
     take_profit: float = 0.0  # 单仓止盈比例（0=关闭）
     stop_loss: float = 0.0  # 单仓止损比例（0=关闭）
     trailing_stop: float = 0.0  # 移动止损比例（0=关闭）
+
+
+def _to_panel(value) -> pd.DataFrame | None:
+    """把面板输入（dict {日期:{代码:值}} 或 DataFrame）统一成 DataFrame；空值返回 None"""
+    if value is None:
+        return None
+    if isinstance(value, pd.DataFrame):
+        return value
+    if isinstance(value, dict) and value:
+        return pd.DataFrame(value)
+    return None
 
 
 @ui(
@@ -103,14 +115,14 @@ class BacktestNode(BaseWorkNode):
         return BacktestOutput
 
     def run(self, input: BacktestInputUI) -> BacktestOutput:
-        signals = pd.DataFrame(input.signals)
-        prices = pd.DataFrame(input.prices)
-        if signals.empty or prices.empty:
+        signals = _to_panel(input.signals)
+        prices = _to_panel(input.prices)
+        if signals is None or signals.empty or prices is None or prices.empty:
             raise ValueError("回测：需要连线提供 signals（信号）与 prices（价格）面板")
 
-        volume = pd.DataFrame(input.volume) if input.volume else None
-        high = pd.DataFrame(input.high) if input.high else None
-        low = pd.DataFrame(input.low) if input.low else None
+        volume = _to_panel(input.volume)
+        high = _to_panel(input.high)
+        low = _to_panel(input.low)
 
         for df in (signals, prices, volume, high, low):
             if df is None:

@@ -75,3 +75,52 @@ def test_load_price_panels_from_cache(cached_market):
     assert "close" in panels
     assert not panels["close"].empty
     assert panels["close"].shape[1] == 10
+
+
+def test_template_backtest_analysis_runs_green(cached_market):
+    """backtest_analysis 模板（行情→因子信号→回测→输出）端到端跑通，产出净值曲线
+
+    此前该模板因 QMTKlineNode 离线返回空、kline_data 结构与下游类型不匹配而失败；
+    现在 QMTKlineNode 走本地缓存输出面板、BacktestNode 接受 DataFrame，应全绿。
+    """
+    from backend.engine import runner
+    from backend.plugins.loader import load_all_nodes
+
+    load_all_nodes()
+
+    tpl = json.loads(Path("templates/backtest_analysis.json").read_text(encoding="utf-8"))
+    ctx = asyncio.run(runner.run_workflow("e2e-bt", tpl["nodes"], tpl["links"]))
+    assert ctx.status == "completed", f"工作流未完成: {ctx.status}"
+
+    # QMTKlineNode 应从缓存输出非空 close 面板
+    n1 = ctx.get_node_output("n1")
+    assert n1 is not None and n1.get("close") is not None
+    # BacktestNode 应产出净值曲线
+    n3 = ctx.get_node_output("n3")
+    assert n3 is not None and n3.get("equity_curve")
+
+
+def test_template_stock_selection_runs_green(cached_market):
+    """stock_selection 模板（两路价格因子→打分排序→输出）端到端跑通，产出排序结果
+
+    此前该模板依赖 QMT 在线节点（K线+财务）而无法离线运行；现改为两路价格因子
+    （各自从本地缓存加载），应全绿。
+    """
+    from backend.engine import runner
+    from backend.plugins.loader import load_all_nodes
+
+    load_all_nodes()
+
+    tpl = json.loads(Path("templates/stock_selection.json").read_text(encoding="utf-8"))
+    ctx = asyncio.run(runner.run_workflow("e2e-ss", tpl["nodes"], tpl["links"]))
+    assert ctx.status == "completed", f"工作流未完成: {ctx.status}"
+
+    # 两个因子节点都应产出因子面板
+    n1 = ctx.get_node_output("n1")
+    n2 = ctx.get_node_output("n2")
+    assert n1 is not None and n1.get("factor_data") is not None
+    assert n2 is not None and n2.get("factor_data") is not None
+    # StockRankNode 应产出排序结果
+    n3 = ctx.get_node_output("n3")
+    assert n3 is not None
+    assert n3.get("row_count", 0) >= 1

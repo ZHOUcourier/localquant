@@ -1,102 +1,76 @@
 {
   "name": "选股策略模板",
-  "description": "多因子选股策略：数据获取 → 因子计算 → 打分排序 → 输出选股结果",
+  "description": "多因子选股：两路价格因子（动量+反转，各自从本地行情缓存加载）→ 合并打分排序 → 输出前 N 名。基本面因子需 QMT 财务缓存，可按需另接 QMTFinancialNode。",
   "nodes": [
     {
       "uuid": "n1",
-      "name": "QMTKlineNode",
-      "title": "获取K线数据",
+      "name": "FactorFormulaNode",
+      "title": "动量因子",
       "positionX": 50,
       "positionY": 100,
       "width": 240,
       "height": 180,
-      "static_input_data": { "period": "1d", "start_date": "20230101" }
+      "static_input_data": {
+        "formula": "RANK(close / DELAY(close, 20) - 1)",
+        "factor_name": "momentum",
+        "start_date": "20230101"
+      }
     },
     {
       "uuid": "n2",
-      "name": "QMTFinancialNode",
-      "title": "获取财务数据",
+      "name": "FactorFormulaNode",
+      "title": "反转因子",
       "positionX": 50,
       "positionY": 320,
       "width": 240,
       "height": 180,
-      "static_input_data": {}
+      "static_input_data": {
+        "formula": "RANK(-1 * (close / DELAY(close, 5) - 1))",
+        "factor_name": "reversal",
+        "start_date": "20230101"
+      }
     },
     {
       "uuid": "n3",
-      "name": "FactorFormulaNode",
-      "title": "技术因子",
-      "positionX": 350,
-      "positionY": 100,
-      "width": 240,
-      "height": 180,
-      "static_input_data": { "formula": "" }
-    },
-    {
-      "uuid": "n4",
-      "name": "FactorFormulaNode",
-      "title": "基本面因子",
-      "positionX": 350,
-      "positionY": 320,
-      "width": 240,
-      "height": 180,
-      "static_input_data": { "formula": "" }
-    },
-    {
-      "uuid": "n5",
       "name": "StockRankNode",
       "title": "综合打分排序",
-      "positionX": 650,
+      "positionX": 400,
       "positionY": 200,
       "width": 240,
       "height": 180,
       "static_input_data": { "top_n": 30 }
     },
     {
-      "uuid": "n6",
+      "uuid": "n4",
       "name": "OutputNode",
       "title": "输出选股结果",
-      "positionX": 950,
+      "positionX": 700,
       "positionY": 200,
       "width": 240,
       "height": 180,
-      "static_input_data": { "format": "csv" }
+      "static_input_data": { "output_name": "stock_selection", "format": "csv" }
     }
   ],
   "links": [
     {
       "uuid": "l1",
       "previous_node_uuid": "n1",
-      "output_field_name": "kline_data",
+      "output_field_name": "factor_data",
       "next_node_uuid": "n3",
-      "input_field_name": "data"
+      "input_field_name": "factor_data_1"
     },
     {
       "uuid": "l2",
       "previous_node_uuid": "n2",
-      "output_field_name": "financial_data",
-      "next_node_uuid": "n4",
-      "input_field_name": "data"
+      "output_field_name": "factor_data",
+      "next_node_uuid": "n3",
+      "input_field_name": "factor_data_2"
     },
     {
       "uuid": "l3",
       "previous_node_uuid": "n3",
-      "output_field_name": "factor_data",
-      "next_node_uuid": "n5",
-      "input_field_name": "factor_data_1"
-    },
-    {
-      "uuid": "l4",
-      "previous_node_uuid": "n4",
-      "output_field_name": "factor_data",
-      "next_node_uuid": "n5",
-      "input_field_name": "factor_data_2"
-    },
-    {
-      "uuid": "l5",
-      "previous_node_uuid": "n5",
       "output_field_name": "result",
-      "next_node_uuid": "n6",
+      "next_node_uuid": "n4",
       "input_field_name": "data"
     }
   ]
