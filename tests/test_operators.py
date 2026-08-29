@@ -27,10 +27,11 @@ def test_industry_neutralize_removes_industry_mean():
 def test_industry_neutralize_errors_without_data():
     """无行业数据时显式报错，不静默退化为全市场去均值"""
     factor = pd.DataFrame({"A": [1.0, 2.0], "B": [3.0, 4.0]})
-    # 清掉可能存在的模块级映射
+    # 清掉可能存在的模块级映射与 PIT 面板
     import backend.services.factor_operators as ops
 
     ops.__dict__.pop("_ACTIVE_INDUSTRY_MAP", None)
+    ops.__dict__.pop("_ACTIVE_INDUSTRY_PANEL", None)
     with pytest.raises(ValueError, match="行业分类"):
         INDUSTRY_NEUTRALIZE(factor)
 

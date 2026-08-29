@@ -644,9 +644,19 @@ def load_reference_panels(
     if market_cap is None:
         assumptions.append("无股本快照，市值面板不可用（市值中性化/换手率不可用）")
 
-    industry_map = reference_data.load_industry_map()
+    industry_map = reference_data.load_industry_map(
+        as_of=str(close.index[0])[:10] if len(close.index) else ""
+    )
     if not industry_map:
         assumptions.append("无行业分类快照，行业中性化不可用")
+    else:
+        snap_dates = reference_data.industry_snapshot_dates()
+        if len(snap_dates) <= 1:
+            assumptions.append(
+                "行业分类仅有单一快照"
+                + (f"（{snap_dates[0]}）" if snap_dates else "")
+                + "，整段区间按静态分类处理，历史行业变动未反映（PIT 需积累多期快照）"
+            )
 
     return {
         "tradable_mask": tradable,

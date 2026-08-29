@@ -388,7 +388,8 @@ def load_industry_map(as_of: str = "") -> dict[str, str]:
     if df is None or df.empty:
         return {}
     if as_of:
-        df = df[df["date"] <= as_of]
+        as_of_norm = _parse_date(as_of) or str(as_of)
+        df = df[df["date"] <= as_of_norm]
         if df.empty:
             # as_of 早于任何行业快照：宁可返回空（调用方退化为不按行业中性化），
             # 也不回退到 as_of 之后的「未来」行业造成前视
@@ -414,6 +415,58 @@ def load_index_membership(index_name: str) -> pd.DataFrame | None:
     ).fillna(False)
     mask.index = pd.to_datetime(mask.index)
     return mask.sort_index()
+
+
+def load_membership_mask(index_name: str, dates) -> pd.DataFrame | None:
+    """指数成分逐日 as-of 掩码：True=当日为该指数成分（index=日期, columns=代码）
+
+    从成分快照日起生效并前向填充；早于首次快照的日期为 NaN（不得向后借用未来
+    快照，调用方用 assumptions 明示）。无快照返回 None。
+    """
+    df = _read(_CONSTITUENTS_FILE)
+    if df is None or df.empty:
+        return None
+    df = df[df["index_name"] == index_name]
+    if df.empty:
+        return None
+    snap_dates = pd.to_datetime(df["date"]).dt.normalize()
+    pivot = df.pivot_table(
+        index=snap_dates, columns="code", values="index_name", aggfunc="count"
+    )
+    pivot = pivot > 0
+    target = pd.DatetimeIndex(pd.to_datetime(dates)).normalize()
+    all_dates = pd.DatetimeIndex(sorted(set(pivot.index) | set(target)))
+    aligned = pivot.reindex(all_dates).ffill().reindex(target)
+    return aligned
+
+
+def load_industry_panel(dates, codes=None) -> pd.DataFrame | None:
+    """逐日 as-of 行业面板：DataFrame(index=日期, columns=代码, values=行业名)
+
+    对每个日期取不晚于当日的最新行业快照并前向填充；早于首次快照的日期为 NaN
+    （不得向后借用未来快照，调用方用 assumptions 明示静态区间）。无快照返回 None。
+    """
+    df = _read(_INDUSTRY_FILE)
+    if df is None or df.empty:
+        return None
+    snap_dates = pd.to_datetime(df["date"]).dt.normalize()
+    pivot = df.pivot_table(
+        index=snap_dates, columns="code", values="industry", aggfunc="last"
+    ).sort_index()
+    if codes is not None:
+        pivot = pivot.reindex(columns=codes)
+    target = pd.DatetimeIndex(pd.to_datetime(dates)).normalize()
+    all_dates = pd.DatetimeIndex(sorted(set(pivot.index) | set(target)))
+    aligned = pivot.reindex(all_dates).ffill().reindex(target)
+    return aligned
+
+
+def industry_snapshot_dates() -> list[str]:
+    """已有行业快照的日期（升序），供调用方判断 as-of 覆盖范围"""
+    df = _read(_INDUSTRY_FILE)
+    if df is None or df.empty:
+        return []
+    return sorted(pd.to_datetime(df["date"]).dt.date.astype(str).unique().tolist())
 
 
 def list_snapshot_indices() -> list[str]:

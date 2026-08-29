@@ -132,28 +132,59 @@ def ZSCORE(x):
     return x.sub(mean, axis=0).div(std, axis=0)
 
 
-def INDUSTRY_NEUTRALIZE(x, industry_map=None):
-    """行业中性化：逐日截面在行业内去均值（剔离行业暴露）
+def INDUSTRY_NEUTRALIZE(x, industry_map=None, industry_panel=None):
+    """行业中性化：逐日截面在行业内去均值（剔离行业暴露），支持 point-in-time
 
-    industry_map: {code: industry} 行业分类映射；为空时从求值命名空间注入的
-    _INDUSTRY_MAP 取（由 build_operator_namespace 填入）。无行业数据时显式报错，
-    不再静默退化为全市场去均值（去均值请直接用 ZSCORE/减均值）。
+    industry_panel: 逐日 as-of 行业面板（index=日期, columns=代码, values=行业），
+        优先使用（PIT）；为空时从命名空间注入的 _ACTIVE_INDUSTRY_PANEL 取。
+    industry_map: {code: industry} 静态映射，作为面板未覆盖处的回退；为空时从
+        _ACTIVE_INDUSTRY_MAP 取。两者都无时显式报错，不再静默退化为全市场去均值。
+
+    逐日按当日行业分组去均值；面板未覆盖的单元格用静态映射的行业；完全无行业
+    归属的列保持原值（不静默去均值）。
     """
+    if industry_panel is None:
+        industry_panel = globals().get("_ACTIVE_INDUSTRY_PANEL")
     if industry_map is None:
         industry_map = globals().get("_ACTIVE_INDUSTRY_MAP")
-    if not industry_map:
+    if industry_map is None and industry_panel is None:
         raise ValueError(
             "INDUSTRY_NEUTRALIZE 需要行业分类数据 — 请先在「数据管理」页下载数据以采集行业快照"
         )
-    industry = pd.Series(industry_map)
-    # 仅保留有行业归属且在因子列中的股票
-    cols = [c for c in x.columns if c in industry.index]
+
+    cols = [
+        c
+        for c in x.columns
+        if (industry_map and c in industry_map)
+        or (industry_panel is not None and c in industry_panel.columns)
+    ]
     if not cols:
         raise ValueError("INDUSTRY_NEUTRALIZE：因子股票与行业分类无交集")
     sub = x[cols]
-    groups = industry.reindex(cols)
-    # 按行业分组做截面去均值（对每个日期/行业）
-    demeaned = sub.sub(sub.T.groupby(groups).transform("mean").T)
+
+    # 静态映射按列广播为基线，PIT 面板在有值处覆盖
+    static = pd.Series(industry_map or {})
+    base = pd.DataFrame(
+        np.tile(static.reindex(cols).to_numpy(), (len(sub.index), 1)),
+        index=sub.index,
+        columns=cols,
+        dtype=object,
+    )
+    if industry_panel is not None and not industry_panel.empty:
+        pit = industry_panel.reindex(index=sub.index, columns=cols)
+        if pit.notna().any().any():
+            base = base.where(pit.isna(), pit)
+
+    # 逐日按当日行业分组去均值
+    demeaned = sub.copy()
+    for d in sub.index:
+        groups = base.loc[d]
+        vals = sub.loc[d]
+        valid = vals.notna() & groups.notna()
+        if valid.any():
+            means = vals[valid].groupby(groups[valid]).transform("mean")
+            demeaned.loc[d, valid] = vals[valid] - means
+
     result = x.copy()
     result[cols] = demeaned
     return result
@@ -997,9 +1028,23 @@ def build_operator_namespace(
     fundamental: 可选 {fund_pb/fund_pe/fund_eps/fund_roe/...}: 点位(公告日)面板，
         使财务/估值因子可直接用 fund_XXX 表达式。
     """
-    # 行业映射注入模块全局，供 INDUSTRY_NEUTRALIZE 无参调用时取用
+    # 行业映射注入模块全局，供 INDUSTRY_NEUTRALIZE 无参调用时取用。
+    # 同时注入逐日 as-of 行业面板（PIT），供 INDUSTRY_NEUTRALIZE 优先做逐日中性化；
+    # 面板不可得时退回静态 map（静态 map 回填整段历史的前视局限由调用方 assumptions 明示）。
     if industry_map:
         globals()["_ACTIVE_INDUSTRY_MAP"] = industry_map
+        close_for_idx = panels.get("close")
+        if close_for_idx is not None and len(close_for_idx.index):
+            try:
+                from backend.services import reference_data
+
+                panel = reference_data.load_industry_panel(
+                    close_for_idx.index, list(close_for_idx.columns)
+                )
+                if panel is not None and not panel.empty:
+                    globals()["_ACTIVE_INDUSTRY_PANEL"] = panel
+            except Exception:
+                pass
 
     close = panels.get("close")
     volume = panels.get("volume")

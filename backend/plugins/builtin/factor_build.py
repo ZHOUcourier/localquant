@@ -52,7 +52,7 @@ def _build_eval_ns(
     # 行业分类快照（供 INDUSTRY_NEUTRALIZE 算子）；无快照时为空，算子调用时再报错
     from backend.services import reference_data
 
-    industry_map = reference_data.load_industry_map()
+    industry_map = reference_data.load_industry_map(as_of=start_date)
     ns = build_operator_namespace(panels, industry_map=industry_map)
     if isinstance(data, pd.DataFrame) and not data.empty:
         # 允许上游面板作为额外变量 df 参与公式（不覆盖基础字段）
