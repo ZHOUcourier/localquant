@@ -14,7 +14,8 @@ class ExperimentService:
     async def create(self, req: ExperimentCreate, status: str = "completed") -> dict:
         """创建实验记录（status 默认 completed，失败运行可传 failed）"""
         exp_id = str(uuid.uuid4())
-        now = int(time.time() * 1000)
+        # 全库时间戳统一为秒（前端按 new Date(ts * 1000) 渲染；曾误用毫秒）
+        now = int(time.time())
 
         db = await get_db()
         await db.execute(
