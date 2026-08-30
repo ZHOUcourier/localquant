@@ -147,9 +147,10 @@ async def research_briefing():
         data_start = min((e["start"] for e in equity_rows if e.get("start")), default=None)
         data_end = max((e["end"] for e in equity_rows if e.get("end")), default=None)
         n_days = max((int(e.get("rows") or 0) for e in equity_rows), default=0)
-        # 交易日历可得时以 QMT 交易日计；否则 n_days 只是缓存观测行数，明确标注
+        # 交易日历可得时以交易日计；否则 n_days 只是缓存观测行数，明确标注未验证
         trade_calendar = market_data._trading_calendar()
-        calendar = "qmt" if trade_calendar else "weekday_approx"
+        calendar = market_data.trading_calendar_source()
+        calendar_unverified = trade_calendar is None
         if trade_calendar and data_start and data_end:
             try:
                 start_ts = pd.Timestamp(data_start)
@@ -197,12 +198,18 @@ async def research_briefing():
             warnings.append("无分钟缓存，日内高频因子（m_*/ID_*/M_*）不可用")
         if not market_data._qmt.connected:
             warnings.append("QMT 未连接，行情/快照无法增量更新（仅 Windows + QMT 客户端可用）")
+        if calendar_unverified:
+            warnings.append(
+                "无可靠交易日历，n_days 为缓存观测行数（非交易日，未含节假日校正）；"
+                "年化/IC t 值/换手等统计口径仅供参考"
+            )
 
         briefing["research_readiness"] = {
             "ready": not blockers,
             "n_stocks": len(equity_codes),
             "n_days": n_days,
             "calendar": calendar,
+            "calendar_unverified": calendar_unverified,
             "data_start": data_start,
             "data_end": data_end,
             "reference_latest": ref_latest,

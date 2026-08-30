@@ -28,6 +28,7 @@ _INDUSTRY_FILE = "industry.parquet"
 _CAPITAL_FILE = "capital.parquet"
 _INSTRUMENT_FILE = "instrument.parquet"
 _UNIVERSE_FILE = "universe.parquet"
+_TRADING_CAL_FILE = "trading_calendar.parquet"
 
 # 可融资融券标的池候选板块名（QMT 各版本命名可能不同，取并集）
 _MARGIN_SECTORS = ["融资融券标的", "两融标的", "融资融券"]
@@ -467,6 +468,24 @@ def industry_snapshot_dates() -> list[str]:
     if df is None or df.empty:
         return []
     return sorted(pd.to_datetime(df["date"]).dt.date.astype(str).unique().tolist())
+
+
+def save_trading_calendar(dates) -> int:
+    """持久化交易日历到本地（QMT 首次拉取成功后调用，供离线复用）。返回日期数。"""
+    parsed = sorted({pd.Timestamp(d).date() for d in dates})
+    if not parsed:
+        return 0
+    df = pd.DataFrame({"date": [str(d) for d in parsed]})
+    df.to_parquet(_path(_TRADING_CAL_FILE), index=False)
+    return len(parsed)
+
+
+def load_trading_calendar() -> list | None:
+    """读取本地持久化交易日历（升序 date 列表）；无文件返回 None"""
+    df = _read(_TRADING_CAL_FILE)
+    if df is None or df.empty:
+        return None
+    return sorted(pd.to_datetime(df["date"]).dt.date.tolist())
 
 
 def list_snapshot_indices() -> list[str]:

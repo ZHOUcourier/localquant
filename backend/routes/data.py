@@ -414,7 +414,7 @@ async def quality_check():
 
     try:
         latest_trade = market_data._trading_calendar()
-        calendar_mode = "qmt" if latest_trade else "unavailable"
+        calendar_mode = market_data.trading_calendar_source() if latest_trade else "unavailable"
         calendar_set = {pd.Timestamp(d) for d in latest_trade} if latest_trade else None
     except Exception:
         latest_trade = None

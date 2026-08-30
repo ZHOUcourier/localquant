@@ -90,20 +90,21 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
         "staleness_days": (today - latest_ts.date()).days if latest_ts is not None else None,
         "stale_trade_days": stale_trade_days,
         "stale_threshold_trade_days": stale_threshold,
-        "calendar": "qmt" if trade_dates is not None else "weekday_approx",
+        "calendar": trading_calendar_source(),
+        "calendar_unverified": trade_dates is None,
         "stale_count": len(stale),
         "stale": stale[:50],
         "status": "ok" if not stale else "stale",
     }
 
 
-# 交易日历缓存（QMT 拉取失败/未连接时为 None → 用工作日近似）
-_trade_cal: dict = {"ts": 0.0, "dates": None}
+# 交易日历：优先 QMT（成功后持久化，离线可复用）；未连接读本地持久化日历；都无则 None
+_trade_cal: dict = {"ts": 0.0, "dates": None, "source": None}
 _TRADE_CAL_TTL = 6 * 3600
 
 
 def _trading_calendar() -> list | None:
-    """QMT 交易日历（SH 市场，覆盖 A 股主要交易日）；未连接/失败返回 None"""
+    """交易日历（SH 市场，覆盖 A 股主要交易日）；QMT/本地持久化均不可得时返回 None"""
     import time
 
     now = time.time()
@@ -111,18 +112,41 @@ def _trading_calendar() -> list | None:
         return _trade_cal["dates"]
     _trade_cal["ts"] = now
     _trade_cal["dates"] = None
-    if not _qmt.connected:
-        return None
-    try:
-        dates = _qmt.get_trading_dates(market="SH")
-        parsed = sorted(
-            {pd.Timestamp(d).date() for d in dates}
-        )
-        if parsed:
-            _trade_cal["dates"] = parsed
-    except Exception as e:
-        logger.warning(f"获取交易日历失败: {e}")
+    _trade_cal["source"] = None
+    if _qmt.connected:
+        try:
+            dates = _qmt.get_trading_dates(market="SH")
+            parsed = sorted({pd.Timestamp(d).date() for d in dates})
+            if parsed:
+                _trade_cal["dates"] = parsed
+                _trade_cal["source"] = "qmt"
+                try:
+                    from backend.services import reference_data
+
+                    reference_data.save_trading_calendar(parsed)
+                except Exception as e:
+                    logger.debug(f"交易日历持久化失败: {e}")
+        except Exception as e:
+            logger.warning(f"获取交易日历失败: {e}")
+    if _trade_cal["dates"] is None:
+        try:
+            from backend.services import reference_data
+
+            persisted = reference_data.load_trading_calendar()
+            if persisted:
+                _trade_cal["dates"] = persisted
+                _trade_cal["source"] = "persisted"
+        except Exception:
+            pass
     return _trade_cal["dates"]
+
+
+def trading_calendar_source() -> str:
+    """交易日历来源：qmt（在线拉取）/ persisted（本地持久化）/ weekday_approx（无日历，工作日近似）"""
+    cal = _trading_calendar()
+    if cal is None:
+        return "weekday_approx"
+    return _trade_cal.get("source") or "persisted"
 
 
 PRICE_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
