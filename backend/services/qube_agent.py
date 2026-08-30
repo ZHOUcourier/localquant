@@ -510,6 +510,17 @@ async def _tool_set_backtest_params(args: dict, session_id: str) -> dict:
         "execute_at",
     ]
     params = {k: args[k] for k in keys if args.get(k) not in (None, "")}
+    # 即时校验仓位边界，避免 AI 设了 >1 直到 run 才报错（浪费一轮交互）
+    if "max_gross_exposure" in params and float(params["max_gross_exposure"]) > 1.0:
+        return {
+            "ok": False,
+            "error": "max_gross_exposure 不能超过 1：本系统仅支持普通股票多头，不融资、不加杠杆",
+        }
+    if "normalize" in params and params["normalize"] != "long_only":
+        return {
+            "ok": False,
+            "error": "normalize 仅支持 long_only：本系统只做普通股票多头，不做空、不融券",
+        }
     stored = _SESSION_BT_PARAMS.setdefault(session_id, {})
     stored.update(params)
     return {"ok": True, "params": stored}
@@ -1039,7 +1050,7 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                     },
                     "max_gross_exposure": {
                         "type": "number",
-                        "description": "最大日总杠杆 Σ|w|，默认 3",
+                        "description": "最大日总仓位 Σ|w|，普通股票多头固定为 1（不可 >1，不融资不加杠杆）",
                     },
                     "take_profit": {"type": "number", "description": "单仓止盈比例，0=关闭"},
                     "stop_loss": {"type": "number", "description": "单仓止损比例，0=关闭"},

@@ -18,7 +18,6 @@ interface ConfigData {
   ai_cli: string
   ai_cli_model: string
   ai_cli_effort: string
-  factor_service_url: string
   backend_port: number
   frontend_port: number
   data_dir: string
@@ -75,7 +74,6 @@ const form = reactive({
   ai_cli: 'claude',
   ai_cli_model: '',
   ai_cli_effort: 'default',
-  factor_service_url: '',
   backend_port: 8000,
   frontend_port: 5173,
 })
@@ -136,7 +134,6 @@ watch(config, (c) => {
   form.ai_cli = c.ai_cli ?? 'claude'
   form.ai_cli_model = c.ai_cli_model ?? ''
   form.ai_cli_effort = c.ai_cli_effort ?? 'default'
-  form.factor_service_url = c.factor_service_url ?? ''
   form.backend_port = c.backend_port ?? 8000
   form.frontend_port = c.frontend_port ?? 5173
 }, { immediate: true })
@@ -155,7 +152,6 @@ const saveMutation = useMutation({
       ai_cli: form.ai_cli,
       ai_cli_model: form.ai_cli_model,
       ai_cli_effort: form.ai_cli_effort,
-      factor_service_url: form.factor_service_url,
       backend_port: Number(form.backend_port),
       frontend_port: Number(form.frontend_port),
     }
@@ -404,10 +400,6 @@ function selectProvider(p: ProviderInfo) {
               <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">前端端口</label>
               <Input :model-value="String(form.frontend_port)" type="number" @update:model-value="(v: string) => (form.frontend_port = Number(v))" />
             </div>
-          </div>
-          <div>
-            <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">因子研究服务地址</label>
-            <Input v-model="form.factor_service_url" placeholder="如: http://localhost:8001" />
           </div>
           <div class="flex items-start gap-1.5 pt-1">
             <Info :size="13" class="mt-0.5 shrink-0 text-[#9a9898]" />

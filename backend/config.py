@@ -59,9 +59,6 @@ class Settings(BaseSettings):
     sandbox_image: str = "opensandbox/code-interpreter:v1.1.0"
     sandbox_server_domain: str = "localhost:8080"
 
-    # 因子研究服务
-    factor_service_url: str = "http://localhost:8001"
-
     # 数据库
     database_url: str = "sqlite+aiosqlite:///./data/localquant.db"
 

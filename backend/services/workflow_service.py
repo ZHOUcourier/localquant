@@ -347,9 +347,11 @@ async def run(workflow_id: str) -> dict[str, Any] | None:
     finally:
         await db.close()
 
-    await _create_workflow_experiment(
-        run_id, workflow_id, wf.get("name", ""), ctx.node_outputs
-    )
+    # 仅运行成功时才落实验记录，避免失败运行污染实验列表（status=completed 但 metrics 为空）
+    if ctx.status == "completed":
+        await _create_workflow_experiment(
+            run_id, workflow_id, wf.get("name", ""), ctx.node_outputs
+        )
 
     return {
         "id": run_id,
@@ -385,11 +387,17 @@ _METRIC_KEYS = [
 async def _create_workflow_experiment(
     run_id: str, workflow_id: str, workflow_name: str, node_outputs: dict[str, Any]
 ) -> None:
-    """工作流运行完成后自动落一条实验记录，便于与回测/因子结果统一对比"""
+    """工作流运行完成后自动落一条实验记录，便于与回测/因子结果统一对比
+
+    仅当提取到指标时才创建，避免空指标的实验记录污染对比。
+    """
     try:
         from backend.models.experiment import ExperimentCreate
         from backend.services.experiment_service import experiment_service
 
+        metrics = _extract_metrics(node_outputs)
+        if not metrics:
+            return
         await experiment_service.create(
             ExperimentCreate(
                 source="workflow",
@@ -398,7 +406,7 @@ async def _create_workflow_experiment(
                 note="由工作流运行自动创建",
                 tags=["workflow", "auto"],
                 params={"workflow_id": workflow_id},
-                metrics=_extract_metrics(node_outputs),
+                metrics=metrics,
             )
         )
     except Exception:

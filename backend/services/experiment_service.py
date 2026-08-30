@@ -11,8 +11,8 @@ from backend.models.experiment import ExperimentCreate
 class ExperimentService:
     """实验管理服务"""
 
-    async def create(self, req: ExperimentCreate) -> dict:
-        """创建实验记录"""
+    async def create(self, req: ExperimentCreate, status: str = "completed") -> dict:
+        """创建实验记录（status 默认 completed，失败运行可传 failed）"""
         exp_id = str(uuid.uuid4())
         now = int(time.time() * 1000)
 
@@ -30,7 +30,7 @@ class ExperimentService:
                 json.dumps(req.tags),
                 json.dumps(req.params),
                 json.dumps(req.metrics),
-                "completed",
+                status,
                 now,
             ),
         )

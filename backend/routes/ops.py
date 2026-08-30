@@ -103,8 +103,11 @@ async def research_briefing():
         from collections import Counter
 
         stages = Counter(h["stage"] for h in health)
+        # pool_n = 真实因子池规模（factor_pool 表）；体检范围是整个因子库，二者区分开
+        pool = await factor_research.get_pool()
         briefing["factors"] = {
-            "pool_n": len(health),
+            "pool_n": len(pool),
+            "library_health_n": len(health),
             "stages": dict(stages),
             "n_with_snapshot": sum(1 for h in health if h["n_snapshots"] >= 2),
             "decaying": [

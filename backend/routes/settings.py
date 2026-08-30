@@ -25,7 +25,6 @@ EDITABLE_KEYS = {
     "AI_CLI": "ai_cli",
     "AI_CLI_MODEL": "ai_cli_model",
     "AI_CLI_EFFORT": "ai_cli_effort",
-    "FACTOR_SERVICE_URL": "factor_service_url",
     "BACKEND_PORT": "backend_port",
     "FRONTEND_PORT": "frontend_port",
 }
@@ -43,7 +42,6 @@ class ConfigUpdate(BaseModel):
     ai_cli: str | None = None
     ai_cli_model: str | None = None
     ai_cli_effort: str | None = None
-    factor_service_url: str | None = None
     backend_port: int | None = None
     frontend_port: int | None = None
 
@@ -73,7 +71,6 @@ async def get_config():
         "ai_cli": settings.ai_cli,
         "ai_cli_model": settings.ai_cli_model,
         "ai_cli_effort": settings.ai_cli_effort or "default",
-        "factor_service_url": settings.factor_service_url,
         "backend_port": settings.backend_port,
         "frontend_port": settings.frontend_port,
         "data_dir": str(settings.data_dir),
