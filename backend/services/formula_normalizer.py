@@ -353,6 +353,12 @@ def normalize_formula(src: str) -> str:
     # （字符串已被掩码，此处不会误伤字面量）
     if ":" in s:
         s = _replace_colons_outside_strings(s)
+    # Alpha101 方言：ADV(n) = n 日平均成交量，单参形式翻译为双参算子调用
+    # （求值环境里 ADV 定义为 ADV(volume, n)；ADV20 等预计算面板不受影响）
+    s = re.sub(r"\bADV\(\s*(\d+(?:\.\d+)?)\s*\)", r"ADV(volume,\1)", s, flags=re.IGNORECASE)
+    # Alpha101 方言：裸 RETURNS 是日收益面板变量，不是函数调用；
+    # 求值命名空间中 RETURNS 是函数对象，面板注册为 ret（RETURNS(x,n) 调用不受影响）
+    s = re.sub(r"\bRETURNS\b(?!\s*\()", "ret", s, flags=re.IGNORECASE)
     # 隐式乘法：(a)(b) → (a)*(b)
     s = re.sub(r"\)\s*\(", ")*(", s)
     s = _balance_parens(s)

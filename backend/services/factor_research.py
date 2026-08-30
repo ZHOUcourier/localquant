@@ -1434,6 +1434,15 @@ class FactorResearchService:
                     "message",
                     "本地行情数据不足，未重算 — 请先在数据管理页下载足够的股票与区间数据。",
                 )
+                # 公式类错误如实回写状态（数据不足不改状态：那不是公式的问题）
+                fail_status = self._FAILED_FORMULA_STATUS.get(code)
+                if fail_status:
+                    await db.execute(
+                        "UPDATE preset_factors SET formula_status = ? WHERE id = ?",
+                        (fail_status, factor_id),
+                    )
+                    await db.commit()
+                    factor["formula_status"] = fail_status
             # 溯源：把本次重算的参数与指标写进 provenance，保证可复现
             try:
                 from backend.services.provenance import record_provenance
@@ -1804,6 +1813,28 @@ class FactorResearchService:
             "long_short_vol": vol,
         }
 
+    # 运行时公式错误码 → 库内状态；数据不足/分钟缓存缺失不改状态（非公式问题）
+    _FAILED_FORMULA_STATUS = {
+        "syntax_error": "syntax_error",
+        "undefined_name": "unsupported",
+        "runtime_error": "runtime_error",
+    }
+
+    async def _writeback_failed_formula_status(self, factor_id, error_code) -> None:
+        """扫描/重算实测失败的公式如实回写状态，不再以 executable 虚报"""
+        status = self._FAILED_FORMULA_STATUS.get(error_code or "")
+        if not status or not factor_id:
+            return
+        db = await get_db()
+        try:
+            await db.execute(
+                "UPDATE preset_factors SET formula_status = ? WHERE id = ?",
+                (status, factor_id),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
     async def scan_factors_stream(
         self,
         factor_ids: list[int] | None = None,
@@ -1954,6 +1985,7 @@ class FactorResearchService:
 
         from backend.services import reference_data
         from backend.services.factor_operators import (
+            FormulaError,
             build_operator_namespace,
             eval_factor_formula,
         )
@@ -2038,6 +2070,8 @@ class FactorResearchService:
                     "n_stocks": int(factor_df.shape[1]),
                     "n_dates": int(factor_df.shape[0]),
                 }
+            except FormulaError as e:
+                return {**item, "ok": False, "error": str(e)[:300], "error_code": e.code}
             except Exception as e:
                 return {**item, "ok": False, "error": str(e)[:300]}
 
@@ -2052,6 +2086,9 @@ class FactorResearchService:
                     await self._persist_scan_result(res, return_data)
                 else:
                     failed_names.append(res.get("factor_name", ""))
+                    await self._writeback_failed_formula_status(
+                        res.get("factor_id"), res.get("error_code")
+                    )
                 yield _sse("factor_done", res)
 
         n_stocks = len(panels["close"].columns)

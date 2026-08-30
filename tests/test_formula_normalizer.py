@@ -208,6 +208,43 @@ def test_real_dialect_formulas_evaluate():
         assert out.shape == panels["close"].shape
 
 
+# ── Alpha101 方言：ADV(n) 单参与裸 RETURNS ─────────────────
+
+
+def test_adv_single_arg_rewritten_to_volume_form():
+    assert normalize_formula("ADV(20)") == "ADV(volume,20)"
+    out = normalize_formula("rank(-1 * delta(close, 1) / ADV(60))")
+    assert "ADV(volume,60)" in out and _parses(out)
+    # 大小写不敏感
+    assert normalize_formula("adv(5)") == "ADV(volume,5)"
+
+
+def test_adv_two_arg_and_panel_aliases_untouched():
+    assert normalize_formula("ADV(volume, 20)") == "ADV(volume, 20)"
+    assert normalize_formula("adv20 / close") == "adv20 / close"
+    assert normalize_formula("ADV20 / CLOSE") == "ADV20 / CLOSE"
+
+
+def test_bare_returns_is_panel_variable():
+    assert normalize_formula("RETURNS") == "ret"
+    out = normalize_formula("rank(-1 * RETURNS * volume)")
+    assert "ret" in out and "RETURNS" not in out and _parses(out)
+    assert normalize_formula("std(returns, 20)") == "std(ret, 20)"
+
+
+def test_returns_call_form_untouched():
+    # RETURNS(x, n) 是函数调用，不得被改写成面板变量
+    assert normalize_formula("RETURNS(close, 5)") == "RETURNS(close, 5)"
+    assert normalize_formula("std(RETURNS(close,1),20)") == "std(RETURNS(close,1),20)"
+    # RETURNS_ 面板别名不是裸 RETURNS
+    assert normalize_formula("RETURNS_ + 1") == "RETURNS_ + 1"
+
+
+def test_adv_returns_rewrites_inside_strings_untouched():
+    out = normalize_formula("ID_SLICE(m_volume, 'ADV(20)', 'RETURNS')")
+    assert "'ADV(20)'" in out and "'RETURNS'" in out
+
+
 # ── 真实语料黄金测试 ───────────────────────────────────────
 
 

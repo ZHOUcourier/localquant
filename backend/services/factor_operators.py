@@ -1304,6 +1304,10 @@ def build_operator_namespace(
         ns[name] = fn
         ns[name.lower()] = fn  # 小写别名（Alpha191 公式多为小写）
 
+    # 别名循环会用 RETURNS 函数覆盖小写 returns 面板，恢复面板语义
+    # （大写 RETURNS 保持为函数，供 RETURNS(x, n) 调用）
+    ns["returns"] = returns_panel
+
     return ns
 
 
