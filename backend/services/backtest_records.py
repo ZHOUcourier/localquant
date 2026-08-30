@@ -8,6 +8,7 @@ QUBE 回测、因子池组合回测、/backtest/run 与 /backtest/run-strategy �
 from __future__ import annotations
 
 import json
+import math
 import time
 import uuid
 from typing import Any
@@ -61,6 +62,10 @@ def _trade_tail(
     """
     if positions.empty:
         return []
+    if prices is not None and not prices.empty:
+        # positions 已按引擎 common_idx/common_cols 对齐，而入参 prices 可能是
+        # 未对齐的原始面板（行数/顺序不同）；按标签对齐后再取价，否则错位。
+        prices = prices.reindex(index=positions.index, columns=positions.columns)
     dw = positions.diff().fillna(positions)
     rows, cols = np.nonzero(np.abs(dw.to_numpy(dtype=float)) > 1e-9)
     if len(rows) == 0:
@@ -74,7 +79,7 @@ def _trade_tail(
         code = positions.columns[c]
         w = float(dw.iloc[r, c])
         price = float(prices.iloc[r, c]) if prices.shape[0] > r and prices.shape[1] > c else 0.0
-        if price <= 0:
+        if not math.isfinite(price) or price <= 0:
             continue
         out.append(
             {

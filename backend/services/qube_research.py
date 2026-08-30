@@ -11,6 +11,7 @@
 
 import asyncio
 import json
+import math
 import time
 import uuid
 
@@ -637,6 +638,17 @@ async def execute_backtest_run(run_id: str) -> dict:
         raise
 
 
+def _finite_clean(value):
+    """历史回测记录可能落库了 NaN（如错位取价），严格 JSON 序列化不容忍非有限浮点。"""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, list):
+        return [_finite_clean(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _finite_clean(v) for k, v in value.items()}
+    return value
+
+
 def run_row_to_dict(row, with_detail: bool = False) -> dict:
     params = json.loads(row["params_json"] or "{}")
     if not with_detail:
@@ -649,13 +661,13 @@ def run_row_to_dict(row, with_detail: bool = False) -> dict:
         "status": row["status"],
         "progress": json.loads(row["progress_json"] or "{}"),
         "params": params,
-        "metrics": json.loads(row["metrics_json"] or "{}"),
+        "metrics": _finite_clean(json.loads(row["metrics_json"] or "{}")),
         "error": row["error"],
         "created_at": row["created_at"],
         "finished_at": row["finished_at"],
     }
     if with_detail:
-        d["equity"] = json.loads(row["equity_json"] or "[]")
-        d["trades"] = json.loads(row["trades_json"] or "[]")
+        d["equity"] = _finite_clean(json.loads(row["equity_json"] or "[]"))
+        d["trades"] = _finite_clean(json.loads(row["trades_json"] or "[]"))
         d["log"] = row["log_text"] or ""
     return d
