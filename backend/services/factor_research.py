@@ -923,15 +923,22 @@ class FactorResearchService:
         }
 
     def factor_decay(
-        self, factor_data: pd.DataFrame, return_data: pd.DataFrame, max_period: int = 30
+        self,
+        factor_data: pd.DataFrame,
+        return_data: pd.DataFrame,
+        max_period: int = 30,
+        mask: pd.DataFrame | None = None,
     ) -> dict:
-        """因子衰减分析"""
+        """因子衰减分析（可选 mask：逐日剔除不可交易标的，与 IC 分析同口径）"""
         decay = []
         for period in range(1, max_period + 1):
             ic_values = []
             dates = factor_data.index
             for i in range(len(dates) - period):
                 f = factor_data.loc[dates[i]].dropna()
+                if mask is not None and dates[i] in mask.index:
+                    m = mask.loc[dates[i]].reindex(f.index).fillna(False)
+                    f = f[m]
                 # 与 IC 汇总表同口径：取 T→T+p 复利收益而非第 p 日单日收益
                 if dates[i + period] in return_data.index:
                     comp = (1.0 + return_data.loc[dates[i + 1]: dates[i + period]]).prod() - 1.0

@@ -39,6 +39,7 @@ class ICAnalysisRequest(BaseModel):
     factor_token: str = ""
     return_token: str = ""
     periods: list[int] = Field(default=[1, 5, 10, 20])
+    apply_tradable_mask: bool = True  # 应用可交易掩码（停牌/ST/次新），与批量扫描口径一致
 
 
 class QuantileRequest(BaseModel):
@@ -49,6 +50,7 @@ class QuantileRequest(BaseModel):
     factor_token: str = ""
     return_token: str = ""
     n_groups: int = 5
+    apply_tradable_mask: bool = True
 
 
 class AlphaLensRequest(BaseModel):
@@ -61,6 +63,7 @@ class AlphaLensRequest(BaseModel):
     periods: list[int] = [1, 5, 10]
     quantiles: int = 5
     sector_map: dict = {}  # {股票代码: 行业名}；空则不做行业分组
+    apply_tradable_mask: bool = True
 
 
 class NeutralizeRequest(BaseModel):

@@ -208,6 +208,21 @@ def _resolve_panel(data: dict, token: str, field: str) -> pd.DataFrame:
     return df
 
 
+def _resolve_tradable_mask(token: str, like: pd.DataFrame) -> pd.DataFrame | None:
+    """从 artifact token 解析可交易掩码（可选）；无掩码返回 None，并对齐到 like。"""
+    if not token:
+        return None
+    from backend.services.panel_artifact import load_token_panel
+
+    try:
+        mask = load_token_panel(None, token, "tradable_mask")
+    except Exception:
+        return None
+    if mask is None or mask.empty:
+        return None
+    return mask.reindex(index=like.index, columns=like.columns)
+
+
 class FactorComputeRequest(BaseModel):
     mode: str = "formula"  # formula | code
     formula: str = ""
@@ -328,12 +343,22 @@ async def compute_factor(req: FactorComputeRequest):
 
     from backend.services.panel_artifact import build_panel_response
 
+    # 可交易掩码（停牌/ST/次新），与批量扫描 / QUBE 同一口径；随 artifact 一并
+    # 落盘，供下游分析接口统一应用，避免扫描页与研究页 IC 口径不一致。
+    try:
+        tradable_mask = market_data.build_cross_section_mask(panels)
+    except Exception:
+        tradable_mask = None
+    panels_out: dict = {"factor_data": factor, "return_data": returns}
+    if tradable_mask is not None:
+        tradable_mask = tradable_mask.reindex(index=factor.index, columns=factor.columns)
+        panels_out["tradable_mask"] = tradable_mask
+
     # 全市场面板不要整表 JSON 回传：小样本内联，大样本落本地 artifact +
     # 受限预览；下游分析接口接受同一 token。
-    return build_panel_response(
-        {"factor_data": factor, "return_data": returns},
-        inline_names=["factor_data", "return_data"],
-    )
+    resp = build_panel_response(panels_out, inline_names=["factor_data", "return_data"])
+    resp["has_tradable_mask"] = tradable_mask is not None
+    return resp
 
 
 @router.post("/ic-analysis")
@@ -342,7 +367,12 @@ async def ic_analysis(req: ICAnalysisRequest):
         factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
         return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
         factor_df, return_df = _align_factor_return(factor_df, return_df)
-        result = factor_research.ic_analysis(factor_df, return_df, req.periods)
+        mask = (
+            _resolve_tradable_mask(req.factor_token, factor_df)
+            if req.apply_tradable_mask
+            else None
+        )
+        result = factor_research.ic_analysis(factor_df, return_df, req.periods, mask=mask)
         tasks.spawn(
             _spawn_provenance(
                 "factor_ic",
@@ -367,7 +397,12 @@ async def quantile_analysis(req: QuantileRequest):
         factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
         return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
         factor_df, return_df = _align_factor_return(factor_df, return_df)
-        result = factor_research.quantile_analysis(factor_df, return_df, req.n_groups)
+        mask = (
+            _resolve_tradable_mask(req.factor_token, factor_df)
+            if req.apply_tradable_mask
+            else None
+        )
+        result = factor_research.quantile_analysis(factor_df, return_df, req.n_groups, mask=mask)
         tasks.spawn(
             _spawn_provenance(
                 "factor_quantile",
@@ -393,8 +428,13 @@ async def factor_decay(req: ICAnalysisRequest):
         factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
         return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
         factor_df, return_df = _align_factor_return(factor_df, return_df)
+        mask = (
+            _resolve_tradable_mask(req.factor_token, factor_df)
+            if req.apply_tradable_mask
+            else None
+        )
         max_period = max(req.periods) if req.periods else 20
-        return factor_research.factor_decay(factor_df, return_df, max_period)
+        return factor_research.factor_decay(factor_df, return_df, max_period, mask=mask)
     except Exception as e:
         logger.error(f"因子衰减分析失败: {e}")
         raise HTTPException(status_code=500, detail=f"因子衰减分析失败: {e}")
@@ -422,8 +462,13 @@ async def full_analysis(req: QuantileRequest):
         factor_df = _resolve_panel(req.factor_data, req.factor_token, "factor_data")
         return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
         factor_df, return_df = _align_factor_return(factor_df, return_df)
+        mask = (
+            _resolve_tradable_mask(req.factor_token, factor_df)
+            if req.apply_tradable_mask
+            else None
+        )
         res = factor_research.full_factor_analysis(
-            factor_df, return_df, n_groups=req.n_groups
+            factor_df, return_df, n_groups=req.n_groups, mask=mask
         )
         tasks.spawn(
             _spawn_provenance(
@@ -455,6 +500,10 @@ async def alphalens_analysis(req: AlphaLensRequest):
         return_df = _resolve_panel(req.return_data, req.return_token, "return_data")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"数据解析失败: {e}")
+    if req.apply_tradable_mask:
+        mask = _resolve_tradable_mask(req.factor_token, factor_df)
+        if mask is not None:
+            factor_df = factor_df.where(mask)
     try:
         return full_alphalens_analysis(
             factor_df,

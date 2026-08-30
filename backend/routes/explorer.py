@@ -30,11 +30,17 @@ _SQL_FORBIDDEN = re.compile(
 )
 
 
-def _cache_files(period: str = "1d") -> list[Path]:
+def _cache_files(period: str = "1d", exclude_indices: bool = False) -> list[Path]:
     d = settings.cache_dir / period
     if not d.exists():
         return []
-    return sorted(d.glob("*.parquet"))
+    files = sorted(d.glob("*.parquet"))
+    if not exclude_indices:
+        return files
+    from backend.services import market_data
+
+    keep = set(market_data.list_cached_codes(period, exclude_indices=True))
+    return [f for f in files if _file_code(f) in keep]
 
 
 def _file_code(path: Path) -> str:
@@ -364,7 +370,7 @@ class ScanRequest(BaseModel):
 @router.post("/scan")
 async def market_scan(body: ScanRequest):
     """按日期对全部缓存股票做条件扫描（如 close > 10; volume > 1000000）"""
-    files = _cache_files(body.period)
+    files = _cache_files(body.period, exclude_indices=True)
     if not files:
         err = market_data.no_cache_error_detail(body.period)
         return {
@@ -450,7 +456,7 @@ class CrossSectionRequest(BaseModel):
 @router.post("/cross-section")
 async def cross_section(body: CrossSectionRequest):
     """某日全市场指定字段的截面统计与分布直方图"""
-    files = _cache_files(body.period)
+    files = _cache_files(body.period, exclude_indices=True)
     if not files:
         err = market_data.no_cache_error_detail(body.period)
         return {
