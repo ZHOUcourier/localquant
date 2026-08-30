@@ -380,20 +380,21 @@ class PortfolioRequest(BaseModel):
 async def portfolio_backtest(req: PortfolioRequest):
     """因子池 → 组合回测闭环：因子求值 → 合成（等权/IC加权）→ Top-N 做多 →
     回测 → 绩效 → 风格归因（研究主链路一键打通）"""
-    from backend.services.factor_research import extract_formula
+    from backend.services.factor_research import extract_formula, validate_local_sample
 
     db = await get_db()
     try:
         if req.factor_ids:
             marks = ",".join("?" * len(req.factor_ids))
             cursor = await db.execute(
-                f"SELECT id, factor_name, description, metric_source FROM preset_factors "
-                f"WHERE id IN ({marks}) ORDER BY id",
+                f"SELECT id, factor_name, description, metric_source, metric_sample_json "
+                f"FROM preset_factors WHERE id IN ({marks}) ORDER BY id",
                 req.factor_ids,
             )
         else:
             cursor = await db.execute(
-                "SELECT pf.id, pf.factor_name, pf.description, pf.metric_source "
+                "SELECT pf.id, pf.factor_name, pf.description, pf.metric_source, "
+                "pf.metric_sample_json "
                 "FROM preset_factors pf "
                 "INNER JOIN factor_pool fp ON fp.factor_id = pf.id ORDER BY fp.added_at DESC"
             )
@@ -403,9 +404,15 @@ async def portfolio_backtest(req: PortfolioRequest):
 
     factors = []
     skipped: list[str] = []
+    insufficient: list[str] = []
     for r in rows:
         if r.get("metric_source") != "local_recalc":
             skipped.append(str(r["factor_name"]))
+            continue
+        # 与入池同一门槛：小样本因子不得经 factor_ids 绕过入池检查直送组合回测
+        reason = validate_local_sample(r["factor_name"], r.get("metric_sample_json"))
+        if reason:
+            insufficient.append(reason)
             continue
         formula = extract_formula(r.get("description"))
         if formula:
@@ -419,6 +426,13 @@ async def portfolio_backtest(req: PortfolioRequest):
             + "、".join(skipped[:10])
             + ("…" if len(skipped) > 10 else "")
             + "。请先在因子详情页重算后再试。",
+        )
+    if insufficient:
+        raise HTTPException(
+            status_code=400,
+            detail="以下因子未达到最小样本门槛，禁止进入组合回测：\n"
+            + "\n".join(insufficient[:10])
+            + ("\n…" if len(insufficient) > 10 else ""),
         )
     if not factors:
         raise HTTPException(status_code=400, detail="所选因子均无可用公式（仅支持公式型因子）")

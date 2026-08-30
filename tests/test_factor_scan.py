@@ -217,6 +217,52 @@ class TestScanFactors:
         assert "无缓存行情数据" in done["message"]
 
 
+class TestSampleGate:
+    """P1-E：最小样本门槛必须同时守住入池与组合回测两条入口"""
+
+    def _seed_local_recalc(self, tmp_path, monkeypatch, n_stocks: int, n_dates: int) -> int:
+        from backend import database
+
+        db_path = str(tmp_path / "gate.db")
+        monkeypatch.setattr(database, "DB_PATH", Path(db_path))
+        asyncio.run(database.init_db())
+        fid = _insert_preset_factor(db_path, "mom20", _synthetic_formula(), "TECHNICAL")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE preset_factors SET metric_source='local_recalc', metric_sample_json=? "
+            "WHERE id=?",
+            (json.dumps({"n_stocks": n_stocks, "n_dates": n_dates}), fid),
+        )
+        conn.commit()
+        conn.close()
+        return fid
+
+    def test_add_to_pool_rejects_small_sample(self, tmp_path, monkeypatch):
+        fid = self._seed_local_recalc(tmp_path, monkeypatch, n_stocks=20, n_dates=100)
+        with pytest.raises(ValueError, match="样本门槛"):
+            asyncio.run(factor_research.add_to_pool(fid))
+
+    def test_portfolio_rejects_small_sample_bypass(self, tmp_path, monkeypatch):
+        """小样本因子经 factor_ids 直送 /portfolio（绕过入池）同样必须被拒"""
+        from fastapi import HTTPException
+
+        from backend.routes.backtest import PortfolioRequest, portfolio_backtest
+
+        fid = self._seed_local_recalc(tmp_path, monkeypatch, n_stocks=20, n_dates=100)
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(portfolio_backtest(PortfolioRequest(factor_ids=[fid])))
+        assert ei.value.status_code == 400
+        assert "样本门槛" in ei.value.detail
+
+    def test_validate_local_sample_boundaries(self):
+        from backend.services.factor_research import validate_local_sample
+
+        assert validate_local_sample("f", json.dumps({"n_stocks": 300, "n_dates": 252})) is None
+        assert validate_local_sample("f", json.dumps({"n_stocks": 299, "n_dates": 252}))
+        assert validate_local_sample("f", json.dumps({"n_stocks": 300, "n_dates": 251}))
+        assert validate_local_sample("f", None)  # 无样本记录视同未达标
+
+
 class TestFactorHealth:
     def test_health_with_history(self, tmp_path, monkeypatch):
         from pathlib import Path

@@ -30,6 +30,29 @@ def _parse_metric_sample(raw) -> dict:
         return {}
 
 
+# 样本门槛（入池 / 组合回测共用）：方法验证下限
+POOL_MIN_STOCKS = 300
+POOL_MIN_DATES = 252
+
+
+def validate_local_sample(factor_name: str, metric_sample_json) -> str | None:
+    """样本门槛：本地重算样本未达方法验证下限时返回原因，达标返回 None。
+
+    入池（add_to_pool）与组合回测（/api/backtest/portfolio）共用，
+    防止小样本因子绕过入池门槛、经 factor_ids 直送组合回测。
+    """
+    sample = _parse_metric_sample(metric_sample_json)
+    n_stocks = int(sample.get("n_stocks") or 0)
+    n_dates = int(sample.get("n_dates") or 0)
+    if n_stocks < POOL_MIN_STOCKS or n_dates < POOL_MIN_DATES:
+        return (
+            f"「{factor_name}」本地样本仅 {n_stocks} 只股票 / {n_dates} 个交易日，"
+            f"未达到最小样本门槛（≥{POOL_MIN_STOCKS} 只、≥{POOL_MIN_DATES} 个交易日）；"
+            "请先补全 QMT 行情后重算"
+        )
+    return None
+
+
 def _sample_window_warning(start_date, data_date) -> str | None:
     """样本窗口警示：不足 2 年时提示统计量置信度（因子体检同类口径）"""
     try:
@@ -1503,19 +1526,14 @@ class FactorResearchService:
             if not row:
                 raise ValueError("因子不存在")
             source = row["metric_source"] or ""
-            sample = _parse_metric_sample(row["metric_sample_json"])
             if source != "local_recalc":
                 raise ValueError(
                     f"「{row['factor_name']}」的指标仍为外部参考值，未基于本地 QMT 样本重算；"
                     "请先在因子详情页点击「重算」再入池"
                 )
-            n_stocks = int(sample.get("n_stocks") or 0)
-            n_dates = int(sample.get("n_dates") or 0)
-            if n_stocks < 300 or n_dates < 252:
-                raise ValueError(
-                    f"「{row['factor_name']}」本地样本仅 {n_stocks} 只股票 / {n_dates} 个交易日，"
-                    "未达到入池门槛（≥300 只、≥252 个交易日）；请先补全 QMT 行情后重算"
-                )
+            reason = validate_local_sample(row["factor_name"], row["metric_sample_json"])
+            if reason:
+                raise ValueError(reason)
             await db.execute(
                 "INSERT INTO factor_pool (factor_id) VALUES (?)", (factor_id,)
             )
