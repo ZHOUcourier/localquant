@@ -43,7 +43,7 @@ class RunBacktestRequest(BaseModel):
     stop_loss: float = 0.0  # 单仓止损比例（0=关闭）
     trailing_stop: float = 0.0  # 移动止损比例（0=关闭）
     shortable_codes: list[str] = []  # 兼容旧字段；系统只做多，已不参与交易逻辑
-    execute_at: str = "next_close"  # next_close=信号日收盘 / tail=尾盘 / next_open=次日开盘
+    execute_at: str = "next_close"  # next_close=次日(T+1)收盘 / tail=信号日尾盘 / next_open=次日开盘
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
@@ -77,7 +77,7 @@ class RunStrategyRequest(BaseModel):
     take_profit: float = 0.0
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
-    execute_at: str = "next_close"  # next_close / tail / next_open（开→收计收益）
+    execute_at: str = "next_close"  # next_close=次日(T+1)收盘 / tail=信号日尾盘 / next_open=次日开盘
     shortable_codes: list[str] = []  # 兼容旧字段；系统只做多，已不参与交易逻辑
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
@@ -618,7 +618,7 @@ class CreateRunRequest(BaseModel):
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
     stock_pool: list[str] = []
-    execute_at: str = "next_close"  # next_close / tail / next_open
+    execute_at: str = "next_close"  # next_close=次日(T+1)收盘 / tail=信号日尾盘 / next_open=次日开盘
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
 
 
