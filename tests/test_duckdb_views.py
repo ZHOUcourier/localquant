@@ -127,6 +127,22 @@ def test_schema_field_dictionary_has_view_columns():
         assert t.get("view", "").startswith("quotes_")
 
 
+def test_field_dictionary_subset_of_real_schema():
+    """字段字典不得含幽灵字段：每个键必须是某张可查表的真实列（P1-D）
+
+    历史教训：字典曾收录 turnover（换手率），但行情 Parquet/视图根本没有
+    该列，用户照字典写 SQL 必然报列不存在。只修单点不立不变量就会复发。
+    """
+    from backend.routes.explorer import explorer_schema
+
+    schema = asyncio.run(explorer_schema())
+    real_cols: set[str] = set()
+    for t in schema["tables"]:
+        real_cols.update(f["name"] for f in t.get("fields", []))
+    ghosts = set(schema["field_dictionary"]) - real_cols
+    assert not ghosts, f"字段字典含不存在的幽灵字段: {sorted(ghosts)}"
+
+
 def test_readonly_guard_rejects_write():
     """只读护栏：写操作（DROP 等）被拒"""
     r = svc.query_local("DROP TABLE quotes_1d")

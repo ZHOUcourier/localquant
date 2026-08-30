@@ -223,7 +223,6 @@ FIELD_DICTIONARY = {
     "volume": "成交量（股/手，以 QMT 返回单位为准）",
     "amount": "成交额（元）",
     "adjust_factor": "复权因子（后复权价/原始价；前复权=close×factor/最新factor）",
-    "turnover": "换手率（需股本快照）",
 }
 
 # 行情统一走 quotes_<周期> 视图（由 DuckDBService 注册）：
