@@ -708,7 +708,11 @@ async def list_runs(workflow_id: str) -> list[dict[str, Any]]:
 
 
 def _df_preview(df, max_rows: int = 200) -> dict[str, Any]:
-    """DataFrame → 预览：时间索引的多数值列 → 多线图；否则表格（NaN → None）"""
+    """DataFrame → 预览：时间索引的多数值列 → 多线图；否则表格（NaN → None）
+
+    表格超过 max_rows 时按「头 3/4 + 尾 1/4」双段截取并标注 truncated=True：
+    尾部内容（最新日期/最终结果）不得被截断隐藏，完整数据走 pkl 明细接口。
+    """
     import numpy as np
     import pandas as pd
 
@@ -734,16 +738,25 @@ def _df_preview(df, max_rows: int = 200) -> dict[str, Any]:
             "shape": [int(df.shape[0]), int(df.shape[1])],
         }
 
-    head = df.head(max_rows).reset_index()
-    rows = json.loads(
-        head.to_json(orient="records", force_ascii=False, date_format="iso")
-    )
-    return {
+    def _records(frame) -> list[dict]:
+        return json.loads(
+            frame.to_json(orient="records", force_ascii=False, date_format="iso")
+        )
+
+    truncated = df.shape[0] > max_rows
+    head_n = max_rows - max_rows // 4 if truncated else max_rows
+    head = df.head(head_n).reset_index()
+    out = {
         "kind": "table",
         "columns": [str(c) for c in head.columns],
-        "rows": rows,
+        "rows": _records(head),
         "shape": [int(df.shape[0]), int(df.shape[1])],
     }
+    if truncated:
+        tail = df.tail(max_rows - head_n).reset_index()
+        out["tail_rows"] = _records(tail)
+        out["truncated"] = True
+    return out
 
 
 def _is_number(v: Any) -> bool:
@@ -773,7 +786,7 @@ def _field_preview(value: Any) -> dict[str, Any]:
     """将单个输出字段转为前端可渲染的预览结构
 
     kind:
-      - table   表格 {columns, rows, shape}
+      - table   表格 {columns, rows, shape}；超限时附 {tail_rows, truncated=True}
       - series  数值序列 {x, y}（如净值/回撤曲线）
       - metrics 指标字典 {data}
       - image   base64 图片 {data}
