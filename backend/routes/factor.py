@@ -585,7 +585,8 @@ async def list_factors():
 @router.post("/library")
 async def register_factor(req: FactorCreate):
     factor_id = str(uuid.uuid4())
-    now = int(time.time() * 1000)
+    # 全库时间戳统一为秒（前端按 new Date(ts * 1000) 渲染；曾误用毫秒）
+    now = int(time.time())
     db = await get_db()
     # 同名因子版本自增（保留历史行，不覆盖），便于查看/回滚历史公式
     cursor = await db.execute(
