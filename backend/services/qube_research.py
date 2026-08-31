@@ -351,7 +351,7 @@ DEFAULT_BACKTEST_PARAMS = {
     "trailing_stop": 0.0,
     "frequency": "1d",
     "stock_pool": [],
-    "execute_at": "next_close",  # next_close / tail / next_open（开→收计收益）
+    "execute_at": "next_close",  # next_close=次日(T+1)收盘 / tail=信号日尾盘 / next_open=次日开盘
     "delisting_loss": 0.0,  # 数据提前截止标的的强制清算折价（0=按末日价全额变现）
 }
 
