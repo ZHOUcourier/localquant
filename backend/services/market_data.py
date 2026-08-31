@@ -28,6 +28,10 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
 
     陈旧口径：自然日 vs 工作日（交易日历不可得时用工作日近似）。
     长假（春节/国庆）按交易日历判定不会误报「数据断档」。
+
+    滞后分两类，避免单股断档污染整体时效结论：
+      - stale   滞后 5~20 个交易日：数据更新延迟，需要补数
+      - gapped  滞后 >20 个交易日：单股断档（疑似停牌/退市），属个股事件而非数据问题
     """
     codes = list_cached_codes(period)
     today = datetime.now().astimezone().date()
@@ -64,8 +68,10 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
     else:
         stale_trade_days = None
 
-    # 停牌/新股可能久缺数，以「交易日」为经验阈值（约 5 个交易日明显滞后）
+    # 停牌/新股可能久缺数，以「交易日」为经验阈值：
+    # >5 个交易日视为数据滞后（需补数）；>20 个交易日视为单股断档（疑似停牌/退市），分开报告
     stale_threshold = 5
+    gap_threshold = 20
     per_code_stale = {}
     for r in rows:
         if latest_ts is None:
@@ -78,11 +84,16 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
             per_code_stale[r["code"]] = expected_idx - idx
         else:
             per_code_stale[r["code"]] = len(pd.bdate_range(d, today)) - 1
-    stale = [
-        {**r, "stale_trade_days": per_code_stale.get(r["code"], 0)}
-        for r in rows
-        if per_code_stale.get(r["code"], 0) > stale_threshold
-    ]
+    stale = []
+    gapped = []
+    for r in rows:
+        lag = per_code_stale.get(r["code"], 0)
+        if lag > gap_threshold:
+            gapped.append(
+                {**r, "stale_trade_days": lag, "reason": "单股断档：疑似停牌/退市"}
+            )
+        elif lag > stale_threshold:
+            stale.append({**r, "stale_trade_days": lag})
     return {
         "period": period,
         "total": len(rows),
@@ -90,10 +101,13 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
         "staleness_days": (today - latest_ts.date()).days if latest_ts is not None else None,
         "stale_trade_days": stale_trade_days,
         "stale_threshold_trade_days": stale_threshold,
+        "gap_threshold_trade_days": gap_threshold,
         "calendar": trading_calendar_source(),
         "calendar_unverified": trade_dates is None,
         "stale_count": len(stale),
         "stale": stale[:50],
+        "gap_count": len(gapped),
+        "gapped": gapped[:50],
         "status": "ok" if not stale else "stale",
     }
 
