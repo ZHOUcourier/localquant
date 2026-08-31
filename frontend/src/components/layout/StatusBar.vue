@@ -161,11 +161,14 @@ function openDetail(e: NewsEntry) {
           class="statusbar-marquee absolute flex items-center whitespace-nowrap"
           :style="{ lineHeight: '24px', animationDuration: `${marqueeDuration}s`, animationPlayState: paused ? 'paused' : 'running' }"
         >
-          <!-- 内容双拷贝实现无缝循环；重要项红色 ● 高亮，时间灰色弱化；可点击看详情 -->
+          <!-- 内容双拷贝实现无缝循环：跑马灯标准做法，两份是最低必要数量，
+               请勿当作重复渲染删除（删除第二份会在循环衔接处跳变）；
+               第二份仅用于视觉衔接，对读屏隐藏以免同一条快讯被朗读两遍 -->
           <template v-for="pass in 2" :key="pass">
             <span
               v-for="(e, i) in news"
               :key="`${pass}-${i}`"
+              :aria-hidden="pass === 2 ? true : undefined"
               class="mr-6 inline-flex items-center gap-1.5 text-[11px]"
               :class="e.url ? 'cursor-pointer hover:underline' : ''"
               :title="e.url ? '点击查看详情' : ''"
