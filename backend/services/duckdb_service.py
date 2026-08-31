@@ -55,6 +55,8 @@ class DuckDBService:
 
         Returns:
             {"columns": [...], "data": [...], "row_count": N}
+            出错时 {"columns": [], "data": [], "row_count": 0, "error", "code"}，
+            code ∈ invalid_query（语句非法）/ query_error（执行失败），供程序分支
         """
         try:
             statement = sql.lstrip().lstrip("(").lower()
@@ -64,6 +66,7 @@ class DuckDBService:
                     "data": [],
                     "row_count": 0,
                     "error": "仅支持 SELECT / WITH / DESCRIBE 查询",
+                    "code": "invalid_query",
                 }
             if _SQL_FORBIDDEN.search(sql):
                 return {
@@ -71,6 +74,7 @@ class DuckDBService:
                     "data": [],
                     "row_count": 0,
                     "error": "SQL 中包含不允许的写操作关键字",
+                    "code": "invalid_query",
                 }
 
             conn = duckdb.connect()
@@ -116,7 +120,13 @@ class DuckDBService:
             }
         except Exception as e:
             logger.error(f"DuckDB query failed: {e}")
-            return {"columns": [], "data": [], "row_count": 0, "error": str(e)}
+            return {
+                "columns": [],
+                "data": [],
+                "row_count": 0,
+                "error": str(e),
+                "code": "query_error",
+            }
 
     # ── 统一行情视图 ─────────────────────────────────────────
 

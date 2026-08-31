@@ -140,7 +140,6 @@ async def sql_query(body: SQLQueryRequest):
         }
     result = duckdb_service.query_local(sql)
     if isinstance(result, dict) and result.get("error"):
-        result.setdefault("code", "query_error")
         return result
     await _record_sql(sql)
     return result

@@ -599,10 +599,7 @@ async def quality_check():
 @router.post("/query-local")
 async def query_local(req: QueryRequest):
     """使用 DuckDB 执行 SQL 查询本地 Parquet 数据"""
-    result = _duckdb.query_local(req.sql, req.params)
-    if isinstance(result, dict) and result.get("error"):
-        result.setdefault("code", "query_error")
-    return result
+    return _duckdb.query_local(req.sql, req.params)
 
 
 # ── 底部状态栏：指数行情 ─────────────────────────────────────

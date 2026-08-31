@@ -96,6 +96,25 @@ def test_duckdb_service_normal_query_ok():
     assert res["data"] == [[1, 2]]
 
 
+def test_duckdb_service_errors_carry_structured_code():
+    """P2-I：错误响应必须自带结构化 code，调用方无需再补"""
+    from backend.services.duckdb_service import DuckDBService
+
+    svc = DuckDBService()
+    # 语句类型拦截：非 SELECT/WITH/DESCRIBE/SHOW
+    for sql in ["INSERT INTO t VALUES (1)", "UPDATE t SET x=1", "DELETE FROM t"]:
+        res = svc.query_local(sql)
+        assert res.get("code") == "invalid_query", sql
+    # 写关键字拦截：select 语句内含写关键字（按词边界匹配）
+    res = svc.query_local("SELECT drop FROM t")
+    assert res.get("code") == "invalid_query"
+    for sql in ["SELECT * FROM no_such_table_xyz", "SELECT FROM WHERE"]:
+        res = svc.query_local(sql)
+        assert res.get("code") == "query_error", sql
+    ok = svc.query_local("SELECT 1 AS a")
+    assert "error" not in ok and "code" not in ok
+
+
 # ── 配置写入：换行注入清洗 ──────────────────────────────────────
 
 
