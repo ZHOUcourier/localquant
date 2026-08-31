@@ -7,6 +7,16 @@ import pytest
 from backend.services import provenance, scheduler
 
 
+@pytest.fixture(autouse=True)
+def tmp_db(tmp_path, monkeypatch):
+    """隔离到临时库：溯源/任务流水会真实写库，不得污染生产快照"""
+    from backend import database
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+    asyncio.run(database.init_db())
+    return tmp_path / "test.db"
+
+
 def test_provenance_roundtrip():
     async def _run():
         rid = await provenance.record_provenance(
