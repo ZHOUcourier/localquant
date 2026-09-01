@@ -10,12 +10,13 @@ interface Quote {
   pct?: number
   amount?: number
   date?: string
-  source: 'qmt' | 'cache' | 'none'
+  source: 'qmt' | 'cache' | 'stale' | 'none'
 }
 
 interface TickerResponse {
   qmt_connected: boolean
   quotes: Quote[]
+  cache_latest_date?: string | null
 }
 
 /** 成交额（元）→ 「xxxx亿」 */
@@ -107,10 +108,23 @@ onUnmounted(() => {
   clearInterval(newsTimer)
 })
 
-const quotes = computed(() => ticker.value?.quotes?.filter((q) => q.source !== 'none') ?? [])
+// 只滚动新鲜报价（QMT 实时 / 当天或上一交易日的缓存收盘）；过时数据（'stale'）不参与展示，避免误导
+const quotes = computed(() =>
+  (ticker.value?.quotes ?? []).filter((q) => q.source === 'qmt' || q.source === 'cache'),
+)
+const staleQuotes = computed(() => (ticker.value?.quotes ?? []).filter((q) => q.source === 'stale'))
 const cacheMode = computed(
   () => quotes.value.length > 0 && quotes.value.every((q) => q.source === 'cache'),
 )
+// 全部过时时在行情位给出原因提示（含最新缓存日期），部分过时则附注隐藏数量
+const staleHint = computed(() => {
+  if (!staleQuotes.value.length) return ''
+  const date = ticker.value?.cache_latest_date
+  if (!quotes.value.length) {
+    return `行情数据已过期（缓存截至 ${date ?? '未知日期'}）— 请到「数据中心」更新指数日线`
+  }
+  return `${staleQuotes.value.length} 个指数数据过时未显示`
+})
 const newsLabel = computed(() =>
   NEWS_SOURCE_LABELS[newsSource.value] ? ` · ${NEWS_SOURCE_LABELS[newsSource.value]}` : '',
 )
@@ -210,7 +224,10 @@ function openDetail(e: NewsEntry) {
 
     <!-- 第二行：指数行情 + QMT 状态 -->
     <div class="flex items-center gap-4 overflow-x-auto px-3" style="height: 26px">
-      <span v-if="quotes.length === 0" class="text-[11px] text-[#9a9898]">
+      <span v-if="quotes.length === 0 && staleHint" class="text-[11px] text-[#9a9898]">
+        {{ staleHint }}
+      </span>
+      <span v-else-if="quotes.length === 0" class="text-[11px] text-[#9a9898]">
         暂无行情数据 — QMT 未连接且本地无指数缓存，请到「数据中心」下载指数 日线（如 000001.SH）
       </span>
       <span
@@ -228,6 +245,9 @@ function openDetail(e: NewsEntry) {
           {{ q.pct != null && q.pct > 0 ? '+' : '' }}{{ q.pct?.toFixed(2) }}%
         </span>
         <span v-if="fmtAmount(q.amount)" class="text-[#9a9898]">{{ fmtAmount(q.amount) }}</span>
+      </span>
+      <span v-if="quotes.length > 0 && staleHint" class="shrink-0 text-[10px] text-[#9a9898]">
+        {{ staleHint }}
       </span>
       <div class="flex-1" />
       <span v-if="cacheMode" class="shrink-0 text-[10px] text-[#cc7f08]">

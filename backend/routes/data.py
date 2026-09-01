@@ -640,6 +640,33 @@ def _quote_from_qmt(code: str) -> dict | None:
         return None
 
 
+def _cache_quote_fresh(latest_date: str) -> bool:
+    """缓存行情是否新鲜：最后交易日为今天或上一交易日才算数
+
+    口径与 data_freshness() 一致：交易日历（QMT/持久化）优先，
+    无日历时按工作日近似，避免把几天前的收盘价当作当前行情展示。
+    """
+    try:
+        d = pd.Timestamp(latest_date).date()
+    except Exception:
+        return False
+    today = pd.Timestamp.today().date()
+    cal = market_data._trading_calendar()
+    if cal:
+        past = [x for x in cal if x <= today]
+        if not past:
+            return False
+        # 今天是交易日：今天或上一交易日都算新鲜；
+        # 非交易日（周末/节假日）：最新数据必须是最近一个交易日，不再放宽
+        threshold = past[-2] if (today in cal and len(past) >= 2) else past[-1]
+        return d >= threshold
+    # 无交易日历：最新数据日不早于「上一个工作日」（周末顺延，与日历分支同口径）
+    ref = today - pd.Timedelta(days=1)
+    while ref.weekday() >= 5:
+        ref -= pd.Timedelta(days=1)
+    return d >= ref
+
+
 def _quote_from_cache(code: str) -> dict | None:
     """QMT 不可用时，从本地日线缓存取最近两日收盘价计算涨跌（非实时）
 
@@ -663,25 +690,35 @@ def _quote_from_cache(code: str) -> dict | None:
             amount = float(df["amount"].iloc[-1])
         except Exception:
             amount = 0.0
+    date = str(df.index[-1])[:10]
     return {
         "price": round(last, 2),
         "change": round(last - prev, 2),
         "pct": round((last - prev) / prev * 100, 2) if prev else 0.0,
         "amount": amount,
-        "date": str(df.index[-1])[:10],
-        "source": "cache",
+        "date": date,
+        "source": "cache" if _cache_quote_fresh(date) else "stale",
     }
 
 
 @router.get("/ticker")
 async def ticker():
-    """底部状态栏行情：QMT 实时优先，未连接时回退本地缓存收盘价；都没有则标记无数据"""
+    """底部状态栏行情：QMT 实时优先，未连接时回退本地缓存收盘价；都没有则标记无数据
+
+    缓存报价带新鲜度判定：最后交易日早于「今天/上一交易日」时标记
+    source='stale'，前端不再当作当前行情展示（避免过期数据误导）。
+    """
     qmt_connected = market_data._qmt.connected
     quotes = []
     for name, code in _TICKER_INDICES:
         q = _quote_from_qmt(code) or _quote_from_cache(code)
         quotes.append({"name": name, "code": code, **(q or {"source": "none"})})
-    return {"qmt_connected": qmt_connected, "quotes": quotes}
+    stale_dates = [q["date"] for q in quotes if q.get("source") == "stale" and q.get("date")]
+    return {
+        "qmt_connected": qmt_connected,
+        "quotes": quotes,
+        "cache_latest_date": max(stale_dates) if stale_dates else None,
+    }
 
 
 # ── 底部状态栏：资讯（真实接口，禁止任何模拟数据） ─────────────────
