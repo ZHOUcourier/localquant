@@ -30,8 +30,9 @@ from backend.services.factor_research import classify_formula_status
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "localquant.db"
 
-# 源文本损坏、无法确定性修复的因子（显式清单，新增必须说明理由）
-KNOWN_UNSUPPORTED = {"alpha191_023"}
+# 源文本损坏、无法确定性修复的因子（显式清单，新增必须说明理由）；
+# 原登记的 alpha191_023 已按国泰君安公开定义修复并验证可解析，清单清空。
+KNOWN_UNSUPPORTED: set[str] = set()
 
 
 def _parses(s: str) -> bool:

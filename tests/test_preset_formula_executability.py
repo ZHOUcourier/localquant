@@ -23,17 +23,7 @@ from backend.services.factor_research import FactorResearchService, extract_form
 # 已知缺陷公式（源公式损坏 / 算子缺参 / 数据快照缺失），如实保留失败状态；
 # 每条必须注明原因，修复后必须移出本清单（测试会强制检查）。
 ALLOWED_FAILURES = {
-    "Alpha191因子_023": "源文本损坏（括号不配对，无法确定性修复）",
-    "Alpha191因子_010": "源公式缺参（MAX 缺少 b）",
-    "Alpha191因子_036": "源公式缺参（CORR 缺少 n）",
-    "Alpha191因子_055": "逻辑运算方言不可翻译（float & float）",
-    "Alpha191因子_137": "逻辑运算方言不可翻译（float & float）",
-    "Alpha191因子_144": "SUMIF 实参顺序错误（'int' 无 where 属性）",
-    "Alpha191因子_165": "源公式缺参（SUMAC 缺少 n）",
-    "Alpha191因子_166": "隐式乘法缺陷（tuple**int）",
-    "Alpha191因子_183": "源公式缺参（SUMAC 缺少 n）",
-    "Alpha191因子_190": "源公式缺参（DELAY 缺少 n）",
-    "Alpha101因子_056": "流通市值面板缺失（数据缺失，非公式缺陷）",
+    "Alpha101因子_056": "公式无误，但依赖流通市值面板（CAP），本地无 capital 股本快照数据，属数据缺失而非公式缺陷",
 }
 
 # P0-B 修复前被虚报 executable 的代表性公式，现在必须真实求值成功：
