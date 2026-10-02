@@ -2,11 +2,14 @@
 // LocalQuant ComfyUI 扩展：为托管的 ComfyUI 前端补齐 localquant 专属能力
 //
 //  1. 启动清空官方默认 SD3 文生图示例图（localquant 无这些 comfy-core 节点，避免报错）
-//  2. 每个节点：右键菜单 + 右侧「节点代码」侧边栏 → 查看/编辑 Python 源码、
+//  2. 打开已保存工作流时，从 /api/workflow/{id}/comfy-graph 加载图到画布
+//     （widget 值经 properties.localquant_static_input 按名回填）
+//  3. 每个节点：右键菜单 + 右侧「节点代码」侧边栏 → 查看/编辑 Python 源码、
 //     ✦ AI 改写、ruff 语法检查（内联诊断）、网页全屏、保存（内置节点 fork 保护）
-//  3. 底部面板「本机性能」：CPU/内存/磁盘/GPU 实时监控（2s 轮询 /api/system/resources）
+//  4. 底部面板「本机性能」：CPU/内存/磁盘/GPU 实时监控（2s 轮询 /api/system/resources）
 //
 // 与后端同源，直接调用 localquant API：
+//   GET  /api/workflow/{id}/comfy-graph 加载已保存工作流
 //   GET  /api/plugins/{class}/source   取源码 + is_custom
 //   POST /api/plugins/lint             ruff 检查，返回诊断
 //   POST /api/ai/node-code             AI 改写
@@ -64,16 +67,61 @@ const embedded = window.parent && window.parent !== window;
 // 最近一次执行中各节点的 prompt_id（本页面会话内）
 const lastRunByNode = {};
 
+// 已加载进画布的工作流（去重：外壳会在 iframe load 与名称解析后各发一次上下文）
+let loadedWorkflowId = '';
+
 window.addEventListener('message', (e) => {
   const d = e.data;
   if (!d || typeof d !== 'object') return;
   if (d.type === 'localquant:workflow-context') {
     shellCtx.workflowId = d.workflowId || '';
     shellCtx.workflowName = d.workflowName || '';
+    requestWorkflowLoad();
   } else if (d.type === 'localquant:refresh-node-defs') {
     refreshNodeDefs();
   }
 });
+
+// ——————————————————————————————————————————————————————————————
+// 加载已保存工作流：/api/workflow/{id}/comfy-graph → app.loadGraphData
+// widget 值不按位置还原（分析节点带 serialize=false 按钮 widget 会错位），
+// 由 properties.localquant_static_input 按字段名回填。
+// ——————————————————————————————————————————————————————————————
+function applyStaticInputs(app) {
+  for (const node of app.graph?._nodes || []) {
+    const m = node.properties?.localquant_static_input;
+    if (!m || typeof m !== 'object') continue;
+    for (const w of node.widgets || []) {
+      if (w.name && Object.prototype.hasOwnProperty.call(m, w.name)) {
+        w.value = m[w.name];
+      }
+    }
+    node.setDirtyCanvas?.(true, true);
+  }
+}
+
+async function loadWorkflowFromBackend(app, workflowId) {
+  loadedWorkflowId = workflowId;
+  try {
+    const graph = await jsonFetch(`/api/workflow/${encodeURIComponent(workflowId)}/comfy-graph`);
+    if (Array.isArray(graph?.nodes) && graph.nodes.length) {
+      // 等前端完成自身初始化（默认图/标签页）再加载，避免竞态产生多余标签页
+      await new Promise((r) => setTimeout(r, 2000));
+      await app.loadGraphData(graph);
+      applyStaticInputs(app);
+      console.info(`[LocalQuant] 已加载工作流图（${graph.nodes.length} 节点）`);
+    }
+  } catch (e) {
+    loadedWorkflowId = ''; // 允许上下文重发时重试
+    console.warn('[LocalQuant] 加载工作流图失败:', e?.message || e);
+  }
+}
+
+function requestWorkflowLoad() {
+  const wfId = shellCtx.workflowId;
+  if (!wfId || wfId === 'new' || wfId === loadedWorkflowId) return;
+  whenReady((app) => loadWorkflowFromBackend(app, wfId));
+}
 
 function postToShell(payload) {
   if (!embedded) return false;
@@ -455,6 +503,15 @@ whenReady((app) => {
       if (!window.__lqDefaultGraphGuard) {
         window.__lqDefaultGraphGuard = setInterval(() => clearIfDefaultGraph(app), 1000);
       }
+
+      // 外壳上下文先于扩展脚本执行到达时 postMessage 会丢失（监听器尚未注册），
+      // 因此启动时兜底从 iframe URL 取 workflow_id（外壳 comfySrc 始终携带），
+      // 再触发已保存工作流的画布加载。
+      if (!shellCtx.workflowId) {
+        shellCtx.workflowId =
+          new URLSearchParams(window.location.search).get('workflow_id') || '';
+      }
+      requestWorkflowLoad();
 
       // 右侧「节点代码」侧边栏：跟随选中节点
       try {

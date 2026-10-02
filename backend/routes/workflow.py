@@ -136,6 +136,24 @@ async def get_node_report(
     )
 
 
+@router.get("/{workflow_id}/comfy-graph")
+async def get_workflow_comfy_graph(workflow_id: str):
+    """工作流 → ComfyUI 前端图 JSON
+
+    编辑器 iframe 的 localquant 扩展加载已保存工作流时调用，
+    画布还原后用户仍经官方前端正常保存/入队（prompt 由 graph.py 反向转换）。
+    """
+    from backend.comfy.graph import workflow_to_comfy_graph
+
+    wf = await workflow_service.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    try:
+        return workflow_to_comfy_graph(wf.get("nodes") or [], wf.get("links") or [])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{workflow_id}")
 async def get_workflow(workflow_id: str):
     wf = await workflow_service.get_workflow(workflow_id)
