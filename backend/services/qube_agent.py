@@ -16,6 +16,7 @@ QUBE 注册的平台原生工具与技能库（qube_skills 表 enabled=1 项）�
 策略代码/版本/回测/因子/因子分析/行情查询/绑定目标/长期记忆。
 """
 
+import asyncio
 import json
 import time
 import uuid
@@ -273,6 +274,8 @@ async def _tool_get_data_status(_args: dict) -> dict:
 # 可供 QUBE 阅读的平台文档（只读，白名单）
 _DOC_FILES = {
     "因子编写指南": "docs/因子编写指南.md",
+    "功能模块": "docs/功能模块.md",
+    "代码执行沙箱": "docs/代码执行沙箱.md",
 }
 
 
@@ -781,6 +784,211 @@ async def _tool_list_factors(_args: dict) -> dict:
         await db.close()
 
 
+async def snapshot_factor_to_library(factor_id: str, category: str = "QUBE") -> dict:
+    """把画板因子（qube_factors）快照进用户因子库（factors 表），同名自动累加版本号
+
+    QUBE 工具 save_factor_to_library 与路由
+    POST /api/qube/factors/{id}/save-to-library 共用本逻辑。
+    """
+    from backend.database import get_db
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM qube_factors WHERE id = ?", (factor_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {"ok": False, "error": "因子不存在"}
+        cursor = await db.execute(
+            "SELECT MAX(version) AS v FROM factors WHERE name = ?", (row["name"],)
+        )
+        r = await cursor.fetchone()
+        version = int(r["v"] or 0) + 1
+        now = int(time.time())
+        fid = str(uuid.uuid4())
+        is_formula = (row["code_type"] or "formula") == "formula"
+        await db.execute(
+            "INSERT INTO factors (id, name, description, category, formula, code, "
+            "version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                fid,
+                row["name"],
+                row["description"] or "QUBE 对话产出",
+                category,
+                row["code"] if is_formula else "",
+                "" if is_formula else row["code"],
+                version,
+                now,
+                now,
+            ),
+        )
+        await db.commit()
+        return {
+            "ok": True,
+            "library_id": fid,
+            "name": row["name"],
+            "version": version,
+        }
+    finally:
+        await db.close()
+
+
+async def _tool_save_factor_to_library(args: dict, session_id: str) -> dict:
+    """把画板因子存入用户因子库（factors 表）；不传 factor_id 时用会话绑定因子"""
+    from backend.database import get_db
+
+    factor_id = str(args.get("factor_id") or "").strip()
+    if not factor_id:
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT bound_type, bound_id FROM qube_sessions WHERE id = ?",
+                (session_id,),
+            )
+            r = await cursor.fetchone()
+        finally:
+            await db.close()
+        if r and r["bound_type"] == "factor":
+            factor_id = r["bound_id"]
+    if not factor_id:
+        return {"error": "未指定因子：请先用 generate_stock_factor_code 创建因子"}
+    result = await snapshot_factor_to_library(factor_id)
+    if not result.get("ok"):
+        return {"error": result.get("error", "入库失败")}
+    return result
+
+
+async def _tool_search_factor_library(args: dict) -> dict:
+    """检索因子库：用户因子（factors）+ 预设因子库（preset_factors），创建前查重"""
+    from backend.database import get_db
+
+    kw = str(args.get("keyword") or "").strip()
+    scope = str(args.get("scope") or "all")
+    if scope not in ("user", "preset", "all"):
+        scope = "all"
+    category = str(args.get("category") or "").strip()
+    try:
+        limit = min(int(args.get("limit") or 20), 50)
+    except Exception:
+        limit = 20
+
+    def _clauses(fields: list[str]) -> tuple[str, list]:
+        """keyword/category → (SQL 条件, 参数)；无筛选时返回最近 N 条"""
+        conds, params = [], []
+        if kw:
+            conds.append("(" + " OR ".join(f"{f} LIKE ?" for f in fields) + ")")
+            params += [f"%{kw}%"] * len(fields)
+        return " AND ".join(conds), params
+
+    out: dict = {
+        "scope": scope,
+        "keyword": kw,
+        "user_factors": [],
+        "preset_factors": [],
+    }
+    db = await get_db()
+    try:
+        if scope in ("user", "all"):
+            cond, params = _clauses(["name", "description", "formula", "code"])
+            if category:
+                cond = (cond + " AND " if cond else "") + "category = ?"
+                params.append(category)
+            where = f"WHERE {cond}" if cond else ""
+            sql = (
+                "SELECT id, name, description, category, formula, code, version, "
+                f"updated_at FROM factors {where} ORDER BY updated_at DESC LIMIT {limit}"
+            )
+            cursor = await db.execute(sql, params)
+            out["user_factors"] = [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "category": r["category"],
+                    "version": r["version"],
+                    "formula": (r["formula"] or "")[:160],
+                    "code": (r["code"] or "")[:160],
+                    "description": (r["description"] or "")[:120],
+                }
+                for r in await cursor.fetchall()
+            ]
+        if scope in ("preset", "all"):
+            cond, params = _clauses(
+                ["factor_name", "description", "factor_code", "category_name"]
+            )
+            if category:
+                cond = (cond + " AND " if cond else "") + "category_name = ?"
+                params.append(category)
+            where = f"WHERE {cond}" if cond else ""
+            sql = (
+                "SELECT id, factor_code, factor_name, category_name, description, "
+                f"formula_status, rank_ic FROM preset_factors {where} "
+                f"ORDER BY id LIMIT {limit}"
+            )
+            cursor = await db.execute(sql, params)
+            out["preset_factors"] = [
+                {
+                    "id": r["id"],
+                    "factor_code": r["factor_code"],
+                    "factor_name": r["factor_name"],
+                    "category": r["category_name"],
+                    "formula_status": r["formula_status"],
+                    "rank_ic": r["rank_ic"],
+                    "description": (r["description"] or "")[:160],
+                }
+                for r in await cursor.fetchall()
+            ]
+        out["hint"] = (
+            "命中较多时收窄 keyword 或用 scope/category 过滤；"
+            "创建新因子前先查重，避免与已有/预设因子同质。"
+        )
+        return out
+    finally:
+        await db.close()
+
+
+async def _tool_run_research_code(args: dict, session_id: str) -> dict:
+    """沙箱运行临时 pandas 研究实验（公式表达不了的统计检验/原型验证）"""
+    from backend.services import market_data, sandbox
+
+    code = str(args.get("code") or "").strip()
+    if not code.strip():
+        return {"error": "code 不能为空"}
+    symbols = [s for s in (args.get("symbols") or []) if str(s).strip()]
+    try:
+        panels = await asyncio.to_thread(
+            market_data.load_price_panels,
+            [str(s) for s in symbols],
+            str(args.get("start_date") or ""),
+            str(args.get("end_date") or ""),
+        )
+    except Exception as e:
+        return {"error": f"行情数据加载失败: {str(e)[:300]}"}
+    if panels.get("close") is None:
+        return {"error": "本地无可用行情面板"}
+
+    try:
+        result, stdout, sandboxed = await sandbox.run_research_code(code, panels)
+    except ValueError as e:
+        return {"error": str(e)[:500], "sandboxed": False}
+    except Exception as e:
+        return {"error": f"实验执行失败: {str(e)[:300]}"}
+
+    close = panels["close"]
+    return {
+        "ok": True,
+        "result": result,
+        "stdout": (stdout or "")[:2000],
+        "sandboxed": sandboxed,
+        "data_scope": {
+            "fields": sorted(panels.keys()),
+            "n_symbols": int(close.shape[1]),
+            "n_dates": int(close.shape[0]),
+            "date_range": [str(close.index.min()), str(close.index.max())],
+        },
+    }
+
+
 async def _tool_bind_chat_target(args: dict, session_id: str) -> dict:
     """切换当前对话绑定的画板工件（factor/strategy）"""
     kind = str(args.get("kind") or "")
@@ -842,8 +1050,16 @@ async def _tool_list_skills(_args: dict) -> dict:
         await db.close()
 
 
+# 技能原文注入上下文的预算（本地仓存全文，注入时才截断）
+_SKILL_MD_INJECT_CAP = 12_000
+_README_INJECT_CAP = 8_000
+
+
 async def _tool_use_skill(args: dict) -> dict:
-    """加载技能库中某个技能，返回其完整操作手册 + GitHub README 供 agent 遵循执行"""
+    """加载技能：本地手册 + 本地缓存原文，纯本地读取、零网络等待
+
+    原文快照缺失时安排后台补抓（schedule_refresh），本次先按手册执行。
+    """
     name = str(args.get("name") or "").strip()
     if not name:
         return {"error": "name 不能为空（技能名，见 list_skills）"}
@@ -870,20 +1086,25 @@ async def _tool_use_skill(args: dict) -> dict:
         "url": row["url"],
         "manual": row["prompt"],
     }
-    # 附带 GitHub README（若可获取），让 agent 掌握技能原文细节
+    # 附带本地缓存的 GitHub 原文（离线可用；网络只在后台刷新时发生）
     if row["repo_url"]:
-        try:
-            from backend.services.qube_skill_repo import get_skill_repo
+        from backend.services.qube_skill_repo import read_skill_repo, schedule_refresh
 
-            repo = await get_skill_repo(row["name"], row["repo_url"])
-            if repo.get("ok"):
-                payload["repo_url"] = repo.get("repo_url")
-                payload["readme"] = (repo.get("readme") or "")[:6000]
-                payload["skill_md"] = (repo.get("skill_md") or "")[:4000]
-        except Exception as e:  # 仓库抓取失败不阻断技能使用
-            from loguru import logger
-
-            logger.warning(f"技能 {row['name']} 仓库抓取失败: {e}")
+        snapshot = await read_skill_repo(row["name"])
+        if snapshot and snapshot.get("ok"):
+            payload["repo_url"] = snapshot.get("repo_url") or row["repo_url"]
+            payload["readme"] = (snapshot.get("readme") or "")[:_README_INJECT_CAP]
+            payload["skill_md"] = (snapshot.get("skill_md") or "")[:_SKILL_MD_INJECT_CAP]
+            payload["origin"] = "local-cache"
+            if snapshot.get("fetched_at"):
+                payload["origin_fetched_at"] = snapshot["fetched_at"]
+        else:
+            payload["origin"] = "missing"
+            payload["origin_note"] = (
+                "GitHub 原文尚未缓存到本地，已安排后台补抓（下次可用）；"
+                "本次请严格按手册执行，手册已自包含全部关键流程与参数。"
+            )
+            schedule_refresh(row["name"], row["repo_url"])
     return payload
 
 
@@ -913,7 +1134,8 @@ def build_qube_tools(session_id: str) -> list[Tool]:
             name="read_doc",
             description=(
                 "阅读平台文档，写因子/信号代码前务必查阅以对齐平台约定。"
-                "name 目前支持「因子编写指南」（数据层形态、可用字段、内置算子清单）；"
+                "name 可选：「因子编写指南」（数据层形态、可用字段、内置算子清单）、"
+                "「功能模块」（平台全模块地图）、「代码执行沙箱」（实验/信号代码执行环境）；"
                 "keyword 可选，按关键词返回相关段落，避免整篇过长。"
             ),
             parameters={
@@ -1179,6 +1401,80 @@ def build_qube_tools(session_id: str) -> list[Tool]:
             description="列出用户所有因子，附带最近一次分析的 IC_mean / IC_IR / 分组单调性。",
             parameters={"type": "object", "properties": {}, "required": []},
             handler=_tool_list_factors,
+        ),
+        Tool(
+            name="save_factor_to_library",
+            description=(
+                "把画板因子存入用户因子库（因子库页面可见，同名自动累加版本号，category=QUBE）。"
+                "建议流程：generate_stock_factor_code 写入画板 → run_factor_analysis 验证 → "
+                "指标达标后再入库；不传 factor_id 时用当前会话绑定的因子。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "factor_id": {
+                        "type": "string",
+                        "description": "画板因子 id；不传时用会话绑定因子",
+                    },
+                },
+                "required": [],
+            },
+            handler=with_session(_tool_save_factor_to_library),
+        ),
+        Tool(
+            name="search_factor_library",
+            description=(
+                "检索因子库：用户因子库（含版本）+ 平台预设因子库，按关键词/分类过滤。"
+                "创建新因子前务必先查重（同名、同公式、同质因子）；"
+                "写策略引用已有因子时也可用它取公式。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "关键词，匹配名称/描述/公式/代码；空=最近条目",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["user", "preset", "all"],
+                        "description": "检索范围，默认 all",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "按分类过滤，如 momentum / 波动率",
+                    },
+                    "limit": {"type": "integer", "description": "返回条数上限，默认 20"},
+                },
+                "required": [],
+            },
+            handler=_tool_search_factor_library,
+        ),
+        Tool(
+            name="run_research_code",
+            description=(
+                "在沙箱中运行临时 pandas/numpy 研究实验：快速验证公式表达不了的假设"
+                "（自定义统计检验、winsorize/标准化原型、相关性/衰减分析等）。"
+                "code 需定义 run_experiment(data) 函数或设置 result 变量；"
+                "data 为 {字段: DataFrame(index=交易日, columns=股票代码)} 行情面板"
+                "（open/high/low/close/volume/amount，可用 symbols/起止日期裁剪）。"
+                "result 必须是可 JSON 序列化的摘要（数字/字符串/列表/小样本），"
+                "不要返回大 DataFrame，需要样本时自行 .head()/统计后放入 result。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "run_experiment(data) 完整 python 代码",
+                    },
+                    "symbols": _pool,
+                    "start_date": _date,
+                    "end_date": _date,
+                },
+                "required": ["code"],
+            },
+            handler=with_session(_tool_run_research_code),
         ),
         Tool(
             name="bind_chat_target",

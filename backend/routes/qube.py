@@ -42,24 +42,34 @@ router = APIRouter()
 QUBE_SYSTEM = """职责：通过多轮对话帮助用户设计、验证、迭代 A 股量化策略与因子。
 
 你拥有平台工具（优先用工具拿真实结果，不要臆想数据）：
-【查询】get_data_status 本地数据范围 / read_doc 因子编写指南 /
-        query_market_data 行情表格 / list_strategies / list_factors
+【查询】get_data_status 本地数据范围 / read_doc 平台文档（因子编写指南/功能模块/沙箱） /
+        query_market_data 行情表格 / search_factor_library 检索因子库+预设库 /
+        list_strategies / list_factors
 【策略】generate_stock_strategy_code 写策略代码进画板 /
         list_strategy_versions · get_strategy_version · revert_strategy_to_version 版本管理
 【回测】set_backtest_params 推参数给画板 / run_backtest 真实回测 / get_backtest_result 诊断
-【因子】generate_stock_factor_code 写因子进画板 / run_factor_analysis IC+分组分析
+【因子】generate_stock_factor_code 写因子进画板 / run_factor_analysis IC+分组分析 /
+        save_factor_to_library 存入因子库（验证达标后入库）
+【实验】run_research_code 沙箱跑临时 pandas 实验（公式表达不了的统计检验/原型，
+        run_experiment(data) 返回可序列化摘要）
 【其它】bind_chat_target 切换画板绑定 / remember 记录用户长期偏好 /
         list_skills 查看技能库 / use_skill 加载指定技能的操作手册
 
-技能库：内置大量来自开源社区的量化技能（因子衰减分析、A股个股尽调、主力资金画像、
-因子挖掘、LLMQuant 各类研究框架等）。当用户请求契合某个技能时，先 list_skills 确认技能名，
-再 use_skill 加载其操作手册并严格按手册流程执行（手册会指引你调用上述平台工具取真实数据）。
+技能库：内置大量来自开源社区的量化技能，覆盖因子研究全流程——
+方向/风险形态因子库、挖掘工作流 SOP、因子生产工厂、因子体检、正交化、衰减分析、
+多因子合并、因子诊断（KEEP/REFINE/REJECT）、回测过拟合检查，以及 A 股个股尽调、
+主力资金画像、LLMQuant 各类研究框架等。当用户请求契合某个技能时，先 list_skills
+确认技能名，再 use_skill 加载其操作手册并严格按手册流程执行（手册与 GitHub 原文
+均已缓存本地，离线可用；手册会把技能方法论对应到上述平台工具上）。
 
 推荐工作流：
 - 策略：read_doc/get_data_status 对齐约定 → generate_stock_strategy_code 写入画板 →
   run_backtest 验证 → 根据指标/报错迭代（改代码时传 strategy_id）
-- 因子：read_doc 查算子 → generate_stock_factor_code（优先用 formula 公式）→
-  run_factor_analysis 拿 IC/分组结果 → 解读并给出改进建议
+- 因子：read_doc 查算子 → search_factor_library 查重 → generate_stock_factor_code
+  （优先用 formula 公式）→ run_factor_analysis 拿 IC/分组结果 → 解读并给出改进建议；
+  指标达标且用户认可后 save_factor_to_library 直接入库
+- 临时验证：公式/单因子分析表达不了的假设，用 run_research_code 写小实验验证，
+  结果摘要拿回来再决定是否固化为因子或策略
 
 硬性约定：
 1. 用中文回答，结论先行；缺失关键信息（股票池/区间/风险偏好）时先追问。
@@ -70,9 +80,11 @@ QUBE_SYSTEM = """职责：通过多轮对话帮助用户设计、验证、迭代
    返回的负数信号会被清零（不买入），正权重按日归一为满仓组合，任何情况下
    总仓位不超过 100%。不融资、不融券、不做空；不得建议或生成任何涉及
    两融、做空、期货/期权的交易逻辑。
-4. 代码一律通过 generate_stock_strategy_code / generate_stock_factor_code 写入画板，
-   不要把大段代码直接贴在回复里（回复只写结论、指标解读与下一步建议）。
-5. 回测/分析失败时根据错误信息修正代码重试，不要把错误直接丢给用户。"""
+4. 代码一律通过 generate_stock_strategy_code / generate_stock_factor_code /
+   run_research_code 执行或写入画板，不要把大段代码直接贴在回复里
+   （回复只写结论、指标解读与下一步建议）。
+5. 回测/分析失败时根据错误信息修正代码重试，不要把错误直接丢给用户。
+6. 创建新因子前先用 search_factor_library 查重，避免与已有因子同质。"""
 
 # 用户可编辑的系统提示词（侧栏「系统提示词」弹窗；remember 工具也追加到这里）
 SYSTEM_PROMPT_PATH = pathlib.Path("data/qube_system_prompt.md")
@@ -105,6 +117,9 @@ TOOL_DISPLAY_NAMES = {
     "get_backtest_result": "读取回测结果",
     "generate_stock_factor_code": "已创建股票因子",
     "run_factor_analysis": "运行因子分析",
+    "save_factor_to_library": "已存入因子库",
+    "search_factor_library": "检索因子库",
+    "run_research_code": "运行研究实验",
     "list_factors": "查看因子列表",
     "bind_chat_target": "绑定对话目标",
     "remember": "记录长期记忆",
@@ -1444,35 +1459,15 @@ async def update_qube_factor(factor_id: str, body: QubeFactorUpdate):
 
 @router.post("/factors/{factor_id}/save-to-library")
 async def save_factor_to_library(factor_id: str):
-    """把画板因子存入因子库（factors 表快照）"""
-    db = await get_db()
-    try:
-        cursor = await db.execute(
-            "SELECT * FROM qube_factors WHERE id = ?", (factor_id,)
+    """把画板因子存入因子库（factors 表快照，同名自动累加版本号）"""
+    from backend.services.qube_agent import snapshot_factor_to_library
+
+    result = await snapshot_factor_to_library(factor_id)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=404, detail=result.get("error", "因子不存在")
         )
-        row = await cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="因子不存在")
-        now = int(time.time())
-        fid = str(uuid.uuid4())
-        is_formula = (row["code_type"] or "formula") == "formula"
-        await db.execute(
-            "INSERT INTO factors (id, name, description, category, formula, code, "
-            "version, created_at, updated_at) VALUES (?, ?, ?, 'QUBE', ?, ?, 1, ?, ?)",
-            (
-                fid,
-                row["name"],
-                row["description"] or "QUBE 对话产出",
-                row["code"] if is_formula else "",
-                "" if is_formula else row["code"],
-                now,
-                now,
-            ),
-        )
-        await db.commit()
-        return {"ok": True, "library_id": fid}
-    finally:
-        await db.close()
+    return result
 
 
 class FactorAnalysisRequest(BaseModel):

@@ -53,7 +53,7 @@ def _synth_panels(n_days=80, n_stocks=12, seed=7):
 
 
 def test_builtin_skills_seeded(qube_db):
-    """init_db 后内置技能 = QuantSkills 6 个 + LLMQuant 18 个，均带来源标注"""
+    """init_db 后内置技能 = QuantSkills 14 个 + LLMQuant 18 个，均带来源标注"""
 
     async def _check():
         db = await database.get_db()
@@ -73,7 +73,7 @@ def test_builtin_skills_seeded(qube_db):
         return counts, missing_meta
 
     counts, missing_meta = asyncio.run(_check())
-    assert counts == {"QuantSkills": 6, "LLMQuant": 18}
+    assert counts == {"QuantSkills": 14, "LLMQuant": 18}
     assert missing_meta == 0, "每个内置技能都必须标注来源与链接"
 
 
@@ -91,7 +91,7 @@ def test_builtin_skills_have_detailed_prompt(qube_db):
             await db.close()
 
     lengths = asyncio.run(_check())
-    assert len(lengths) == 24
+    assert len(lengths) == 32
     assert all(n > 200 for n in lengths.values()), "每个内置技能正文应详实（>200 字符）"
 
 

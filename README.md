@@ -13,7 +13,7 @@
 | **因子研究** | 因子库、批量扫描、因子体检与拥挤度、样本外验证、因子池 → 组合回测闭环、AlphaLens、面板导出 |
 | **分钟因子 · 日内高频** | 分钟缓存 → 清洗 → 分钟公式 → 折叠日频面板；时刻 IC 曲线；回测 `execute_at` 执行时点 |
 | **策略回测** | 向量化回测：T 日信号 T+1 收盘成交、成本拆分、容量分析、参数敏感性、退市清算、风格/行业归因 |
-| **QUBE 策略 Agent** | 多轮对话设计策略的 AI Agent（工具调用循环 + 策略工作台），AI 配置独立 |
+| **QUBE 策略 Agent** | 多轮对话设计策略的 AI Agent（21 个平台工具的工具调用循环 + 策略/因子画板 + 内置技能库，技能原文本地缓存离线可用），AI 配置独立 |
 | **策略库** | 工作中 / 已保存两态，策略代码版本历史可回滚 |
 | **实验管理** | 实验记录、多实验对比、研究日志，回测/工作流完成后自动创建 |
 | **风险与组合分析** | 风格暴露（Barra）、组合优化（SLSQP 纯多头）、压力测试（历史情景回放）、事前风险预测 |
@@ -132,6 +132,18 @@ localquant/
 - [审查与修复流程](docs/审查与修复流程.md)
 - 前端主题：[frontend/DESIGN-opencode.ai.md](frontend/DESIGN-opencode.ai.md)
 
+## 致谢与来源
+
+QUBE 策略 Agent 与因子研究在多处参考了 **PandaAI** 生态的公开成果：
+
+- **PandaAI / panda_factor** — 因子公式算子库（`backend/services/factor_operators.py`）复刻 PandaAI 公式版口径；工作流节点契约（`BaseWorkNode`/`@work_node`）与因子算子库设计参考 [PandaAI-Tech/panda_factor](https://github.com/PandaAI-Tech/panda_factor)。
+- **QuantSkills**（PandaAI 旗下开源量化能力平台）— QUBE 内置技能库的量化技能内容来自 [quantskills.ai](https://www.quantskills.ai)（GPL-3.0）：因子研究全流程技能（方向/风险形态因子库、挖掘工作流 SOP、生产工厂、体检评估、正交化、衰减、合并、诊断优化、回测过拟合检查）与分析师技能。技能手册为面向本平台的适配改写，各仓库 README/SKILL.md 原文缓存于本地库随项目分发。
+- **LLMQuant** — 18 个金融大类 Agent Skills（MIT，[LLMQuant/skills](https://github.com/LLMQuant/skills)）。
+- **pi（earendil-works）** — QUBE Agent 内核（Tool 声明、agent loop、事件流协议）为 pi-agent-core 架构的 Python 移植（MIT）。
+- **ComfyUI / ComfyUI_frontend / OpenSandbox** — 工作流编辑器与代码执行沙箱（见上方技术栈）。
+
+上述第三方组件的版权、许可证与分发形态的完整声明见 **[NOTICE](./NOTICE)**。
+
 ## License
 
 本项目以 **GPL-3.0-or-later** 分发。
@@ -139,7 +151,8 @@ localquant/
 工作流编辑器基于 [ComfyUI](https://github.com/comfyanonymous/ComfyUI) 与
 [ComfyUI_frontend](https://github.com/Comfy-Org/ComfyUI_frontend)（均为 GPL-3.0）构建：
 后端实现其服务器协议（`backend/comfy/`），前端经 `comfyui-frontend-package==1.47.10`
-托管于 `/comfy/` 并以 iframe 内嵌。因合并 GPL-3.0 代码，整个作品转为 GPL-3.0。
+托管于 `/comfy/` 并以 iframe 内嵌。QUBE 内置技能库含 QuantSkills 技能内容（GPL-3.0，
+原文随本地库分发）。因合并 GPL-3.0 代码，整个作品转为 GPL-3.0。
 
 上游版权、来源与所用版本见 [NOTICE](./NOTICE)，完整许可证见 [LICENSE](./LICENSE)。
 对外分发（含二进制/SaaS）须一并提供完整对应源码。

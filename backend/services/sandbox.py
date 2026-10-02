@@ -68,6 +68,36 @@ def _normalize_signals(sig) -> pd.DataFrame:
     raise ValueError("generate_signals 应返回 dict 或 DataFrame")
 
 
+# 研究实验执行脚本：读入行情面板 CSV → 执行用户代码 → 取 run_experiment(data)/result
+# → 结果 JSON 写出；异常以 RESEARCH_ERROR 前缀输出到 stdout，供宿主机识别
+_RESEARCH_RUNNER_TEMPLATE = """\
+import json, sys, traceback
+import pandas as pd
+import numpy as np
+
+data = {{}}
+for _name, _path in {panels!r}.items():
+    data[_name] = pd.read_csv(_path, index_col=0, parse_dates=True)
+
+_user_ns = {{"pd": pd, "np": np, "data": data}}
+try:
+    exec({code!r}, _user_ns)
+    result = _user_ns.get("result")
+    if result is None and callable(_user_ns.get("run_experiment")):
+        result = _user_ns["run_experiment"](data)
+    text = json.dumps(result, ensure_ascii=False, default=str)
+    with open({result_path!r}, "w") as _f:
+        _f.write(text)
+    print("RESEARCH_OK")
+except Exception as _e:
+    print("RESEARCH_ERROR:" + str(_e))
+    traceback.print_exc()
+"""
+
+# 实验结果 JSON 上限（超出说明 agent 返回了大对象而非摘要，打回重写）
+_RESEARCH_RESULT_CAP = 16_000
+
+
 def sandbox_available() -> bool:
     """沙箱是否可能可用（配置开启 + opensandbox 包可导入）；真实可达性在执行时判定"""
     if not settings.sandbox_enabled:
@@ -178,6 +208,133 @@ async def run_signals(
 
     df = await asyncio.to_thread(_run_in_process, signal_code, prices)
     return df, False
+
+
+# ---------------------------------------------------------------------------
+
+
+def _research_result_to_json(result) -> str:
+    """实验结果统一转 JSON 文本；不可序列化视为用户代码错误"""
+    import json
+
+    try:
+        text = json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        raise ValueError(f"result 无法序列化为 JSON: {e}")
+    if len(text) > _RESEARCH_RESULT_CAP:
+        raise ValueError(
+            f"result 过大（{len(text)} 字符 > 上限 {_RESEARCH_RESULT_CAP}），"
+            "请只返回统计摘要/小样本，大 DataFrame 用 .head() 或聚合后再放入"
+        )
+    return text
+
+
+def _extract_research_result(ns: dict):
+    """从用户命名空间取 run_experiment(data) 或 result 变量"""
+    result = ns.get("result")
+    if result is None and callable(ns.get("run_experiment")):
+        result = ns["run_experiment"](ns.get("data"))
+    if result is None:
+        raise ValueError(
+            "实验代码必须定义 run_experiment(data) 函数或设置 result 变量"
+        )
+    return result
+
+
+async def _run_research_in_opensandbox(
+    code: str, panels: dict[str, pd.DataFrame]
+) -> tuple[dict, str]:
+    """沙箱内执行研究实验，返回 (结果对象, stdout)；基础设施失败抛 SandboxInfraError"""
+    try:
+        from opensandbox import Sandbox
+        from opensandbox.models import WriteEntry
+    except Exception as e:  # 包未安装 → 降级
+        raise SandboxInfraError(f"opensandbox 未安装: {e}")
+
+    entries = []
+    panel_paths: dict[str, str] = {}
+    for i, (name, df) in enumerate(panels.items()):
+        path = f"/tmp/lq_panel_{i}.csv"
+        panel_paths[name] = path
+        entries.append(
+            WriteEntry(path=path, data=df.to_csv(), mode=644)
+        )
+    result_path = "/tmp/lq_research_result.json"
+    runner = _RESEARCH_RUNNER_TEMPLATE.format(
+        panels=panel_paths, result_path=result_path, code=code
+    )
+    runner_path = "/tmp/lq_research_runner.py"
+    entries.append(WriteEntry(path=runner_path, data=runner, mode=644))
+
+    try:
+        sandbox = await Sandbox.create(settings.sandbox_image)
+    except Exception as e:  # server/Docker 不可用 → 降级
+        raise SandboxInfraError(
+            f"创建沙箱失败（Docker/opensandbox-server 未就绪？）: {e}"
+        )
+
+    try:
+        async with sandbox:
+            await sandbox.files.write_files(entries)
+            execution = await sandbox.commands.run(f"python {runner_path}")
+            stdout = _collect_stdout(execution)
+            if "RESEARCH_ERROR:" in stdout:
+                msg = stdout.split("RESEARCH_ERROR:", 1)[1].splitlines()[0].strip()
+                raise ValueError(f"实验代码执行失败: {msg}")
+            content = await sandbox.files.read_file(result_path)
+            text = (
+                content.decode()
+                if isinstance(content, (bytes, bytearray))
+                else str(content)
+            )
+            import json
+
+            return json.loads(text), stdout
+    except ValueError:
+        raise
+    except SandboxInfraError:
+        raise
+    except Exception as e:  # 执行/读写过程的基础设施异常 → 降级
+        raise SandboxInfraError(f"沙箱执行异常: {e}")
+
+
+def _run_research_in_process(
+    code: str, panels: dict[str, pd.DataFrame]
+) -> tuple[dict, str]:
+    """进程内执行研究实验（降级路径），返回 (结果对象, stdout)"""
+    import contextlib
+    import io
+    import json
+
+    import numpy as np
+
+    ns: dict = {"__builtins__": __builtins__, "pd": pd, "np": np, "data": dict(panels)}
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        exec(code, ns)  # noqa: S102 单命名空间：函数定义与 data 变量同域可见
+    result = _extract_research_result(ns)
+    return json.loads(_research_result_to_json(result)), buf.getvalue()
+
+
+async def run_research_code(
+    code: str, panels: dict[str, pd.DataFrame]
+) -> tuple[dict, str, bool]:
+    """执行研究实验代码，返回 (结果 dict, stdout, 是否在沙箱中隔离执行)
+
+    与 run_signals 同一套信任模型：沙箱可用时容器内执行；
+    用户代码错误抛 ValueError；基础设施故障自动降级进程内。
+    """
+    if sandbox_available():
+        try:
+            result, stdout = await _run_research_in_opensandbox(code, panels)
+            return result, stdout, True
+        except SandboxInfraError as e:
+            logger.warning(f"OpenSandbox 不可用，实验降级为进程内执行（无容器隔离）：{e}")
+
+    import asyncio
+
+    result, stdout = await asyncio.to_thread(_run_research_in_process, code, panels)
+    return result, stdout, False
 
 
 _status_cache: dict = {"ts": 0.0, "server_reachable": False, "probe_error": ""}

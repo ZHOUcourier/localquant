@@ -1,11 +1,14 @@
 """QUBE 技能库 — 内置技能 seed 数据（精选自公开量化技能社区，标注来源）
 
 来源：
-- QuantSkills (https://www.quantskills.ai)：因子/分析师两类热门技能，
-  内容取自各技能详情页 README（GPL-3.0），url 指向详情页。
+- QuantSkills (https://www.quantskills.ai)：因子研究全流程 + 分析师两类热门技能，
+  内容取自各技能详情页 README 与社区实测文章（GPL-3.0），url 指向详情页。
+  因子线覆盖：方向/风险形态因子库 → 挖掘工作流 → 生产工厂 → 体检评估 →
+  正交化 → 衰减 → 合并 → 诊断优化 → 回测过拟合检查。
 - LLMQuant (https://github.com/LLMQuant/skills)：18 个金融大类 Agent Skills（MIT）。
 
 seed 策略：每次启动清空 builtin=1 的旧内置行再写入（用户自建技能不受影响）。
+手册（prompt）需自包含：GitHub 原文抓取失败时（离线/网络受限），agent 仅凭手册也能执行。
 """
 
 import json
@@ -245,6 +248,347 @@ report    画像 · 逻辑树 · 证据图 · 风险图 → serenity_model_repor
         "https://www.quantskills.ai/skills/skill-smart-money-profiler",
         1,
         "https://github.com/quantskills/skill-smart-money-profiler",
+    ),
+    (
+        "qs-factor-evaluate",
+        "因子体检（七项指标+六维主分）",
+        "因子",
+        "factor",
+        "给定 [date×symbol] 截面信号：契约校验 → Rank IC 与 Pearson IC 双对照 → 多头回测 → 分组单调性 → 换手率 → 六维主分，输出标准化体检报告。因子体检仪，不是回测引擎。",
+        """## 这个技能解决什么问题
+
+新手最常见的反模式是「只跑一个回测收益率就下结论」。本技能把因子评价固化成标准流程：
+从**有效性、风险收益、稳健性、换手成本**四个维度给单个因子做「完整体检」，
+输出七项指标 + 一个可比的六维主分——像面试官一样判断这个因子值不值得继续深入。
+
+## 输入 / 输出
+
+- 输入：`[date × symbol]` 截面信号面板（不自带行情，需自备 OHLCV）
+- 输出：标准化七项体检报告 + 六维主分（主分可比、可排序、可追踪）
+
+## 六步体检流程
+
+1. **校验信号契约**：截面规模、缺失率、均值分布是否合格
+2. **双 IC 对照**：Rank IC 与 Pearson IC 一起算，一眼看出线性相关还是极端值主导
+3. **多头回测**：T+1 开盘买 Top 10% 等权，双边手续费 15bp，T+1+H 卖出
+4. **分组单调性**：5 或 10 分位，Spearman 检验「高分组 vs 低分组」是否一致趋势
+5. **年化换手率**：评估策略容量与成本，换手过高在主分中施加惩罚
+6. **主分公式 v2**：原始指标先压缩到 [-2, +2] 再归一加权，不同因子可同台比较
+
+## 使用边界
+
+- 换市场要重设假设：A 股记得处理涨跌停、停牌；美股按实际交易机制调整费率
+- 主分只在同口径（市场/窗口/成本假设）下可比，不是跨市场绝对排名
+- 实测示例：20 日动量在 3 只美股样本上被评出 score=-1.295——负分恰恰说明评分体系在正常工作
+
+## 管线定位
+
+因子挖掘 → **评估(本技能)** → 正交化 → 衰减分析 → 合并 → 回测。评价结果可直接喂给 factor-blend。
+
+QuantSkills 社区 · GPL-3.0 · `git clone https://github.com/quantskills/skill-factor-evaluate.git`""",
+        "QuantSkills",
+        "https://www.quantskills.ai/skills/skill-factor-evaluate",
+        1,
+        "https://github.com/quantskills/skill-factor-evaluate",
+    ),
+    (
+        "qs-factor-mine",
+        "因子挖掘工作流 SOP（单点假设实验法）",
+        "因子",
+        "factor",
+        "把「加一个新因子」拆成可重复、可归因、可回滚的标准动作：单点假设原则 + 5 步闭环 + 信号契约 + 相关性门控 + ITER_NOTE 四字段。工作流 SOP，不是因子库。",
+        """## 这个技能是什么
+
+**不是因子库，是工作流 SOP。** 解决「想法太多、改得太杂，最后不知道哪一步起作用」的问题。
+核心规则是**单点假设原则**：每轮只改一件事——同时改因子、改组合方法、改标签，
+涨了跌了都不知道是谁干的。
+
+## 5 步闭环（每轮实验）
+
+1. **读宪法**：evaluation.md（评分公式）与 program.md（研究方向）是唯一依据，不读不许提假设
+2. **写 ITER_NOTE**：四字段必填 `op_type / hypothesis / change / expected`，缺一不能跑
+3. **改代码**：一次只改一个 op_type，范围锁死
+4. **跑验证**：runner.once 看 score 升降
+5. **归档/回滚**：ACCEPTED 归档；REJECTED / CRASH 回滚，不怕搞砸
+
+ITER_NOTE 会被强制校验：`hypothesis="试试看"`、`expected="提升"` 这类含糊表述会被判不合格——
+本质是逼你把「我想试试」翻译成「基于什么假设、改了什么、预期效果在什么区间」。
+
+## 信号契约（必须项）
+
+因子信号必须做**截面 MAD winsorize + z-score**：处理后截面均值严格为 0、标准差严格为 1。
+标准化让不同因子可比，避免量纲和极端值带来的伪相关。
+
+## 相关性门控
+
+新因子与已有因子 Spearman |ρ| ≥ 0.85 **直接拒绝**（0.60 软警告）——自动拦截「换皮因子」。
+
+## 因子族起点
+
+factor-families.md 按 Phase 1~3 列出 11 个典型因子表达式：动量/反转、波动率/低波、
+流动性、量价相关、形态/lottery，全部经过信号契约验证、拿来就能算，适合做变体和组合的起点。
+
+QuantSkills 社区 · GPL-3.0 · `git clone https://github.com/quantskills/skill-factor-mine.git`""",
+        "QuantSkills",
+        "https://www.quantskills.ai/skills/skill-factor-mine",
+        1,
+        "https://github.com/quantskills/skill-factor-mine",
+    ),
+    (
+        "qs-factor-blend",
+        "多因子合并（去冗余→加权→合成信号）",
+        "因子",
+        "factor",
+        "输入多个同口径已评价截面因子：相关矩阵去冗余（默认阈值 0.7）→ 等权/ICIR/Score 三种加权 → 逐日截面 z-score 合成 composite_signal。信号层合并，不做资金分配。",
+        """## 这个技能解决什么问题
+
+手头攒了一堆因子（动量、反转、波动率、换手率……）每个都「有点道理」：全用怕信息重复，
+只挑一个又浪费预测力。本技能把「去冗余 → 加权 → 合成」整条链路封装成标准 8 步工作流，
+从多个因子生成一个干净、可解释的复合 Alpha 信号。
+
+**核心理念**：这是**信号层合并**（产出 composite_signal[date×symbol]），不是组合层资金分配。
+
+## 8 步工作流
+
+校验输入 → 读取评价 → 过滤因子 → 计算相关矩阵 → 去冗余 → 选择权重 → 生成复合信号 → 重新评价
+
+- **去冗余**：因子间 rank 相关超过阈值（默认 0.7，`--corr-threshold` 可调）自动剔除重复信号
+- **合成**：逐日截面 z-score 标准化，输出可直接接入选股/组合构建的复合信号
+
+## 三种加权方案
+
+| 方案 | 逻辑 | 适合 |
+|---|---|---|
+| equal | 去冗余后平分权重，默认基准 | 因子少、质量接近 |
+| ICIR | 按 ICIR 分配，预测力强的话语权大 | 追求 IC 稳定性 |
+| score | 综合 ICIR+覆盖率+换手率 | 日常研究推荐 |
+
+## 用法与产物
+
+```
+python scripts/blend.py --factor-dir data/factors --weight score
+```
+
+输入要求：同一口径、**已完成评价**的截面因子（parquet）。交互模式先展示方案与质量速览再执行。
+产物：composite_signal + combine_state.pkl（中间状态）+ combine_report.json（诊断报告），可复现可回溯。
+
+## 管线定位
+
+factor-evaluate（体检）→ factor-decay（衰减）→ **blend(本技能)** → 组合构建。
+实测中 ICIR/Score 加权显著优于等权，且换手率保持在合理区间。
+
+QuantSkills 社区 · GPL-3.0 · `git clone https://github.com/quantskills/skill-factor-blend.git`""",
+        "QuantSkills",
+        "https://www.quantskills.ai/skills/skill-factor-blend",
+        1,
+        "https://github.com/quantskills/skill-factor-blend",
+    ),
+    (
+        "qs-factor-optimize",
+        "因子诊断（KEEP/REFINE/REJECT）",
+        "因子",
+        "factor",
+        "给已有因子做标准化体检：Period Sweep 扫参数 → Ablation 拆组件 → Refinement 增强 → 输出 KEEP/REFINE/REJECT 结论。因子诊断器，不是因子生成器。",
+        """## 这个技能解决什么问题
+
+从研报抄的公式回测挺美、实盘就亏？本技能不发明新因子，只做**已有因子的诊断、优化和
+baseline 选择**：扫参数、拆组件、测稳健性，最后必须告诉你：保留、优化、还是放弃。
+
+## 四个最常见的坑
+
+- **美股公式，A 股噪声**：市场结构不同，套利空间已被压缩
+- **240 日窗口饿晕**：3 年数据上 warm-up 太长，利用率过低
+- **样本量不够**：行业 zscore 在 3-4 只/行业时噪声爆炸
+- **方向反了**：以为是均值回归，数据跑的是动量
+
+## 六步诊断链路
+
+1. **Period Sweep**：扫核心 period 参数，优先稳健区间而非单点最高值
+2. **Best Period 选择**：综合主指标、相邻稳定性、换手与风险权衡
+3. **Ablation**：拆出可解释组件，分类 core / helpful / risk_control / cosmetic / harmful
+4. **Refinement**：从 best period + core 出发增强，不造新因子
+5. **最终报告**：optimize_report.md 把原始版、最佳参数版、核心版、优化版放一起对比
+6. **结论**：KEEP / REFINE / REJECT（每份报告必须给）
+
+## 三条红线
+
+- 不编造数据：缺失指标直接报 BLOCKED
+- 不覆盖源码：Refinement 只生成建议，推广需用户确认
+- 必须给结论：keep / refine / reject 三选一
+
+## 用法
+
+```
+python scripts/init_optimize_folder.py ./momentum_factor --factor-name momentum \\
+  --engine "skills.backtest + skills.report" --data "A-share daily, 2018-2024, HS300"
+```
+
+产物集中在 optimize_tests/ 目录（00_manifest.json + period_sweep/ + ablation/ + refinement/ + 报告），不污染原始因子代码。核心指标三个：IC、Sharpe、Turnover。
+
+QuantSkills 社区 · GPL-3.0 · `git clone https://github.com/quantskills/skill-factor-optimize.git`""",
+        "QuantSkills",
+        "https://www.quantskills.ai/skills/skill-factor-optimize",
+        1,
+        "https://github.com/quantskills/skill-factor-optimize",
+    ),
+    (
+        "qs-risk-pattern-alpha",
+        "风险与形态因子库（288 个 OHLCV 因子）",
+        "因子",
+        "factor",
+        "288 个独立 OHLCV 因子 Skill：波动率、K 线形态、振荡指标、回撤压力四大方向，每个因子带独立实现与验证入口。directional-alpha 的姊妹仓库。",
+        """## 仓库内容
+
+QuantSkills 组织的风险与形态因子库，收录 288 个独立的 OHLCV 因子，
+覆盖四个方向：**波动率、K 线形态、振荡指标、回撤压力**。
+每个因子都有独立实现和验证入口，可直接计算因子值，也可挑选候选接入自己的评价或组合流程。
+
+## 验证口径
+
+2026-07 历史测试：5 只美股近两年数据，抽取 15 个代表性因子——15/15 全部运行，
+样本覆盖率 > 98.5%。该结果只说明当次样本的运行与覆盖情况，**不代表 288 个因子在其他
+市场、时间窗口或策略中都有效**。
+
+## 数据要求
+
+只依赖标准 OHLCV 字段 `date, symbol, open, high, low, close, volume`。
+
+## 姊妹仓库（QuantSkills 因子库全家桶）
+
+- 🧭 directional-alpha — 方向类（趋势/动量/突破/反转/通道，296 个）
+- 🛡️ risk-pattern-alpha — 风险与形态（本仓库）
+- 📊 volume-stat-alpha — 成交量 · 量价 · 流动性 · 时序排名 · 收益分布
+
+使用边界：因子被收录、脚本通过验证或历史 IC 有表现，都不能直接推出未来收益。
+
+QuantSkills 社区 · GPL-3.0 · `git clone https://github.com/quantskills/skill-quant-factor-risk-pattern-alpha.git`""",
+        "QuantSkills",
+        "https://www.quantskills.ai/skills/skill-quant-factor-risk-pattern-alpha",
+        1,
+        "https://github.com/quantskills/skill-quant-factor-risk-pattern-alpha",
+    ),
+    (
+        "qs-factor-factory",
+        "因子生产工厂（批量生成+验证+打包）",
+        "因子",
+        "factor",
+        "输入标准 OHLCV 数据和一批因子设定：批量完成特征生成、截面标准化、基础验证，并把每个因子打包成独立 Skill（文档+代码+验证脚本+结果）。批次层面生成索引与汇总报告。",
+        """## 这个技能是什么
+
+**因子生产工厂**：不是现成因子库。输入一份标准 OHLCV 数据和一批因子设定后，
+批量完成特征生成、截面标准化和基础验证，再把每个因子分别打包成可运行的独立 Skill。
+
+## 交付物
+
+每个因子目录保留：说明文档、调用说明、可运行的计算代码、验证脚本、验证结果；
+批次层面还有索引与汇总报告。因子公式、代码、文档和验证**一起交接**，
+而不是散落在临时脚本里——这是它比「一张结果表」更持久的价值。
+
+## 实测参考
+
+20 只 A 股 2023—2024 年约 9600 行数据，10 个因子及其验证结果约 10 分钟生成
+（具体取决于设备、数据和参数）。重复的代码编写、文档整理和初步验证被统一成可复跑的交付格式。
+
+## 使用边界
+
+它负责**生产和验证因子 Skill**，不负责证明这些因子能形成策略；
+不替代组合、交易成本和收益判断。验证通过 ≠ 未来有效。
+
+## 与平台工作流衔接
+
+批量产物接入平台：公式类因子可直接用 generate_stock_factor_code 逐个写入画板 →
+run_factor_analysis 验证 → 达标的 save_factor_to_library 入库。
+
+QuantSkills 社区 · GPL-3.0 · `git clone https://github.com/quantskills/skill-quant-factor-skill-factory.git`""",
+        "QuantSkills",
+        "https://www.quantskills.ai/skills/skill-quant-factor-skill-factory",
+        1,
+        "https://github.com/quantskills/skill-quant-factor-skill-factory",
+    ),
+    (
+        "qs-factor-orthogonalize",
+        "因子正交化（逐日 OLS 剥离已知暴露）",
+        "因子",
+        "factor",
+        "对截面因子逐日做 OLS 回归，剥离行业、市值、Beta、波动率、旧因子等已知暴露，用残差生成新因子，并输出暴露、IC 保留率、换手、覆盖率诊断。",
+        """## 这个技能解决什么问题
+
+因子跑出 IC 之后先问一句：**这里面有多少是行业/市值/风格暴露贡献的？**
+本技能逐日进行截面 OLS 回归，把原始因子对行业、市值、Beta、波动率和旧因子等
+变量的暴露剥离，使用**残差**生成新的因子值。
+
+## 输出
+
+- 残差因子（新因子值）
+- 暴露诊断：暴露、IC 保留率、换手、覆盖率——方便检查清理前后发生了什么
+
+## 实测参考
+
+200 只模拟股票 × 100 交易日：正交化后因子与三类风格变量的相关性降到 0.001 以下。
+这说明当时设置下的暴露剥离确实完成；**但不能证明残差一定是「纯 Alpha」，
+也不能保证 IC 或实际收益随之提高**。
+
+## 使用边界
+
+- 适合场景：已有因子疑似依赖行业、规模或风格时，先把暴露和残差信号分开检查
+- 正交化改变的是**信号解释**，不是自动增强收益
+
+## 管线定位
+
+因子挖掘 → 评估 → **正交化(本技能)** → 衰减分析 → 合并。
+与 factor-blend 的分工：正交化清洗单个因子内部的已知暴露；合并处理多个信号之间的信息重复。
+
+QuantSkills 社区 · GPL-3.0 · `git clone https://github.com/quantskills/skill-factor-orthogonalize.git`""",
+        "QuantSkills",
+        "https://www.quantskills.ai/skills/skill-factor-orthogonalize",
+        1,
+        "https://github.com/quantskills/skill-factor-orthogonalize",
+    ),
+    (
+        "qs-backtest-overfit",
+        "回测过拟合检查（DSR/PBO/折减）",
+        "回测",
+        "backtest",
+        "评估回测过拟合与多重检验风险：输入被选中策略的收益序列并如实提供试验次数，用 DSR、PBO、Haircut Sharpe（Harvey-Liu 折减）和 MinTRL 检查「好看的结果是不是试出来的」。",
+        """## 这个技能解决什么问题
+
+多次挖因子、调参数之后留下的「最佳结果」，很可能只是**试出来的**。
+本技能针对这种选择偏差：输入被选中策略的收益序列，并**如实提供**试验次数或试验矩阵，
+用四个工具分别检查不同维度的过拟合风险。
+
+## 四件套
+
+| 工具 | 检查什么 |
+|---|---|
+| DSR (Deflated Sharpe) | 选择偏差：扣掉「从 N 次试验里挑最好」的水分后的 Sharpe |
+| PBO | 样本内外排名一致性：回测最优的参数在样本外还靠谱吗 |
+| Haircut Sharpe | Harvey-Liu 多重检验折减：多重比较后的夏普该打几折 |
+| MinTRL | 最低样本长度：当前 Sharpe 需要多少年数据才可信 |
+
+## 实测参考（对照实验）
+
+- 纯噪声案例：从 200 个策略里挑出的年化 Sharpe 高达 **1.65**，但 DSR 只有 **0.63**——原形毕露
+- 注入日漂移的对照案例：DSR 升到 **0.98**——真实的持续性信号能通过检查
+
+共 23 项检查。这个对照展示了工具怎样区分「看起来很好」和「在当前假设下通过统计检查」。
+
+## 使用边界
+
+- 当前在 QuantSkills 官方资产目录中标记为 L1 Listed / **draft**
+- 能检查多重试验和选择偏差，**不能**发现幸存者偏差、数据前瞻、交易成本拟合——
+  这些仍需回到数据、样本构造和研究过程人工复核
+- 结论是统计检查通过与否，不构成对未来收益的任何承诺
+
+## 管线定位
+
+放在研究流程最后一步：因子挖掘 → 评估 → 合并 → 回测 → **过拟合检查(本技能)**。
+凡是「试了很多组参数后选出的最好结果」，入库/上线前都应过一遍。
+
+QuantSkills 社区 · GPL-3.0 · `git clone https://github.com/quantskills/skill-backtest-overfit.git`""",
+        "QuantSkills",
+        "https://www.quantskills.ai/skills/skill-backtest-overfit",
+        1,
+        "https://github.com/quantskills/skill-backtest-overfit",
     ),
 ]
 

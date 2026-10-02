@@ -61,6 +61,24 @@ async def lifespan(app: FastAPI):
         _scheduler_task = asyncio.create_task(scheduler_loop())
         logger.info("Daily scheduler started")
 
+    # 技能 GitHub 原文本地仓回填（offline-first：读取永远走本地，这里只补缺失/过期快照）
+    async def _refresh_skill_origins():
+        try:
+            from backend.services.qube_skill_repo import refresh_stale_skill_repos
+
+            results = await refresh_stale_skill_repos()
+            ok = sum(1 for r in results if r.get("ok"))
+            if results:
+                failed = [r["name"] for r in results if not r.get("ok")]
+                logger.info(
+                    f"技能原文本地仓刷新完成：{ok}/{len(results)} 成功"
+                    + (f"；失败: {', '.join(failed)}" if failed else "")
+                )
+        except Exception as e:
+            logger.warning(f"技能原文本地仓刷新失败（不影响启动）: {e}")
+
+    asyncio.create_task(_refresh_skill_origins())
+
     yield
 
     # Shutdown

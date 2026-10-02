@@ -43,6 +43,47 @@ Copyright (C) 2026 Zhuoli Zhou
 - 说明：本项目节点契约（`BaseWorkNode`/`@work_node`）与因子算子库在设计上参考其
   官网手册与公开实现；如逐点移植其具体实现，将在对应源文件保留出处与 SPDX 标识。
 
+## 5. QuantSkills 技能内容（QUBE 内置技能库）
+
+- 平台：QuantSkills — PandaAI 旗下开源量化能力平台（https://www.quantskills.ai）
+- 许可证：**GPL-3.0**
+- 版权：Copyright (c) QuantSkills 及各技能作者（lionjiadong、abgyjaguo、
+  TerribleCookie、songshuquant 等，详见各技能仓库）
+- 来源：各技能详情页及其 GitHub 仓库（`github.com/quantskills/skill-*`，
+  完整清单见 `backend/services/qube_skills.py` 的 `QUANTSKILLS_SKILLS`）
+- 使用方式与分发形态：
+  - **手册层**：`qube_skills.prompt` 列的中文操作手册，为面向本平台工具链的
+    **适配改写**（方法论翻译为 QUBE 平台工具流程），非原文拷贝；
+  - **原文层**：各仓库 README.md / SKILL.md **全文原文**抓取后缓存于本地库
+    （`qube_skill_repos` 表），随本项目一同分发 —— 构成 GPL-3.0 意义上的再分发，
+    来源与许可声明以本条为准；本项目整体已按 GPL-3.0-or-later 分发，许可证兼容。
+
+## 6. LLMQuant 技能内容（QUBE 内置技能库）
+
+- 项目：LLMQuant/skills
+- 许可证：**MIT**
+- 来源：https://github.com/LLMQuant/skills
+- 使用方式与分发形态：18 个金融大类技能以分类目录形式 seed 于
+  `backend/services/qube_skills.py`；各目录 SKILL.md 原文缓存于本地库
+  （`qube_skill_repos` 表）随本项目分发（MIT 与 GPL-3.0 兼容）。
+
+## 7. pi / pi-agent-core（QUBE Agent 内核设计参考）
+
+- 项目：earendil-works/pi（npm 包 `@earendil-works/pi-agent-core`）
+- 许可证：MIT
+- 来源：https://github.com/earendil-works/pi
+- 说明：`backend/services/qube_agent.py` 的 Tool 声明、agent loop（流式工具调用
+  循环）与事件流协议为其架构的 **Python 移植**（设计参考，非逐行拷贝）。
+
+## 8. OpenSandbox（代码执行沙箱）
+
+- 项目：alibaba/opensandbox 及其 Python SDK（PyPI `opensandbox`）
+- 许可证：Apache-2.0
+- 来源：https://github.com/alibaba/opensandbox
+- 说明：经 PyPI 依赖引入（`opensandbox>=0.1.15`），用于 QUBE/回测信号代码与
+  研究实验代码的容器隔离执行；本项目未修改其源码，Docker 不可用时自动降级
+  进程内执行。
+
 ---
 
 > 分发义务提醒：对外分发本作品（含二进制、SaaS 形态）时，须依据 GPL-3.0 一并提供
