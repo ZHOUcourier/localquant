@@ -28,6 +28,8 @@ export const router = createRouter({
         { path: 'experiments', component: () => import('./pages/Experiments.vue') },
         { path: 'risk', component: () => import('./pages/RiskAnalysis.vue') },
         { path: 'settings', component: () => import('./pages/Settings.vue') },
+        // 未知路由兜底：回首页（避免 /factors 等拼写错误整页白屏）
+        { path: ':pathMatch(.*)*', redirect: '/' },
       ],
     },
   ],
