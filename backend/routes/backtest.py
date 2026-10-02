@@ -223,6 +223,7 @@ async def run_strategy(req: RunStrategyRequest):
             strategy_id="",
             strategy_name=f"run-strategy·{req.signal_code.strip()[:24]}",
             source="run_strategy",
+            sandboxed=sandboxed,
         )
 
         return {

@@ -3,7 +3,24 @@
  * EmptyState — 新会话空态起始页（复刻 1355：逐字标题动画 + 模板卡片组）
  * 删除期货组；分组色点用 opencode 语义色 accent/warning/danger。
  */
+import { onMounted, ref } from 'vue'
+
 const emit = defineEmits<{ pick: [prompt: string] }>()
+
+// 沙箱就绪检测：未就绪时空态页给一次性引导（用户视角的可见降级提醒）
+const sandboxChecked = ref(false)
+const sandboxActive = ref(true)
+onMounted(async () => {
+  try {
+    const r = await fetch('/api/system/sandbox')
+    const d = await r.json()
+    sandboxActive.value = !!d?.active
+  } catch {
+    sandboxActive.value = true // 探测失败不误导
+  } finally {
+    sandboxChecked.value = true
+  }
+})
 
 const TITLE = '想从哪儿开始？'
 
@@ -125,6 +142,15 @@ const GROUPS: TplGroup[] = [
       <p class="mt-1 text-xs text-[#9a9898]">
         点一张卡片我就接着办，或者直接在下面打字告诉我你的想法。
       </p>
+    </div>
+
+    <!-- 首次引导：沙箱未就绪时提示（检测一次即可，不在会话中反复打扰） -->
+    <div
+      v-if="sandboxChecked && !sandboxActive"
+      class="rounded-[4px] border border-[rgba(255,159,10,0.4)] bg-[#fff8e8] px-3 py-2 text-[11px] leading-relaxed text-[#8a6100]"
+    >
+      提示：代码执行沙箱未就绪，回测/实验代码将在本机进程内直接执行（无容器隔离，结果会标注）。
+      启用隔离：先启动 Docker Desktop，再运行 <span class="font-mono">make sandbox-server</span>（设置页可查看状态）。
     </div>
 
     <div class="space-y-5">

@@ -580,7 +580,7 @@ async def _tool_run_backtest(args: dict, session_id: str) -> dict:
     except Exception as e:
         return {"error": f"回测失败: {str(e)[:400]}", "backtest_run_id": run_id}
     m = result["metrics"]
-    return {
+    out = {
         "ok": True,
         "backtest_run_id": run_id,
         "strategy_id": strategy_id,
@@ -591,7 +591,14 @@ async def _tool_run_backtest(args: dict, session_id: str) -> dict:
             "max_drawdown": m.get("max_drawdown"),
             "trade_count": m.get("trade_count"),
         },
+        "sandboxed": bool(m.get("sandboxed", False)),
     }
+    if not out["sandboxed"]:
+        out["sandbox_note"] = (
+            "本次信号代码未在沙箱中隔离（OpenSandbox 未启用或未就绪），"
+            "已在宿主机进程内执行；请在回复中告知用户，并提示可运行 make sandbox-server 启用隔离"
+        )
+    return out
 
 
 async def _tool_get_backtest_result(args: dict) -> dict:
@@ -975,7 +982,7 @@ async def _tool_run_research_code(args: dict, session_id: str) -> dict:
         return {"error": f"实验执行失败: {str(e)[:300]}"}
 
     close = panels["close"]
-    return {
+    out = {
         "ok": True,
         "result": result,
         "stdout": (stdout or "")[:2000],
@@ -987,6 +994,12 @@ async def _tool_run_research_code(args: dict, session_id: str) -> dict:
             "date_range": [str(close.index.min()), str(close.index.max())],
         },
     }
+    if not sandboxed:
+        out["sandbox_note"] = (
+            "本次实验未在沙箱中隔离（OpenSandbox 未启用或未就绪），"
+            "已在宿主机进程内执行；请在回复中告知用户，并提示可运行 make sandbox-server 启用隔离"
+        )
+    return out
 
 
 async def _tool_bind_chat_target(args: dict, session_id: str) -> dict:
@@ -1296,6 +1309,7 @@ def build_qube_tools(session_id: str) -> list[Tool]:
             description=(
                 "对策略提交真实回测（落库可在回测记录中查看），返回总收益/年化/夏普/最大回撤等指标。"
                 "优先传 strategy_id（用已写入画板的策略）；也可直传 signal_code 即时验证。"
+                "结果带 sandboxed 字段：false 表示信号代码未在沙箱隔离（进程内执行），需在回复中告知用户。"
             ),
             parameters={
                 "type": "object",
@@ -1460,6 +1474,7 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                 "（open/high/low/close/volume/amount，可用 symbols/起止日期裁剪）。"
                 "result 必须是可 JSON 序列化的摘要（数字/字符串/列表/小样本），"
                 "不要返回大 DataFrame，需要样本时自行 .head()/统计后放入 result。"
+                "结果带 sandboxed 字段：false 表示未在沙箱隔离（进程内执行），需在回复中告知用户。"
             ),
             parameters={
                 "type": "object",

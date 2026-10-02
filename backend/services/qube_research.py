@@ -550,6 +550,8 @@ async def execute_backtest_run(run_id: str) -> dict:
                 "n_delisting": len(result.get("delisting_events", [])),
                 "leverage_summary": result.get("leverage_summary", {}),
                 "assumptions": result.get("assumptions", []),
+                # 执行环境：false = 信号代码未在沙箱中隔离（前端展示徽标，agent 转告用户）
+                "sandboxed": bool(sandboxed),
             }
             # 明细数据量受限时只保留尾部，并显式标注截断，避免 trade_count 与明细不一致
             _TRADE_TAIL = 1000

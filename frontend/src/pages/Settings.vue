@@ -88,6 +88,21 @@ const { data: dataStatus } = useQuery<DataStatus>({
   queryFn: () => fetch('/api/data/status').then((r) => r.json()),
 })
 
+// 代码执行沙箱状态（实际探测 server；note 含启用引导，见 backend/services/sandbox.py）
+interface SandboxStatus {
+  enabled: boolean
+  package_installed: boolean
+  server_reachable: boolean
+  active: boolean
+  image: string
+  note: string
+}
+const { data: sandboxStatus } = useQuery<SandboxStatus>({
+  queryKey: ['sandbox-status'],
+  queryFn: () => fetch('/api/system/sandbox').then((r) => r.json()),
+  refetchInterval: 30_000,
+})
+
 // 供应商/本机 CLI 清单由后端统一下发（对齐 models.dev，与 QUBE 共用同一注册表）
 const { data: providerData } = useQuery<{ providers: ProviderInfo[] }>({
   queryKey: ['ai-providers'],
@@ -404,6 +419,37 @@ function selectProvider(p: ProviderInfo) {
           <div class="flex items-start gap-1.5 pt-1">
             <Info :size="13" class="mt-0.5 shrink-0 text-[#9a9898]" />
             <span class="text-xs text-[#9a9898]">端口修改后需重启 make dev 生效</span>
+          </div>
+        </div>
+      </Card>
+
+      <!-- 代码执行沙箱 -->
+      <Card title="代码执行沙箱">
+        <div class="space-y-2.5">
+          <div class="flex items-center gap-2">
+            <span
+              class="inline-block h-2 w-2 rounded-full"
+              :class="sandboxStatus?.active ? 'bg-[#30d158]' : sandboxStatus?.package_installed ? 'bg-[#ffcc00]' : 'bg-[#ff3b30]'"
+            />
+            <span class="text-[13px] font-medium text-[#201d1d]">
+              {{
+                sandboxStatus?.active
+                  ? '沙箱隔离已就绪'
+                  : sandboxStatus?.package_installed
+                    ? '已安装，沙箱服务未启动'
+                    : '未启用 / 未安装'
+              }}
+            </span>
+            <span class="text-[11px] text-[#9a9898]">镜像 {{ sandboxStatus?.image ?? '-' }}</span>
+          </div>
+          <p class="text-xs leading-relaxed text-[#646262]">{{ sandboxStatus?.note ?? '检测中…' }}</p>
+          <div
+            v-if="sandboxStatus && !sandboxStatus.active"
+            class="rounded-[4px] border border-[rgba(255,159,10,0.4)] bg-[#fff8e8] px-2.5 py-2"
+          >
+            <div class="text-[11px] font-medium text-[#8a6100]">未启用隔离时，QUBE/回测的信号与实验代码会在本机进程内直接执行</div>
+            <div class="mt-1 font-mono text-[11px] text-[#8a6100]">make sandbox-server <span class="text-[#b08a2e]"># 先启动 Docker Desktop（Windows 需 WSL2 后端）</span></div>
+            <div class="mt-1 text-[11px] text-[#b08a2e]">详见 docs/代码执行沙箱.md</div>
           </div>
         </div>
       </Card>

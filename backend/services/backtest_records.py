@@ -105,11 +105,13 @@ async def persist_backtest_run(
     run_id: str = "",
     status: str = "done",
     error: str = "",
+    sandboxed: bool | None = None,
 ) -> str:
     """写入一条回测记录 + provenance，返回 run_id。
 
     params 必须已包含 signal_code（如适用）；metrics 为最终绩效字典。
     result 至少含 equity_curve / positions / prices / cost_summary / assumptions。
+    sandboxed：信号代码是否在沙箱中隔离执行（None = 不适用，如直接传入信号矩阵）。
     """
     run_id = run_id or str(uuid.uuid4())
     now = int(time.time())
@@ -136,8 +138,15 @@ async def persist_backtest_run(
     metrics_out["delisting_events"] = result.get("delisting_events", [])
     metrics_out["leverage_summary"] = result.get("leverage_summary", {})
     metrics_out["n_delisting"] = len(metrics_out.get("delisting_events") or [])
+    if sandboxed is not None:
+        # 执行环境随记录持久化：前端徽标 / agent / 复现诊断都从这里读
+        metrics_out["sandboxed"] = bool(sandboxed)
 
     logs = [f"[INFO] 回测 #{run_id[:8]} 完成，来源 {source}"]
+    if sandboxed is not None:
+        logs.append(
+            f"[INFO] 信号代码执行环境：{'沙箱隔离' if sandboxed else '进程内执行（无容器隔离）'}"
+        )
     for a in metrics_out.get("assumptions", [])[:20]:
         logs.append(f"[WARN] 假设: {a}")
     if error:

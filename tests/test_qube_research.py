@@ -247,3 +247,6 @@ def test_backtest_run_pipeline(qube_db, monkeypatch):
     )
     assert "回测完成" in row["log_text"]
     assert result["metrics"]["trade_count"] == metrics["trade_count"]
+    # 执行环境随记录持久化：前端徽标 / agent 转告用户都从这里读
+    assert metrics["sandboxed"] is False
+    assert "信号生成完成（进程内执行）" in row["log_text"]

@@ -400,8 +400,14 @@ async def sandbox_status() -> dict:
     available = sandbox_available()
     server_reachable = bool(_status_cache.get("server_reachable"))
     active = available and server_reachable
+    install_hint = (
+        "启用：先启动 Docker Desktop，再运行 make sandbox-server（详见 docs/代码执行沙箱.md）"
+    )
     if not available:
-        note = "未启用/未安装 opensandbox，回测信号将进程内执行（无容器隔离）"
+        note = (
+            "未启用/未安装 opensandbox，回测/实验代码将进程内执行（无容器隔离）。"
+            f"{install_hint}"
+        )
     elif active:
         note = (
             "opensandbox-server 可达；Docker/镜像最终可用性以首次沙箱创建为准，"
@@ -410,8 +416,8 @@ async def sandbox_status() -> dict:
     else:
         err = _status_cache.get("probe_error") or "server 不可达"
         note = (
-            f"opensandbox-server 不可达（{err}）；回测信号将进程内执行"
-            "（无容器隔离）"
+            f"opensandbox-server 不可达（{err}）；回测/实验代码将进程内执行"
+            f"（无容器隔离）。{install_hint}"
         )
     return {
         "enabled": settings.sandbox_enabled,

@@ -84,7 +84,9 @@ QUBE_SYSTEM = """职责：通过多轮对话帮助用户设计、验证、迭代
    run_research_code 执行或写入画板，不要把大段代码直接贴在回复里
    （回复只写结论、指标解读与下一步建议）。
 5. 回测/分析失败时根据错误信息修正代码重试，不要把错误直接丢给用户。
-6. 创建新因子前先用 search_factor_library 查重，避免与已有因子同质。"""
+6. 创建新因子前先用 search_factor_library 查重，避免与已有因子同质。
+7. 工具结果带 sandboxed=false 时（信号/实验代码在宿主机进程内执行、无容器隔离），
+   在回复中明确告知用户这一事实，并提示运行 make sandbox-server 启用隔离。"""
 
 # 用户可编辑的系统提示词（侧栏「系统提示词」弹窗；remember 工具也追加到这里）
 SYSTEM_PROMPT_PATH = pathlib.Path("data/qube_system_prompt.md")

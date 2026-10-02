@@ -97,3 +97,50 @@ def test_run_row_to_dict_sanitizes_legacy_nan():
 
     # Starlette 使用 allow_nan=False；净化后必须可严格序列化（否则详情接口 500）
     json.dumps(d, allow_nan=False, ensure_ascii=False)
+
+
+def test_persist_backtest_run_records_sandboxed(tmp_path, monkeypatch):
+    """run-strategy 直跑链路：执行环境（sandboxed）随记录落库 metrics 与日志"""
+    import asyncio
+
+    from backend import database
+    from backend.services.backtest_records import persist_backtest_run
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+    asyncio.run(database.init_db())
+
+    idx = pd.DatetimeIndex(["2026-07-01", "2026-07-02"])
+    result = {
+        "equity_curve": pd.Series([1_000_000.0, 1_010_000.0], index=idx),
+        "positions": pd.DataFrame({"A": [0.5, 0.5]}, index=idx),
+        "prices": pd.DataFrame({"A": [10.0, 10.1]}, index=idx),
+        "cost_summary": {},
+        "assumptions": [],
+    }
+    run_id = asyncio.run(
+        persist_backtest_run(
+            params={"signal_code": "def generate_signals(prices, **kw): ..."},
+            result=result,
+            metrics={"total_return": 0.01},
+            strategy_name="沙箱标注测试",
+            source="run_strategy",
+            sandboxed=False,
+        )
+    )
+
+    async def _q():
+        db = await database.get_db()
+        try:
+            cur = await db.execute(
+                "SELECT metrics_json, log_text FROM backtest_runs WHERE id = ?",
+                (run_id,),
+            )
+            return await cur.fetchone()
+        finally:
+            await db.close()
+
+    row = asyncio.run(_q())
+    metrics = json.loads(row["metrics_json"])
+    assert metrics["sandboxed"] is False
+    assert "进程内执行（无容器隔离）" in row["log_text"]
+    # 实验自动创建只收数值指标，sandboxed 布尔值不会进实验指标卡

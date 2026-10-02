@@ -513,6 +513,24 @@ onMounted(loadBtRuns)
               </div>
             </div>
 
+            <!-- 执行环境徽标：信号代码是否在沙箱中隔离（老记录无此字段则不显示） -->
+            <div
+              v-if="(btDetail.metrics as any)?.sandboxed !== undefined"
+              class="flex items-center gap-1.5 text-[11px]"
+            >
+              <span
+                class="inline-block h-1.5 w-1.5 rounded-full"
+                :class="(btDetail.metrics as any).sandboxed ? 'bg-[#30d158]' : 'bg-[#ffcc00]'"
+              />
+              <span :class="(btDetail.metrics as any).sandboxed ? 'text-[#1d8a3e]' : 'text-[#8a6100]'">
+                {{
+                  (btDetail.metrics as any).sandboxed
+                    ? '信号代码在沙箱中隔离执行'
+                    : '信号代码为进程内执行（无容器隔离）· 启用沙箱：make sandbox-server'
+                }}
+              </span>
+            </div>
+
             <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] p-3">
               <div class="mb-2 text-xs font-semibold text-[#201d1d]">净值曲线</div>
               <VChart v-if="btEquityOption" :option="btEquityOption" :height="200" />
