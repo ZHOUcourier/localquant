@@ -469,7 +469,7 @@ async def portfolio_backtest(req: PortfolioRequest):
                     "sharpe_ratio": result.get("tear_sheet", {}).get("sharpe_ratio"),
                     "alpha_cum": (result.get("attribution") or {}).get("alpha_cum"),
                 },
-                notes="因子池组合回测（等权/IC加权合成 + Top-N 多空）",
+                notes="因子池组合回测（等权/IC加权合成 + Top-N 纯多头）",
                 source="portfolio",
             )
         except Exception:
