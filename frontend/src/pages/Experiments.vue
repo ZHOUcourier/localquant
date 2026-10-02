@@ -125,9 +125,15 @@ function isParamDiff(vals: unknown): boolean {
   return values.length > 1 && new Set(values.map((x) => JSON.stringify(x))).size > 1
 }
 
-function fmtMetric(v: unknown): string {
-  if (v === undefined) return '-'
-  return typeof v === 'number' ? v.toFixed(6) : JSON.stringify(v)
+// 收益率/波动率/回撤类指标按百分数展示；其余数值定长小数；整数原样
+const PCT_METRIC = /(^|_)(return|returns|volatility|drawdown|vol)$/i
+
+function fmtMetric(v: unknown, key = ''): string {
+  if (v === undefined || v === null) return '-'
+  if (typeof v !== 'number') return String(v)
+  if (Number.isInteger(v)) return String(v)
+  if (PCT_METRIC.test(key) && Math.abs(v) <= 10) return `${(v * 100).toFixed(2)}%`
+  return v.toFixed(4)
 }
 </script>
 
@@ -209,7 +215,7 @@ function fmtMetric(v: unknown): string {
                   class="text-xs text-[#646262]"
                 >
                   {{ k }}:
-                  <span class="text-[#201d1d]">{{ typeof v === 'number' ? v.toFixed(4) : String(v) }}</span>
+                  <span class="text-[#201d1d]">{{ fmtMetric(v, k) }}</span>
                 </span>
               </div>
             </td>
@@ -319,7 +325,7 @@ function fmtMetric(v: unknown): string {
                     :key="e.id"
                     class="px-2 py-1 font-mono text-[#201d1d]"
                   >
-                    {{ fmtMetric((vals as Record<string, unknown>)[e.id]) }}
+                    {{ fmtMetric((vals as Record<string, unknown>)[e.id], key) }}
                   </td>
                 </tr>
               </tbody>
