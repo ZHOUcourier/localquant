@@ -386,6 +386,9 @@ async def ic_analysis(req: ICAnalysisRequest):
             )
         )
         return result
+    except ValueError as e:
+        # 面板无共同日期/共同股票、样本不足等属输入错误，返回 400 而非 500
+        raise HTTPException(status_code=400, detail=f"IC分析失败: {e}")
     except Exception as e:
         logger.error(f"IC分析失败: {e}")
         raise HTTPException(status_code=500, detail=f"IC分析失败: {e}")
