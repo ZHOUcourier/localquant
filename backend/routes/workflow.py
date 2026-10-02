@@ -86,6 +86,33 @@ async def get_node_output(run_id: str, node_uuid: str):
     return result
 
 
+def _load_node_report(candidate_ids: list[str], node_uuid: str) -> tuple[Any, bool]:
+    """按运行新→旧查找节点的综合报告 pkl；返回 (report, 是否存在过产物 pkl)
+
+    pkl_found=True 而 report=None 意味着该节点类型本就不产出报告
+    （仅因子分析/AlphaLens/回测节点有 report 字段），与「没有运行记录」不同。
+    """
+    import pickle
+
+    from backend.config import settings
+
+    pkl_found = False
+    for rid in candidate_ids:
+        pkl = settings.output_dir / rid / f"{node_uuid}.pkl"
+        if not pkl.exists():
+            continue
+        pkl_found = True
+        try:
+            with open(pkl, "rb") as f:  # noqa: ASYNC230
+                output = pickle.load(f)
+        except Exception:
+            continue
+        report = output.get("report") if isinstance(output, dict) else None
+        if report:
+            return report, True
+    return None, pkl_found
+
+
 @router.get("/node-report/{workflow_id}/{node_uuid}")
 async def get_node_report(
     workflow_id: str,
@@ -98,38 +125,31 @@ async def get_node_report(
 
     供工作流编辑器节点上的「显示分析结果」按钮使用，报告与因子研究页同构。
     """
-    import pickle
-
-    from backend.config import settings
     from backend.database import get_db
 
-    candidates: list[str] = [run_id] if run_id else []
-    if not candidates:
-        # 该工作流最近的运行记录（新 → 旧）
-        db = await get_db()
-        try:
+    db = await get_db()
+    try:
+        if run_id:
+            candidates = [run_id]
+        else:
             cursor = await db.execute(
                 "SELECT id FROM workflow_runs WHERE workflow_id = ? "
                 "ORDER BY started_at DESC LIMIT 50",
                 (workflow_id,),
             )
             candidates = [row["id"] for row in await cursor.fetchall()]
-        finally:
-            await db.close()
+    finally:
+        await db.close()
 
-    for rid in candidates:
-        pkl = settings.output_dir / rid / f"{node_uuid}.pkl"
-        if not pkl.exists():
-            continue
-        try:
-            with open(pkl, "rb") as f:  # noqa: ASYNC230
-                output = pickle.load(f)
-        except Exception:
-            continue
-        report = output.get("report") if isinstance(output, dict) else None
-        if report:
-            return {"run_id": rid, "report": report}
-
+    report, pkl_found = _load_node_report(candidates, node_uuid)
+    if report:
+        return {"run_id": run_id or candidates[0], "report": report}
+    if pkl_found:
+        raise HTTPException(
+            status_code=404,
+            detail="该节点类型不产出综合分析报告（仅因子分析 / AlphaLens / 回测节点提供），"
+            "或该次运行未生成报告",
+        )
     raise HTTPException(
         status_code=404,
         detail="未找到该节点的分析报告，请先运行工作流（旧版本产出的运行需重新执行一次）",
