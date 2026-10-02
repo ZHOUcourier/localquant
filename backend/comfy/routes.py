@@ -402,10 +402,21 @@ async def list_userdata(
     return results
 
 
+# 官方前端启动必拉、但属可选个性化文件：缺失时返回约定的空内容而非 404
+# （语义等同官方服务的 404 被前端兜住的效果，但不在控制台刷错误）
+_OPTIONAL_EMPTY_USERDATA: dict[str, tuple[str, str]] = {
+    "user.css": ("", "text/css"),
+    "comfy.templates.json": ("{}", "application/json"),
+}
+
+
 @router.get("/userdata/{file:path}")
 async def get_userdata(file: str):
     target = _userdata_path(file)
     if not target.is_file():
+        empty = _OPTIONAL_EMPTY_USERDATA.get(file)
+        if empty is not None:
+            return Response(content=empty[0], media_type=empty[1])
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(target)
 
@@ -530,6 +541,21 @@ def mount_comfy(app) -> None:
     @app.get("/comfy/user.css", include_in_schema=False)
     async def _empty_user_css():
         return Response(content="", media_type="text/css")
+
+    # 官方前端周期轮询 Jobs API（本适配层无任务队列语义）；按其 zod schema
+    # 返回约定空集，避免控制台每几秒刷 404
+    @app.get("/comfy/api/jobs", include_in_schema=False)
+    async def _empty_jobs(status: str = "", limit: int = 200, offset: int = 0):
+        return {
+            "jobs": [],
+            "pagination": {"offset": offset, "limit": limit, "total": 0, "has_more": False},
+        }
+
+    # 一次性拉取、前端已兜 404 的次要端点：按其解析形状返回空值，消掉加载噪音
+    @app.get("/comfy/api/global_subgraphs", include_in_schema=False)
+    @app.get("/comfy/api/experiment/models", include_in_schema=False)
+    async def _empty_experiments_list():
+        return []
 
     # localquant 自定义前端扩展（节点代码/AI）—— 必须在静态挂载前注册
     _EXT_DIR = Path(__file__).parent / "extensions"
