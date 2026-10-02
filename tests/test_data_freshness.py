@@ -80,14 +80,36 @@ def test_gap_only_does_not_poison_status(freshness_env):
     assert result["gap_count"] == 1
 
 
-def test_gap_classification_weekday_fallback(freshness_env):
-    """无交易日历的工作日近似下同样区分断档"""
+def test_whole_universe_old_is_global_stale_not_stock_gap(freshness_env):
+    """QMT 断连多日导致全库一起变旧：是数据更新问题，不得逐只报「单股断档」，
+    且整体 status 必须标 stale（P1 回归：此前 125 只全标断档且 status=ok）"""
+    install, calendar = freshness_env
+    install(
+        {
+            "A.SH": str(calendar[-25]),
+            "B.SH": str(calendar[-25]),
+            "C.SH": str(calendar[-25]),
+        }
+    )
+    result = market_data.data_freshness()
+
+    assert result["globally_stale"] is True
+    assert result["stale_trade_days"] == 24
+    assert result["stale_count"] == 0
+    assert result["gap_count"] == 0
+    assert result["status"] == "stale"
+
+
+def test_global_stale_weekday_fallback(freshness_env):
+    """无交易日历的工作日近似下，全库滞后同样成立（单股宇宙=全库一起旧）"""
     install, _ = freshness_env
     today = dt.datetime.now().astimezone().date()
     long_ago = today - dt.timedelta(days=60)  # 约 42 个工作日
-    install({"DELIST.SZ": str(long_ago)}, use_calendar=False)
+    install({"ONLY.SZ": str(long_ago)}, use_calendar=False)
     result = market_data.data_freshness()
 
+    assert result["globally_stale"] is True
+    assert result["status"] == "stale"
+    # 个股相对全市场最新日无掉队，不再误报单股断档
     assert result["stale_count"] == 0
-    assert result["gap_count"] == 1
-    assert result["status"] == "ok"
+    assert result["gap_count"] == 0

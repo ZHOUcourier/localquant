@@ -24,14 +24,15 @@ _qmt = QMTClient()
 
 
 def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
-    """数据时效检查：统计各缓存标的的最新交易日及其陈旧程度（相对最新交易日历）
+    """数据时效检查：区分「全库整体滞后」与「个股掉队」两级口径
 
-    陈旧口径：自然日 vs 工作日（交易日历不可得时用工作日近似）。
+    - 全库滞后：全市场最新数据日距「最新应交易日」超过阈值 → 数据更新问题
+      （QMT 断连/未补数），status 标 stale，个股不逐只报断档；
+    - 个股掉队：个股最新日落后「全市场最新数据日」的交易日数
+      >20 → 单股断档（疑似停牌/退市，属个股事件）；5~20 → 个股数据滞后。
+
+    陈旧口径：交易日历（QMT/持久化）优先，不可得时按工作日近似，
     长假（春节/国庆）按交易日历判定不会误报「数据断档」。
-
-    滞后分两类，避免单股断档污染整体时效结论：
-      - stale   滞后 5~20 个交易日：数据更新延迟，需要补数
-      - gapped  滞后 >20 个交易日：单股断档（疑似停牌/退市），属个股事件而非数据问题
     """
     codes = list_cached_codes(period)
     today = datetime.now().astimezone().date()
@@ -55,39 +56,33 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
     latest_date = max((r["latest_date"] for r in rows), default=None)
     latest_ts = pd.Timestamp(latest_date) if latest_date else None
 
-    # 交易日历（QMT 有则用，未连接用工作日近似）：陈旧判定 = 最近数据日距「最新应交易日」的交易日数
+    # 交易日历（QMT 有则用，未连接用工作日近似）
     trade_dates = _trading_calendar()
-    if latest_ts is not None:
-        if trade_dates is not None:
-            past = [d for d in trade_dates if d <= latest_ts.date()]
-            latest_trade_idx = len(past) - 1
-            expected_idx = len(trade_dates) - 1
-            stale_trade_days = expected_idx - latest_trade_idx
-        else:
-            stale_trade_days = len(pd.bdate_range(latest_ts.date(), today)) - 1
-    else:
-        stale_trade_days = None
 
-    # 停牌/新股可能久缺数，以「交易日」为经验阈值：
-    # >5 个交易日视为数据滞后（需补数）；>20 个交易日视为单股断档（疑似停牌/退市），分开报告
     stale_threshold = 5
     gap_threshold = 20
-    per_code_stale = {}
-    for r in rows:
-        if latest_ts is None:
-            per_code_stale[r["code"]] = 0
-            continue
-        d = pd.Timestamp(r["latest_date"]).date()
+
+    # 全库滞后：市场最新数据日距「最新应交易日」的交易日数
+    stale_trade_days = None
+    if latest_ts is not None:
         if trade_dates is not None:
-            past = [x for x in trade_dates if x <= d]
-            idx = len(past) - 1
-            per_code_stale[r["code"]] = expected_idx - idx
+            stale_trade_days = len([d for d in trade_dates if d > latest_ts.date()])
         else:
-            per_code_stale[r["code"]] = len(pd.bdate_range(d, today)) - 1
+            stale_trade_days = len(pd.bdate_range(latest_ts.date(), today)) - 1
+    globally_stale = bool(stale_trade_days is not None and stale_trade_days > stale_threshold)
+
+    def _lag_vs_universe(d) -> int:
+        """个股最新日落后全市场最新数据日的交易日数"""
+        if latest_ts is None or d >= latest_ts.date():
+            return 0
+        if trade_dates is not None:
+            return len([x for x in trade_dates if d < x <= latest_ts.date()])
+        return len(pd.bdate_range(d, latest_ts.date())) - 1
+
     stale = []
     gapped = []
     for r in rows:
-        lag = per_code_stale.get(r["code"], 0)
+        lag = _lag_vs_universe(pd.Timestamp(r["latest_date"]).date())
         if lag > gap_threshold:
             gapped.append(
                 {**r, "stale_trade_days": lag, "reason": "单股断档：疑似停牌/退市"}
@@ -100,6 +95,7 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
         "latest_date": latest_date,
         "staleness_days": (today - latest_ts.date()).days if latest_ts is not None else None,
         "stale_trade_days": stale_trade_days,
+        "globally_stale": globally_stale,
         "stale_threshold_trade_days": stale_threshold,
         "gap_threshold_trade_days": gap_threshold,
         "calendar": trading_calendar_source(),
@@ -108,7 +104,7 @@ def data_freshness(period: str = "1d", max_codes: int = 300) -> dict:
         "stale": stale[:50],
         "gap_count": len(gapped),
         "gapped": gapped[:50],
-        "status": "ok" if not stale else "stale",
+        "status": "stale" if (globally_stale or stale) else "ok",
     }
 
 

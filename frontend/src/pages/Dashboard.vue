@@ -159,7 +159,15 @@ interface Briefing {
     error?: string
   } | null
   dividend_events: { code: string; date: string; factor_ratio: number }[]
-  data_freshness: { total: number; latest_date: string | null; stale_count: number; calendar: string } | null
+  data_freshness: {
+    total: number
+    latest_date: string | null
+    stale_trade_days: number | null
+    globally_stale?: boolean
+    stale_count: number
+    gap_count?: number
+    calendar: string
+  } | null
   research_readiness: {
     ready: boolean
     n_stocks: number
@@ -390,7 +398,14 @@ const mono =
             <template v-if="briefing?.data_freshness">
               最新交易日 {{ briefing.data_freshness.latest_date ?? '无' }} ·
               {{ briefing.data_freshness.total }} 只缓存 ·
-              滞后标的 {{ briefing.data_freshness.stale_count }} 只
+              <template v-if="briefing.data_freshness.globally_stale">
+                <span class="text-[#cc7f08]">
+                  全库滞后 {{ briefing.data_freshness.stale_trade_days }} 个交易日（需补数）
+                </span>
+                ·
+              </template>
+              个股滞后 {{ briefing.data_freshness.stale_count }} 只 ·
+              断档 {{ briefing.data_freshness.gap_count ?? 0 }} 只
               <span class="text-[#9a9898]">
                 （{{ briefing.data_freshness.calendar === 'qmt' ? 'QMT 交易日历' : '工作日近似' }}口径）
               </span>
