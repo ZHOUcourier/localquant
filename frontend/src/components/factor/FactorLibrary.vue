@@ -396,6 +396,10 @@ function cardPerfMetrics(f: PresetFactor) {
           v-if="cat.category_code === 'INTRADAY'"
           class="rounded-[3px] bg-[rgba(38,166,154,0.12)] px-1 text-[10px] text-[#26A69A]"
         >日内高频</span>
+        <span
+          v-if="cat.category_code === 'INTRADAY'"
+          class="rounded-[3px] bg-[rgba(255,159,10,0.15)] px-1 text-[10px] font-medium text-[#cc7f08]"
+        >Beta</span>
       </button>
     </div>
 

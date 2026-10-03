@@ -127,6 +127,90 @@ def ID_SLICE(series: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     return _within_time(series, start, end)
 
 
+# ── 30 分钟时段分桶（价量熵因子的地基） ─────────────────────────────
+
+# A 股连续竞价：上午 09:30-11:30、下午 13:00-15:00，各 120 交易分钟；
+# 30 分钟时段共 8 个（09:30-10:00, ..., 14:30-15:00）。
+_MORNING_END_MIN = 11 * 60 + 30
+_AFTERNOON_START_MIN = 13 * 60
+_DAY_TRADING_MIN = 240
+
+
+def _trading_minute_elapsed(index: pd.DatetimeIndex) -> np.ndarray:
+    """bar 时刻 → 当日已交易分钟数（以 bar 末端计）。
+
+    09:31 → 1，10:00 → 30，11:30 → 120，13:01 → 121，15:00 → 240。
+    竞价 bar（09:30 及更早）与盘中异常时刻返回 0（调用方据此剔除）。
+    """
+    minutes = index.hour * 60 + index.minute
+    elapsed = np.where(
+        minutes <= _MORNING_END_MIN,
+        minutes - 9 * 60 - 30,
+        _DAY_TRADING_MIN // 2 + (minutes - _AFTERNOON_START_MIN),
+    )
+    return np.where((minutes > 9 * 60 + 30) & (minutes <= 15 * 60), elapsed, 0)
+
+
+def _slot_index(index: pd.DatetimeIndex, bucket_minutes: int = 30) -> np.ndarray:
+    """bar 时刻 → 日内时段序号（0 起，30 分钟桶对应 0..7）；竞价/异常时刻为 -1"""
+    elapsed = _trading_minute_elapsed(index)
+    return np.where(elapsed > 0, (elapsed - 1) // bucket_minutes, -1)
+
+
+def ID_PV_ENTROPY(price: pd.DataFrame, volume: pd.DataFrame, bucket_minutes: int = 30) -> pd.DataFrame:
+    """日内价量结构熵（分钟面板 → 日频面板）
+
+    按文档口径（QuantZone feat_single_amt_ratio_entropy_30m）：
+    1. 将分钟数据按日内 30 分钟时段分桶（钟表时段语义，停牌/无成交时段自然留空）；
+    2. 每时段取代表价（时段末收盘）与成交量合计；
+    3. price_ratio_b = close_b / Σclose，volume_ratio_b = vol_b / Σvol；
+    4. p_b = price_ratio_b × volume_ratio_b，日内再归一化为概率分布；
+    5. 熵 = -Σ p_b·ln(p_b)，p_b=0 项记 0；均匀分布达上界 ln(8)≈2.079。
+
+    清洗约定：price 缺失、volume<=0、竞价 bar（时段序号 -1）不参与计算；
+    全日无有效成交 → NaN。熵越低 = 成交越集中于少数时段。
+
+    bucket_minutes：时段宽度（分钟），默认 30；60m 等粗于 30m 的周期下每根
+    bar 自成一个更宽的时段（熵上界相应变低，跨周期不可比）。
+    """
+    if bucket_minutes <= 0:
+        raise ValueError("bucket_minutes 必须为正")
+    if price is None or volume is None or price.empty:
+        return pd.DataFrame()
+    out: dict[str, pd.Series] = {}
+    for code in price.columns:
+        s_price = price[code].dropna()
+        if s_price.empty:
+            continue
+        s_vol = volume[code].reindex(s_price.index).fillna(0.0).astype(float)
+        day = pd.DatetimeIndex(s_price.index).normalize()
+        slot = _slot_index(pd.DatetimeIndex(s_price.index), bucket_minutes)
+        all_days = pd.Index(day.unique())  # 价格面板出现过的交易日（保留 NaN 行）
+        valid = (slot >= 0) & (s_vol.to_numpy() > 0)
+        if not valid.any():
+            out[code] = pd.Series(np.nan, index=all_days)
+            continue
+        sp = s_price[valid]
+        sv = s_vol[valid]
+        key_day = day[valid]
+        key_slot = slot[valid]
+        g = pd.Series(sp.to_numpy()).groupby([key_day, key_slot])
+        slot_close = g.last()
+        slot_vol = pd.Series(sv.to_numpy()).groupby([key_day, key_slot]).sum()
+        day_close_sum = slot_close.groupby(level=0).transform("sum")
+        day_vol_sum = slot_vol.groupby(level=0).transform("sum")
+        p = (slot_close / day_close_sum.replace(0, np.nan)) * (
+            slot_vol / day_vol_sum.replace(0, np.nan)
+        )
+        p = p / p.groupby(level=0).transform("sum")
+        pos = p[p > 0]
+        entropy = -(pos * np.log(pos)).groupby(level=0).sum()
+        out[code] = entropy.reindex(all_days)
+    if not out:
+        return pd.DataFrame()
+    return pd.DataFrame(out).sort_index()
+
+
 # ── M_* 序列算子（分钟维度，按日分组不跨日） ────────────────────────
 
 
@@ -306,6 +390,15 @@ def INTRADAY_RET(panels: dict) -> pd.DataFrame:
     return ID_LAST(close, 0) / ID_FIRST(open_, 0) - 1.0
 
 
+def PV_ENTROPY_30M(panels: dict, bucket_minutes: int = 30) -> pd.DataFrame:
+    """日内价量结构熵（现成因子包装）：ID_PV_ENTROPY(m_close, m_volume, 30)
+
+    熵越低 = 成交越集中于少数 30 分钟时段（突发冲击/短线资金拥挤）。
+    对照 QuantZone feat_single_amt_ratio_entropy_30m。
+    """
+    return ID_PV_ENTROPY(panels.get("close"), panels.get("volume"), bucket_minutes)
+
+
 def build_intraday_namespace(panels: dict, meta: dict | None = None) -> dict:
     """分钟公式求值命名空间：m_* 字段 + ID_*/M_* 算子 + 现成高频因子
 
@@ -346,6 +439,7 @@ def build_intraday_namespace(panels: dict, meta: dict | None = None) -> dict:
         "ID_QUANTILE": ID_QUANTILE,
         "ID_COUNT": ID_COUNT,
         "ID_SLICE": ID_SLICE,
+        "ID_PV_ENTROPY": ID_PV_ENTROPY,
         "M_DELAY": M_DELAY,
         "M_MA": M_MA,
         "M_SUM": M_SUM,
@@ -376,6 +470,7 @@ def build_intraday_namespace(panels: dict, meta: dict | None = None) -> dict:
         "LIMIT_UP_TIME": lambda: LIMIT_UP_TIME(panels, meta),
         "OVERNIGHT_RET": lambda: OVERNIGHT_RET(panels),
         "INTRADAY_RET": lambda: INTRADAY_RET(panels),
+        "PV_ENTROPY_30M": lambda bucket_minutes=30: PV_ENTROPY_30M(panels, int(bucket_minutes)),
     }
     ns.update(factors)
     ns.update({k.lower(): v for k, v in factors.items()})

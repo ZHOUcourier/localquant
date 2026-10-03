@@ -1668,7 +1668,7 @@ class FactorResearchService:
             "ID_", "M_DELAY", "M_MA", "M_SUM", "M_STD", "M_CUMSUM",
             "TAIL_RET", "OPEN_RET", "JUMP_DAY", "AMIHUD5", "VWAP_DEV",
             "VOLUME_CLOCK", "AUC_VOL_RATIO", "LIMIT_UP_TIME",
-            "OVERNIGHT_RET", "INTRADAY_RET", "RV(",
+            "OVERNIGHT_RET", "INTRADAY_RET", "PV_ENTROPY_30M", "RV(",
         ]
         return any(t in formula for t in tokens)
 

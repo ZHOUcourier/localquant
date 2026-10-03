@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     qmt_path: str = ""
     qmt_data_dir: str = ""
 
+    # QuantZone（宽舟科技）因子数据平台 — 对拍/因子值拉取，密钥只存 .env
+    qz_access_key: str = ""
+    qz_sign_secret: str = ""
+    qz_base_url: str = "https://api.quantzone.tech"
+
     # AI（设置页 → 各场景化 AI 接口）
     openai_api_key: str = ""
     openai_base_url: str = ""  # 仅 custom（BYOK）需要；预置供应商自带 Base URL

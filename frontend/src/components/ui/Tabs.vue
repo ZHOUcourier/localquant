@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-
-export interface TabItem {
-  key: string
-  label: string
-  disabled?: boolean
-}
+import type { TabItem } from './types'
 
 const props = defineProps<{
   items: TabItem[]
@@ -48,6 +43,11 @@ function handleClick(key: string, disabled?: boolean) {
         @click="handleClick(item.key, item.disabled)"
       >
         {{ item.label }}
+        <span
+          v-if="item.badge"
+          class="ml-1 inline-block rounded-[3px] bg-[rgba(255,159,10,0.15)] px-1 align-middle text-[10px] font-medium leading-4 text-[#cc7f08]"
+          >{{ item.badge }}</span
+        >
         <span
           v-if="internalKey === item.key"
           class="absolute bottom-0 left-0 right-0 h-[2px] bg-[#9a9898]"

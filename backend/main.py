@@ -111,11 +111,13 @@ from backend.routes import (
     factor,
     ops,
     plugins,
+    quantzone,
     qube,
     regime,
     risk,
     strategy,
     system,
+    vectorbt,
     workflow,
 )
 from backend.routes import (
@@ -137,6 +139,8 @@ app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(risk.router, prefix="/api/risk", tags=["risk"])
 app.include_router(ops.router, prefix="/api/ops", tags=["ops"])
 app.include_router(regime.router, prefix="/api/regime", tags=["regime"])
+app.include_router(quantzone.router, prefix="/api/quantzone", tags=["quantzone"])
+app.include_router(vectorbt.router, prefix="/api/vectorbt", tags=["vectorbt"])
 
 # ComfyUI 协议适配层 + 官方前端托管（/comfy/api/* + /comfy/ws + /comfy/）
 from backend.comfy.routes import mount_comfy

@@ -106,6 +106,24 @@ INTRADAY_FACTORS = [
         "RANK(ID_STD(ID_SLICE(m_close, '13:00', '15:00')) / ID_STD(ID_SLICE(m_close, '09:30', '11:30')))",
         "下午 vs 上午价格波动比：日内波动结构，信息时点分布",
     ),
+    (
+        "intraday_pv_entropy_30m_ma20",
+        "价量熵(30m·20日均)",
+        "RANK(-MA(ID_PV_ENTROPY(m_close, m_volume, 30), 20))",
+        (
+            "日内成交结构熵：分钟数据按 30 分钟时段分桶，价占比×量占比构造分布算信息熵，"
+            "熵低=成交集中（突发冲击/短线资金拥挤）。文档口径最优为 20 日滚动均值平滑；"
+            "对照 QuantZone feat_single_amt_ratio_entropy_30m（中证1000 裸因子年化超额约 16.9%，"
+            "全风格中性化后约 4.3%，小票域显著、大票域失效，与流动性/残差波动率相关约 0.5）。"
+            "方向按文档 G0 组（低熵组）最优取负号，落地后请以本地 IC 符号复核"
+        ),
+    ),
+    (
+        "intraday_pv_entropy_30m_raw",
+        "价量熵(30m·原始)",
+        "RANK(-ID_PV_ENTROPY(m_close, m_volume, 30))",
+        "价量熵原始值（未平滑）：单日噪声大、换手高，作平滑版的对照",
+    ),
 ]
 
 

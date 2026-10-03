@@ -43,6 +43,9 @@ dependencies = [
     # 二者未就绪时自动降级为进程内执行（见 backend/services/sandbox.py）。
     "opensandbox>=0.1.15",
     "opensandbox-code-interpreter>=0.1.2",
+    "quantzone>=0.10.0",
+    "vectorbt>=1.0.0",
+    "plotly>=5.24,<6",
 ]
 
 [dependency-groups]

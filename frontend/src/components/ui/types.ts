@@ -14,6 +14,8 @@ export interface TabItem {
   key: string
   label: string
   disabled?: boolean
+  /** 可选徽标（如 Beta），渲染在标签右侧 */
+  badge?: string
 }
 
 export type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'info'

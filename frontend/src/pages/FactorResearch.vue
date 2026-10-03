@@ -16,7 +16,7 @@ import type { FactorResult, FactorReport, AlphaLensReport as AlphaLensReportT } 
 // 页级主 tab：因子研究 | 因子库
 const pageTabs: TabItem[] = [
   { key: 'research', label: '因子研究' },
-  { key: 'intraday', label: '分钟因子 · 日内高频' },
+  { key: 'intraday', label: '分钟因子 · 日内高频', badge: 'Beta' },
   { key: 'library', label: '因子库' },
 ]
 

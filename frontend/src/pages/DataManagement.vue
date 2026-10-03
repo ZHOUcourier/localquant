@@ -792,7 +792,10 @@ const provenanceColumns: Column[] = [
             参考数据随批量下载自动快照；指数历史成分从首次快照日起逐日积累，更早区间仍为当前成分（存在幸存者偏差）。标的池（两融/北向=沪深股通）仅作市场结构参考快照；本系统只做普通多头，不使用其做空或融资。
           </p>
           <div v-if="minuteCoverage && Object.keys(minuteCoverage).length" class="pt-2 border-t border-[#e3e0e0]">
-            <div class="text-xs font-medium text-[#646262] mb-1.5">分钟缓存 · 日内高频</div>
+            <div class="text-xs font-medium text-[#646262] mb-1.5">
+              分钟缓存 · 日内高频
+              <span class="ml-1 rounded-[3px] bg-[rgba(255,159,10,0.15)] px-1 py-px align-middle text-[10px] font-medium text-[#cc7f08]">Beta</span>
+            </div>
             <div
               v-for="(info, per) in minuteCoverage"
               :key="per"

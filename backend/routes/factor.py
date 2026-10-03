@@ -993,9 +993,9 @@ async def intraday_compute(req: IntradayComputeRequest):
     """分钟因子计算：分钟面板 →（清洗）→ 公式求值 → 自动折叠为日频因子面板
 
     公式环境：m_close/m_volume 等分钟字段 + ID_* 聚合算子（ID_LAST/ID_MEAN/
-    ID_SLICE...）+ M_* 分钟序列算子 + 现成高频因子（TAIL_RET/RV/JUMP_DAY/
-    AMIHUD5/VWAP_DEV/VOLUME_CLOCK/AUC_VOL_RATIO/LIMIT_UP_TIME/OVERNIGHT_RET/
-    INTRADAY_RET）。结果为分钟级时自动 ID_LAST 折叠到日。
+    ID_SLICE/ID_PV_ENTROPY...）+ M_* 分钟序列算子 + 现成高频因子（TAIL_RET/RV/
+    JUMP_DAY/AMIHUD5/VWAP_DEV/VOLUME_CLOCK/AUC_VOL_RATIO/LIMIT_UP_TIME/
+    OVERNIGHT_RET/INTRADAY_RET/PV_ENTROPY_30M）。结果为分钟级时自动 ID_LAST 折叠到日。
     """
     from backend.services.intraday_cleaner import load_intraday_panels
     from backend.services.intraday_operators import (

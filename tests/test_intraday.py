@@ -179,3 +179,163 @@ def test_intraday_panels_clean_flag(minute_cache, tmp_path):
     assert len(loaded["meta"]) == 3
     assert len(loaded["panels"]["close"].columns) == 3
     assert "auc_vol" in loaded["meta"][codes[0]].columns or "auc_vol" not in loaded["meta"][codes[0]].columns
+
+
+# ── ID_PV_ENTROPY：日内价量结构熵 ────────────────────────────────
+
+
+def _entropy_bars(times_minutes, closes, volumes, base_day="2024-01-02"):
+    """按 (分钟-of-day, close, volume) 列表构造单股票单日 5m 面板"""
+    idx = pd.DatetimeIndex(
+        [pd.Timestamp(base_day) + pd.Timedelta(minutes=m) for m in times_minutes]
+    )
+    return (
+        pd.DataFrame({"600000.SH": closes}, index=idx),
+        pd.DataFrame({"600000.SH": volumes}, index=idx),
+    )
+
+
+def _session_minutes():
+    """48 根 5m bar 的日内分钟时刻（09:35..11:30, 13:05..15:00）"""
+    return list(range(9 * 60 + 35, 11 * 60 + 30 + 1, 5)) + list(
+        range(13 * 60 + 5, 15 * 60 + 1, 5)
+    )
+
+
+def test_pv_entropy_uniform_is_ln8():
+    """收盘与成交量全日均匀 → 8 时段均匀分布，熵 = ln(8)"""
+    from backend.services.intraday_operators import ID_PV_ENTROPY
+
+    price, vol = _entropy_bars(
+        _session_minutes(), [20.0] * 48, [1000.0] * 48
+    )
+    h = ID_PV_ENTROPY(price, vol, 30)
+    assert len(h) == 1
+    assert abs(float(h.iloc[0, 0]) - np.log(8)) < 1e-9
+
+
+def test_pv_entropy_full_concentration_is_zero():
+    """全部成交量集中在单一时段 → 熵 = 0"""
+    from backend.services.intraday_operators import ID_PV_ENTROPY
+
+    vols = [1000.0] * 6 + [0.0] * 42  # 零成交 bar 被清洗，仅时段 0 有量
+    price, vol = _entropy_bars(_session_minutes(), [20.0] * 48, vols)
+    h = ID_PV_ENTROPY(price, vol, 30)
+    assert abs(float(h.iloc[0, 0])) < 1e-9
+
+
+def test_pv_entropy_two_slots_is_ln2():
+    """量均分于首尾两个时段（收盘恒定）→ p=0.5/0.5，熵 = ln(2)"""
+    from backend.services.intraday_operators import ID_PV_ENTROPY
+
+    vols = [1000.0] * 6 + [0.0] * 36 + [1000.0] * 6
+    price, vol = _entropy_bars(_session_minutes(), [20.0] * 48, vols)
+    h = ID_PV_ENTROPY(price, vol, 30)
+    assert abs(float(h.iloc[0, 0]) - np.log(2)) < 1e-9
+
+
+def test_pv_entropy_price_ratio_affects_value():
+    """时段收盘价参与分布（价占比×量占比），与纯量集中度结果不同
+
+    量均匀、时段收盘价 1..8 递增：p_b = close_b / Σclose，
+    熵 = -Σ (b/36)·ln(b/36)，必须严格小于均匀熵 ln(8)。
+    """
+    from backend.services.intraday_operators import ID_PV_ENTROPY
+
+    minutes = _session_minutes()
+    closes, vols = [], []
+    for m in minutes:
+        elapsed = (m - 9 * 60 - 30) if m <= 11 * 60 + 30 else (120 + m - 13 * 60)
+        slot = (elapsed - 1) // 30
+        closes.append(float(slot + 1))
+        vols.append(1000.0)
+    price, vol = _entropy_bars(minutes, closes, vols)
+    h = float(ID_PV_ENTROPY(price, vol, 30).iloc[0, 0])
+    ratios = np.arange(1, 9) / 36.0
+    expect = float(-(ratios * np.log(ratios)).sum())
+    assert abs(h - expect) < 1e-9
+    assert h < np.log(8)
+
+
+def test_pv_entropy_zero_volume_day_is_nan():
+    """全日无有效成交 → NaN"""
+    from backend.services.intraday_operators import ID_PV_ENTROPY
+
+    price, vol = _entropy_bars(_session_minutes(), [20.0] * 48, [0.0] * 48)
+    h = ID_PV_ENTROPY(price, vol, 30)
+    assert np.isnan(h.iloc[0, 0])
+
+
+def test_pv_entropy_auction_bar_excluded():
+    """竞价 bar（09:30，交易分钟偏移 0）不参与：加入后熵不变"""
+    from backend.services.intraday_operators import ID_PV_ENTROPY
+
+    minutes = _session_minutes()
+    price, vol = _entropy_bars(minutes, [20.0] * 48, [1000.0] * 48)
+    h_ref = float(ID_PV_ENTROPY(price, vol, 30).iloc[0, 0])
+    price2 = pd.concat(
+        [
+            pd.DataFrame(
+                {"600000.SH": [20.5]},
+                index=pd.DatetimeIndex([pd.Timestamp("2024-01-02 09:30:00")]),
+            ),
+            price,
+        ]
+    )
+    vol2 = pd.concat(
+        [
+            pd.DataFrame(
+                {"600000.SH": [500.0]},
+                index=pd.DatetimeIndex([pd.Timestamp("2024-01-02 09:30:00")]),
+            ),
+            vol,
+        ]
+    )
+    h2 = float(ID_PV_ENTROPY(price2, vol2, 30).iloc[0, 0])
+    assert abs(h_ref - h2) < 1e-12
+
+
+def test_pv_entropy_half_day_four_slots_is_ln4():
+    """半日市（上午 24 根 bar）→ 4 个时段，熵上界 ln(4)"""
+    from backend.services.intraday_operators import ID_PV_ENTROPY
+
+    minutes = list(range(9 * 60 + 35, 11 * 60 + 30 + 1, 5))
+    price, vol = _entropy_bars(minutes, [20.0] * 24, [1000.0] * 24)
+    h = ID_PV_ENTROPY(price, vol, 30)
+    assert abs(float(h.iloc[0, 0]) - np.log(4)) < 1e-9
+
+
+def test_pv_entropy_coarse_60m_bars():
+    """60m 数据：每根 bar 自成一个宽时段（4 个），均匀 → ln(4)（跨周期不可比）"""
+    from backend.services.intraday_operators import ID_PV_ENTROPY
+
+    minutes = [10 * 60 + 30, 11 * 60 + 30, 14 * 60, 15 * 60]
+    price, vol = _entropy_bars(minutes, [20.0] * 4, [1000.0] * 4)
+    h = ID_PV_ENTROPY(price, vol, 30)
+    assert abs(float(h.iloc[0, 0]) - np.log(4)) < 1e-9
+
+
+def test_pv_entropy_via_namespace_and_preset_formula(minute_cache, tmp_path):
+    """公式环境：原始熵 / RANK 包装 / MA20 平滑均可在分钟命名空间内求值"""
+    _cache, codes = _make_minute_cache(tmp_path, n_stocks=5, days=25)
+    loaded = intraday_cleaner.load_intraday_panels(codes, "5m")
+    ns = io.build_intraday_namespace(loaded["panels"], loaded["meta"])
+    raw = eval("ID_PV_ENTROPY(m_close, m_volume, 30)", {"__builtins__": {}}, ns)
+    assert isinstance(raw, pd.DataFrame) and not raw.empty
+    assert float(raw.values[~np.isnan(raw.values)].min()) >= 0.0
+    assert float(raw.values[~np.isnan(raw.values)].max()) <= np.log(8) + 1e-9
+    ranked = eval("RANK(-ID_PV_ENTROPY(m_close, m_volume, 30))", {"__builtins__": {}}, ns)
+    assert float(ranked.values[~np.isnan(ranked.values)].max()) <= 1.0 + 1e-9
+    smooth = eval(
+        "MA(ID_PV_ENTROPY(m_close, m_volume, 30), 20)", {"__builtins__": {}}, ns
+    )
+    assert len(smooth.index) == len(raw.index)
+
+
+def test_pv_entropy_detection_routes():
+    """含 ID_PV_ENTROPY 的公式被识别为分钟语法"""
+    svc = __import__(
+        "backend.services.factor_research", fromlist=["factor_research"]
+    ).factor_research
+    assert svc._is_intraday_formula("RANK(-ID_PV_ENTROPY(m_close, m_volume, 30))")
+    assert svc._is_intraday_formula("RANK(PV_ENTROPY_30M())")

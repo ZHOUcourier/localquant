@@ -50,10 +50,10 @@ class IntradayFactorOutput(BaseModel):
     notes=[
         "数据自动加载：按股票池+区间从本地分钟缓存组装面板（需先在数据管理下载分钟行情）",
         "分钟字段：m_open/m_high/m_low/m_close/m_volume/m_amount（datetime×股票 面板）",
-        "聚合算子：ID_LAST/ID_FIRST/ID_SUM/ID_MEAN/ID_MAX/ID_MIN/ID_STD/ID_QUANTILE/ID_COUNT/ID_SLICE；序列算子：M_DELAY/M_MA/M_SUM/M_STD/M_CUMSUM（按日分组不跨日）",
-        "现成高频因子：TAIL_RET/OPEN_RET/RV/JUMP_DAY/AMIHUD5/VWAP_DEV/VOLUME_CLOCK/AUC_VOL_RATIO/LIMIT_UP_TIME/OVERNIGHT_RET/INTRADAY_RET",
+        "聚合算子：ID_LAST/ID_FIRST/ID_SUM/ID_MEAN/ID_MAX/ID_MIN/ID_STD/ID_QUANTILE/ID_COUNT/ID_SLICE/ID_PV_ENTROPY（价量结构熵，30 分钟时段分桶）；序列算子：M_DELAY/M_MA/M_SUM/M_STD/M_CUMSUM（按日分组不跨日）",
+        "现成高频因子：TAIL_RET/OPEN_RET/RV/JUMP_DAY/AMIHUD5/VWAP_DEV/VOLUME_CLOCK/AUC_VOL_RATIO/LIMIT_UP_TIME/OVERNIGHT_RET/INTRADAY_RET/PV_ENTROPY_30M",
         "公式结果为分钟级时自动 ID_LAST 折叠为日频；也可直接返回日频面板后套 RANK/ZSCORE 等日频算子",
-        "示例：RANK(TAIL_RET(12)) — 尾盘动量因子；RANK(-RV(48)) — 已实现波动率反转",
+        "示例：RANK(TAIL_RET(12)) — 尾盘动量因子；RANK(-RV(48)) — 已实现波动率反转；RANK(-MA(ID_PV_ENTROPY(m_close, m_volume, 30), 20)) — 价量熵（对照 QuantZone feat_single_amt_ratio_entropy_30m）",
         "周期建议 5m 起步（数据量与噪音平衡）；1m 数据量是 5m 的 5 倍，请评估磁盘占用",
     ],
 )
