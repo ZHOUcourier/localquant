@@ -12,7 +12,8 @@ import { ExternalLink, BookOpen, GitFork, Star } from 'lucide-vue-next'
 import { useSpring, useReducedMotion } from '@vueuse/motion'
 import { renderMarkdown } from '@/lib/markdown'
 import { jsonFetch } from '@/components/qube/types'
-import type { SkillDetail, SkillRepo } from '@/components/qube/types'
+import type { Skill, SkillDetail, SkillRepo } from '@/components/qube/types'
+import SkillParamsDialog from './SkillParamsDialog.vue'
 
 export interface SkillDialogOrigin {
   x: number
@@ -215,12 +216,24 @@ watch(tabs, (t) => {
   if (t.length && !t.some((x) => x.key === tab.value)) tab.value = t[0].key
 })
 
+// 带参数技能的填参弹窗（确认后渲染模板预填 QUBE 输入框）
+const paramSkill = ref<Skill | null>(null)
+
 function useInQube() {
   const s = skill.value
   if (!s) return
   if (s.builtin && !s.enabled) return
+  if (!s.builtin && s.params?.length) {
+    paramSkill.value = s
+    return
+  }
   const text = s.builtin ? `请帮我${s.display_name}。` : s.prompt
   router.push({ path: '/qube', query: { prompt: text } })
+}
+
+function onParamsConfirm(prompt: string) {
+  paramSkill.value = null
+  router.push({ path: '/qube', query: { prompt } })
 }
 
 function fmtStars(v?: number | null): string {
@@ -385,4 +398,7 @@ function sourceLabel(src: string): string {
       </div>
     </div>
   </Teleport>
+
+  <!-- 带参数技能的填参弹窗 -->
+  <SkillParamsDialog v-if="paramSkill" :skill="paramSkill" @close="paramSkill = null" @confirm="onParamsConfirm" />
 </template>

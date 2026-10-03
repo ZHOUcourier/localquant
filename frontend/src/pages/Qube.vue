@@ -11,6 +11,7 @@ import { useRoute } from 'vue-router'
 import {
   BookMarked,
   BrainCircuit,
+  FileText,
   Minimize2,
   Download,
   MessageSquarePlus,
@@ -18,6 +19,7 @@ import {
   PanelLeftClose,
   PanelRightClose,
   PanelRightOpen,
+  Paperclip,
   Pencil,
   Pin,
   RefreshCw,
@@ -26,6 +28,7 @@ import {
   Settings2,
   Sparkles,
   Square,
+  Table2,
   Trash2,
   WifiOff,
 } from 'lucide-vue-next'
@@ -37,8 +40,8 @@ import StrategyWorkbench from '@/components/qube/StrategyWorkbench.vue'
 import SystemPromptDialog from '@/components/qube/SystemPromptDialog.vue'
 import EngineConfigDrawer from '@/components/qube/EngineConfigDrawer.vue'
 import { ResizeHandle } from '@/components/ui'
-import type { ChatMsg, ContextStats, ToolCall, ToolCalls } from '@/components/qube/types'
-import { jsonFetch } from '@/components/qube/types'
+import type { ChatAttachment, ChatMsg, ContextStats, ToolCall, ToolCalls } from '@/components/qube/types'
+import { fmtBytes, jsonFetch, uploadFetch } from '@/components/qube/types'
 import {
   CANVAS_EXPAND,
   SIDEBAR_MAX,
@@ -78,6 +81,11 @@ const search = ref('')
 const editing = ref<{ id: number; content: string } | null>(null)
 const deletingMsg = ref<ChatMsg | null>(null)
 const copyOk = ref(false)
+
+// —— 附件上传 ————————
+const pendingAttachments = ref<ChatAttachment[]>([])
+const uploading = ref(false)
+const fileInputEl = ref<HTMLInputElement | null>(null)
 
 const promptOpen = ref(false)
 const configOpen = ref(false)
@@ -379,18 +387,66 @@ async function streamReply(
 
 /** 普通发送：追加用户消息 + 空助手占位，POST /chat */
 async function sendText(text: string) {
-  if (!text.trim() || streaming.value) return
+  if ((!text.trim() && !pendingAttachments.value.length) || streaming.value) return
   if (!activeId.value) await newSession()
   input.value = ''
   chatError.value = null
   chatOffline.value = false
   lastText.value = text
+  const attachmentIds = pendingAttachments.value.map((a) => a.id)
+  const attachments = [...pendingAttachments.value]
+  pendingAttachments.value = []
   // Claude Code 式：上下文将满时先压缩早前对话释放空间，再发本轮
   await maybeAutoCompact()
-  messages.value.push({ role: 'user', content: text })
+  messages.value.push({ role: 'user', content: text, attachments })
   const am = newAssistantMsg()
   messages.value.push(am)
-  await streamReply(am, '/api/qube/chat', { session_id: activeId.value, message: text }, { popOnError: true })
+  await streamReply(
+    am,
+    '/api/qube/chat',
+    { session_id: activeId.value, message: text, attachment_ids: attachmentIds },
+    { popOnError: true },
+  )
+}
+
+// —— 附件上传（PDF/Word/PPT/TXT/MD 文本；CSV/XLSX 表格） ————————
+function pickFiles() {
+  if (streaming.value || uploading.value) return
+  fileInputEl.value?.click()
+}
+
+async function onFilesChosen(ev: Event) {
+  const el = ev.target as HTMLInputElement
+  const files = Array.from(el.files || [])
+  el.value = '' // 允许再次选择同一文件
+  if (!files.length) return
+  if (!activeId.value) await newSession()
+  uploading.value = true
+  chatError.value = null
+  try {
+    for (const f of files) {
+      const form = new FormData()
+      form.append('file', f)
+      const res = await uploadFetch<{ attachment: ChatAttachment }>(
+        `/api/qube/sessions/${activeId.value}/attachments`,
+        form,
+      )
+      pendingAttachments.value.push(res.attachment)
+    }
+  } catch (e) {
+    chatError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function removePending(att: ChatAttachment) {
+  pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== att.id)
+  try {
+    await jsonFetch(`/api/qube/attachments/${att.id}`, { method: 'DELETE' })
+  } catch {
+    /* 删除失败仅保留孤儿文件，清空会话时统一清理 */
+  }
 }
 
 /** 进入编辑模式：把该用户消息内容放进输入框（带取消/保存条） */
@@ -1000,16 +1056,51 @@ watch(activeId, () => {
           </button>
         </div>
         <div class="rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] p-2 focus-within:border-[#201d1d]">
+          <!-- 待发送附件 chips -->
+          <div v-if="pendingAttachments.length || uploading" class="mb-1.5 flex flex-wrap gap-1.5">
+            <span
+              v-for="a in pendingAttachments"
+              :key="a.id"
+              class="flex items-center gap-1 rounded-[3px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-1.5 py-0.5 text-[10px] text-[#201d1d]"
+            >
+              <FileText v-if="a.kind === 'text'" :size="10" class="shrink-0 text-[#007aff]" />
+              <Table2 v-else :size="10" class="shrink-0 text-[#30d158]" />
+              <span class="max-w-[180px] truncate" :title="a.name">{{ a.name }}</span>
+              <span class="shrink-0 text-[#9a9898]">{{ fmtBytes(a.size) }}</span>
+              <button class="shrink-0 text-[#9a9898] hover:text-[#ff3b30]" title="移除附件" @click="removePending(a)">
+                ✕
+              </button>
+            </span>
+            <span v-if="uploading" class="px-1 py-0.5 text-[10px] text-[#9a9898]">正在解析附件…</span>
+          </div>
           <textarea
             ref="inputEl"
             v-model="input"
             rows="2"
-            placeholder="请在这里输入提问… (Enter 发送, Shift+Enter 换行)"
+            placeholder="请在这里输入提问… (Enter 发送, Shift+Enter 换行；可点回形针上传 PDF/Excel 等附件)"
             class="w-full resize-none bg-transparent px-1 text-xs leading-relaxed text-[#201d1d] outline-none"
             @keydown.enter.exact.prevent="send"
           />
+          <input
+            ref="fileInputEl"
+            type="file"
+            class="hidden"
+            multiple
+            accept=".pdf,.docx,.pptx,.txt,.md,.markdown,.csv,.xlsx"
+            @change="onFilesChosen"
+          />
           <div class="mt-1 flex items-end justify-between gap-2">
-            <ModelBar />
+            <div class="flex min-w-0 items-end gap-1.5">
+              <button
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[rgba(15,0,0,0.2)] bg-[#fdfcfc] text-[#646262] hover:text-[#201d1d] disabled:cursor-not-allowed disabled:opacity-40"
+                title="上传附件（PDF / Word / PPT / TXT / CSV / XLSX，单个 ≤25MB）"
+                :disabled="uploading"
+                @click="pickFiles"
+              >
+                <Paperclip :size="13" />
+              </button>
+              <ModelBar />
+            </div>
             <!-- 流式中显示「停止」按钮，否则显示「发送」 -->
             <button
               v-if="streaming"
@@ -1021,7 +1112,7 @@ watch(activeId, () => {
             </button>
             <button
               v-else
-              :disabled="!input.trim()"
+              :disabled="(!input.trim() && !pendingAttachments.length) || uploading"
               class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#201d1d] text-[#fdfcfc] hover:opacity-85 disabled:opacity-40"
               @click="send"
             >

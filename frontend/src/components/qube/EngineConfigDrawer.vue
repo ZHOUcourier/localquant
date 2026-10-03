@@ -25,7 +25,7 @@ const providerId = ref('')
 const cliId = ref('')
 const baseUrl = ref('')
 const apiKey = ref('')
-const keyMasked = ref('')
+const keySet = ref(false)
 const saving = ref(false)
 const msg = ref('')
 
@@ -38,7 +38,7 @@ async function load() {
   providerId.value = d.qube_provider
   cliId.value = d.qube_cli
   baseUrl.value = d.qube_base_url || ''
-  keyMasked.value = d.qube_api_key_masked
+  keySet.value = !!d.qube_api_key_set
   loaded.value = true
 }
 onMounted(load)
@@ -104,15 +104,23 @@ void props
             />
           </div>
           <div class="mb-3">
-            <label class="mb-1 block text-xs text-[#646262]">
-              API Key {{ keyMasked ? `（已设置 ${keyMasked}，留空不修改）` : '' }}
+            <label class="mb-1 flex items-center gap-2 text-xs text-[#646262]">
+              API Key
+              <span
+                class="inline-flex items-center gap-1"
+                :class="keySet ? 'text-[#30d158]' : 'text-[#9a9898]'"
+              >
+                <span class="inline-block h-1.5 w-1.5 rounded-full" :class="keySet ? 'bg-[#30d158]' : 'bg-[#c8c4c4]'" />
+                {{ keySet ? '已配置' : '未配置' }}
+              </span>
             </label>
             <input
               v-model="apiKey"
               type="password"
-              placeholder="sk-..."
+              :placeholder="keySet ? '留空则保持不变' : 'sk-...'"
               class="w-full rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-2.5 py-1.5 text-xs outline-none focus:border-[#201d1d]"
             />
+            <div class="mt-1 text-[10px] text-[#9a9898]">密钥仅写入、不回显；保存后存入系统凭据库</div>
           </div>
           <div class="flex items-center gap-2">
             <button

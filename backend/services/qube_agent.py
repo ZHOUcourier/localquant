@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import pandas as pd
 from loguru import logger
 
 MAX_TURNS = 8  # 单条用户消息允许的最大 LLM 轮数（防失控循环）
@@ -954,6 +955,29 @@ async def _tool_search_factor_library(args: dict) -> dict:
         await db.close()
 
 
+async def _load_session_table_attachments(session_id: str) -> dict[str, pd.DataFrame]:
+    """加载会话内全部表格附件为 {文件名(去后缀): DataFrame}（读取失败的单个跳过）"""
+    from backend.database import get_db
+    from backend.services import qube_attachments as att_svc
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM qube_attachments WHERE session_id = ? AND kind = 'table' "
+            "ORDER BY created_at ASC",
+            (session_id,),
+        )
+        rows = [dict(r) for r in await cursor.fetchall()]
+    finally:
+        await db.close()
+    frames: dict[str, pd.DataFrame] = {}
+    for att in rows:
+        frame = await asyncio.to_thread(att_svc.load_table_frame, att)
+        if frame is not None:
+            frames[str(att["filename"]).rsplit(".", 1)[0]] = frame
+    return frames
+
+
 async def _tool_run_research_code(args: dict, session_id: str) -> dict:
     """沙箱运行临时 pandas 研究实验（公式表达不了的统计检验/原型验证）"""
     from backend.services import market_data, sandbox
@@ -974,8 +998,17 @@ async def _tool_run_research_code(args: dict, session_id: str) -> dict:
     if panels.get("close") is None:
         return {"error": "本地无可用行情面板"}
 
+    # 会话内表格附件注入 attachments 变量（无附件时保持原行为）
+    attachment_frames: dict[str, pd.DataFrame] = {}
     try:
-        result, stdout, sandboxed = await sandbox.run_research_code(code, panels)
+        attachment_frames = await _load_session_table_attachments(session_id)
+    except Exception as e:
+        logger.warning(f"表格附件加载失败（实验仅用行情面板）: {e}")
+
+    try:
+        result, stdout, sandboxed = await sandbox.run_research_code(
+            code, panels, attachment_frames or None
+        )
     except ValueError as e:
         return {"error": str(e)[:500], "sandboxed": False}
     except Exception as e:
@@ -994,12 +1027,82 @@ async def _tool_run_research_code(args: dict, session_id: str) -> dict:
             "date_range": [str(close.index.min()), str(close.index.max())],
         },
     }
+    if attachment_frames:
+        out["attachments_available"] = sorted(attachment_frames.keys())
     if not sandboxed:
         out["sandbox_note"] = (
             "本次实验未在沙箱中隔离（OpenSandbox 未启用或未就绪），"
             "已在宿主机进程内执行；请在回复中告知用户，并提示可运行 make sandbox-server 启用隔离"
         )
     return out
+
+
+async def _tool_read_attachment(args: dict, session_id: str) -> dict:
+    """分页/关键词定位读取会话附件的提取全文（文档类全文、表格类规范 CSV 文本）"""
+    from backend.database import get_db
+    from backend.services import qube_attachments as att_svc
+
+    att_id = str(args.get("attachment_id") or "").strip()
+    name = str(args.get("name") or "").strip()
+    if not att_id and not name:
+        return {"error": "attachment_id 或 name 至少提供一个"}
+    db = await get_db()
+    try:
+        if att_id:
+            cursor = await db.execute(
+                "SELECT * FROM qube_attachments WHERE id = ? AND session_id = ?",
+                (att_id, session_id),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM qube_attachments WHERE session_id = ? AND "
+                "(filename = ? OR filename LIKE ?) ORDER BY created_at DESC",
+                (session_id, name, f"%{name}%"),
+            )
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not row:
+        return {"error": "附件不存在（id/文件名见用户消息中的附件清单）"}
+    att = dict(row)
+    text = await asyncio.to_thread(att_svc.load_extract_text, att)
+    if not text:
+        return {"error": f"附件 {att['filename']} 无可读文本"}
+
+    total = len(text)
+    base = {
+        "id": att["id"],
+        "filename": att["filename"],
+        "kind": att["kind"],
+        "total_chars": total,
+    }
+    keyword = str(args.get("keyword") or "").strip()
+    if keyword:
+        pos = text.lower().find(keyword.lower())
+        if pos < 0:
+            return {
+                **base,
+                "keyword": keyword,
+                "note": "未命中关键词，返回开头 3000 字",
+                "text": text[:3000],
+            }
+        return {
+            **base,
+            "keyword": keyword,
+            "match_offset": pos,
+            "text": text[max(0, pos - 200) : pos + 3000],
+            "note": "返回命中前后窗口；其他部分用 offset 分页",
+        }
+    offset = max(0, int(args.get("offset") or 0))
+    chunk = text[offset : offset + 3000]
+    return {
+        **base,
+        "offset": offset,
+        "text": chunk,
+        "has_more": offset + 3000 < total,
+        "next_offset": min(offset + 3000, total),
+        "note": "每次最多 3000 字；未读完用 next_offset 继续",
+    }
 
 
 async def _tool_bind_chat_target(args: dict, session_id: str) -> dict:
@@ -1119,6 +1222,83 @@ async def _tool_use_skill(args: dict) -> dict:
             )
             schedule_refresh(row["name"], row["repo_url"])
     return payload
+
+
+async def _tool_create_skill(args: dict) -> dict:
+    """把对话中沉淀的方法论保存为用户技能（技能库「我的技能」，可带参数表单）"""
+    from backend.database import get_db
+    from backend.routes.qube import _SKILL_CATEGORY_IDS, validate_skill_params
+
+    display_name = str(args.get("display_name") or "").strip()
+    prompt = str(args.get("prompt") or "").strip()
+    if not display_name:
+        return {"error": "display_name 不能为空"}
+    if not prompt:
+        return {"error": "prompt 不能为空（技能操作手册 markdown，需自包含可执行步骤）"}
+    params, err = validate_skill_params(args.get("params") or [])
+    if err:
+        return {"error": err}
+    description = str(args.get("description") or "").strip()[:300]
+    category = str(args.get("category") or "对话")
+
+    db = await get_db()
+    try:
+        # 同名用户技能已存在则覆盖更新，避免每次对话堆积重复技能
+        cursor = await db.execute(
+            "SELECT id FROM qube_skills WHERE builtin = 0 AND display_name = ?",
+            (display_name,),
+        )
+        existing = await cursor.fetchone()
+        now = int(time.time())
+        if existing:
+            await db.execute(
+                "UPDATE qube_skills SET description = ?, category = ?, category_id = ?, "
+                "params_json = ?, prompt = ? WHERE id = ?",
+                (
+                    description,
+                    category,
+                    _SKILL_CATEGORY_IDS.get(category, "chat"),
+                    json.dumps(params, ensure_ascii=False),
+                    prompt,
+                    existing["id"],
+                ),
+            )
+            await db.commit()
+            return {
+                "ok": True,
+                "skill_id": existing["id"],
+                "display_name": display_name,
+                "updated": True,
+                "note": "已更新同名技能；用户可在技能库页面查看/编辑",
+            }
+        name = f"user_{uuid.uuid4().hex[:8]}"
+        await db.execute(
+            "INSERT INTO qube_skills (name, display_name, description, category, "
+            "category_id, params_json, prompt, builtin, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?)",
+            (
+                name,
+                display_name,
+                description,
+                category,
+                _SKILL_CATEGORY_IDS.get(category, "chat"),
+                json.dumps(params, ensure_ascii=False),
+                prompt,
+                now,
+            ),
+        )
+        await db.commit()
+        return {
+            "ok": True,
+            "skill_id": None,
+            "name": name,
+            "display_name": display_name,
+            "n_params": len(params),
+            "updated": False,
+            "note": "已保存到技能库「我的技能」；手册中的 {{参数名}} 会以表单形式让用户填参",
+        }
+    finally:
+        await db.close()
 
 
 def build_qube_tools(session_id: str) -> list[Tool]:
@@ -1472,6 +1652,8 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                 "code 需定义 run_experiment(data) 函数或设置 result 变量；"
                 "data 为 {字段: DataFrame(index=交易日, columns=股票代码)} 行情面板"
                 "（open/high/low/close/volume/amount，可用 symbols/起止日期裁剪）。"
+                "若用户上传过表格附件（csv/xlsx），会话内可用命名空间变量 attachments="
+                "{文件名: DataFrame} 直接分析用户自己的数据（无需传参）。"
                 "result 必须是可 JSON 序列化的摘要（数字/字符串/列表/小样本），"
                 "不要返回大 DataFrame，需要样本时自行 .head()/统计后放入 result。"
                 "结果带 sandboxed 字段：false 表示未在沙箱隔离（进程内执行），需在回复中告知用户。"
@@ -1545,5 +1727,71 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                 "required": ["name"],
             },
             handler=_tool_use_skill,
+        ),
+        Tool(
+            name="read_attachment",
+            description=(
+                "分页读取用户上传附件的提取全文（文档类为正文文本，表格类为 CSV 文本）。"
+                "附件清单（id/文件名/预览）已随用户消息注入；小附件看预览即可，"
+                "需要深读时用 attachment_id（或文件名 name）+ offset 逐页读，"
+                "或用 keyword 定位相关段落。表格类附件通常更适合直接在 "
+                "run_research_code 的 attachments 变量里用 DataFrame 分析。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "attachment_id": {"type": "string", "description": "附件 id（清单中的 id=）"},
+                    "name": {"type": "string", "description": "文件名（支持模糊匹配），与 id 二选一"},
+                    "keyword": {"type": "string", "description": "关键词定位（返回命中前后窗口）"},
+                    "offset": {"type": "integer", "description": "起始字符偏移，默认 0；续读用上次返回的 next_offset"},
+                },
+                "required": [],
+            },
+            handler=with_session(_tool_read_attachment),
+        ),
+        Tool(
+            name="create_skill",
+            description=(
+                "把本次对话中沉淀的可复用方法论保存为用户技能（技能库「我的技能」页可见）。"
+                "prompt 为技能操作手册 markdown（自包含步骤与平台工具用法，可复用技能时"
+                "配合 use_skill 执行）；prompt 里需要用户每次填的值写成 {{参数名}} 占位符，"
+                "并用 params 声明表单字段（name 需与占位符一致）。已有同名技能会被覆盖更新。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "display_name": {"type": "string", "description": "技能显示名（中文短名）"},
+                    "description": {"type": "string", "description": "一句话说明（可空）"},
+                    "category": {
+                        "type": "string",
+                        "enum": ["记忆", "策略", "回测", "调优", "仿真交易", "对话", "因子"],
+                        "description": "分类，默认「对话」",
+                    },
+                    "prompt": {"type": "string", "description": "操作手册 markdown（可用 {{参数名}} 占位符）"},
+                    "params": {
+                        "type": "array",
+                        "description": "参数表单字段定义（最多 12 个）",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "参数名（小写下划线，对应 {{参数名}}）"},
+                                "label": {"type": "string", "description": "显示标签"},
+                                "type": {"type": "string", "enum": ["text", "number", "select"]},
+                                "required": {"type": "boolean"},
+                                "default": {"type": "string"},
+                                "options": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "type=select 时的选项",
+                                },
+                                "placeholder": {"type": "string"},
+                            },
+                            "required": ["name", "label"],
+                        },
+                    },
+                },
+                "required": ["display_name", "prompt"],
+            },
+            handler=_tool_create_skill,
         ),
     ]

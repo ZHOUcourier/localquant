@@ -8,7 +8,6 @@ import type { SelectOption } from '@/components/ui'
 interface ConfigData {
   qmt_path: string
   qmt_data_dir: string
-  openai_api_key_masked: string
   openai_api_key_set: boolean
   openai_base_url: string
   ai_provider: string
@@ -18,6 +17,9 @@ interface ConfigData {
   ai_cli: string
   ai_cli_model: string
   ai_cli_effort: string
+  qz_access_key_set: boolean
+  qz_sign_secret_set: boolean
+  secrets_backend: 'os_keychain' | 'env_file'
   backend_port: number
   frontend_port: number
   data_dir: string
@@ -65,7 +67,7 @@ const EFFORT_LEVELS = [
 const form = reactive({
   qmt_path: '',
   qmt_data_dir: '',
-  openai_api_key: '', // 留空表示不修改
+  openai_api_key: '', // 留空表示不修改（密钥永不回显）
   openai_base_url: '',
   ai_provider: 'opencode-zen',
   ai_model: '',
@@ -74,6 +76,8 @@ const form = reactive({
   ai_cli: 'claude',
   ai_cli_model: '',
   ai_cli_effort: 'default',
+  qz_access_key: '', // QuantZone 密钥（只写输入，留空不修改）
+  qz_sign_secret: '',
   backend_port: 8000,
   frontend_port: 5173,
 })
@@ -173,6 +177,12 @@ const saveMutation = useMutation({
     if (form.openai_api_key) {
       body.openai_api_key = form.openai_api_key
     }
+    if (form.qz_access_key) {
+      body.qz_access_key = form.qz_access_key
+    }
+    if (form.qz_sign_secret) {
+      body.qz_sign_secret = form.qz_sign_secret
+    }
     const res = await fetch('/api/config/', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -186,6 +196,8 @@ const saveMutation = useMutation({
   },
   onSuccess: () => {
     form.openai_api_key = ''
+    form.qz_access_key = ''
+    form.qz_sign_secret = ''
     queryClient.invalidateQueries({ queryKey: ['config'] })
   },
 })
@@ -207,7 +219,7 @@ function selectProvider(p: ProviderInfo) {
     <div class="mb-4">
       <h1 class="text-xl font-semibold text-[#201d1d] mb-1">设置</h1>
       <p class="text-[13px] text-[#646262]">
-        配置持久化到项目根目录 .env 文件，端口类修改需重启后端生效
+        配置持久化到项目根目录 .env 文件；密钥优先存入系统凭据库（{{ config?.secrets_backend === 'os_keychain' ? '当前：系统凭据库' : '当前：.env 回退' }}），任何界面不回显密钥内容；端口类修改需重启后端生效
       </p>
     </div>
 
@@ -284,8 +296,12 @@ function selectProvider(p: ProviderInfo) {
             <div>
               <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">
                 API Key
-                <span v-if="config?.openai_api_key_set" class="ml-2 font-mono text-[#30d158]">
-                  已配置 ({{ config.openai_api_key_masked }})
+                <span
+                  class="ml-2 inline-flex items-center gap-1"
+                  :class="config?.openai_api_key_set ? 'text-[#30d158]' : 'text-[#9a9898]'"
+                >
+                  <span class="inline-block h-2 w-2 rounded-full" :class="config?.openai_api_key_set ? 'bg-[#30d158]' : 'bg-[#c8c4c4]'" />
+                  {{ config?.openai_api_key_set ? '已配置' : '未配置' }}
                 </span>
               </label>
               <Input
@@ -293,6 +309,7 @@ function selectProvider(p: ProviderInfo) {
                 type="password"
                 :placeholder="config?.openai_api_key_set ? '留空则保持不变' : 'sk-...'"
               />
+              <div class="mt-1 text-[10px] text-[#9a9898]">密钥仅写入、不回显；保存后存入系统凭据库，不落 .env 明文</div>
             </div>
             <div class="grid gap-3" :class="selectedProvider?.byok ? 'grid-cols-2' : 'grid-cols-1'">
               <div v-if="selectedProvider?.byok">
@@ -398,6 +415,44 @@ function selectProvider(p: ProviderInfo) {
             <Info :size="13" class="mt-0.5 shrink-0 text-[#9a9898]" />
             <span class="text-xs text-[#9a9898]">
               用于工作流 AI 生成、节点代码 AI 改写、因子/数据探索等场景；QUBE Agent 的 AI 配置在 QUBE 页面内单独设置，互不影响
+            </span>
+          </div>
+        </div>
+      </Card>
+
+      <!-- QuantZone 密钥（分钟因子对拍） -->
+      <Card title="QuantZone（分钟因子对拍）">
+        <div class="space-y-3">
+          <div>
+            <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">
+              Access Key
+              <span
+                class="ml-2 inline-flex items-center gap-1"
+                :class="config?.qz_access_key_set ? 'text-[#30d158]' : 'text-[#9a9898]'"
+              >
+                <span class="inline-block h-2 w-2 rounded-full" :class="config?.qz_access_key_set ? 'bg-[#30d158]' : 'bg-[#c8c4c4]'" />
+                {{ config?.qz_access_key_set ? '已配置' : '未配置' }}
+              </span>
+            </label>
+            <Input v-model="form.qz_access_key" type="password" :placeholder="config?.qz_access_key_set ? '留空则保持不变' : 'QZ_ACCESS_KEY'" />
+          </div>
+          <div>
+            <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">
+              Sign Secret
+              <span
+                class="ml-2 inline-flex items-center gap-1"
+                :class="config?.qz_sign_secret_set ? 'text-[#30d158]' : 'text-[#9a9898]'"
+              >
+                <span class="inline-block h-2 w-2 rounded-full" :class="config?.qz_sign_secret_set ? 'bg-[#30d158]' : 'bg-[#c8c4c4]'" />
+                {{ config?.qz_sign_secret_set ? '已配置' : '未配置' }}
+              </span>
+            </label>
+            <Input v-model="form.qz_sign_secret" type="password" :placeholder="config?.qz_sign_secret_set ? '留空则保持不变' : 'QZ_SIGN_SECRET'" />
+          </div>
+          <div class="flex items-start gap-1.5 pt-1">
+            <Info :size="13" class="mt-0.5 shrink-0 text-[#9a9898]" />
+            <span class="text-xs text-[#9a9898]">
+              用于「分钟因子 · QuantZone 对拍（Beta）」官方因子值拉取；免费版每日 512MB 下载配额。密钥仅写入、不回显。
             </span>
           </div>
         </div>
@@ -526,7 +581,7 @@ function selectProvider(p: ProviderInfo) {
         <RefreshCw :size="14" class="mr-1" />
         重新加载
       </Button>
-      <Badge v-if="saveMutation.isSuccess.value" variant="success">已写入 .env</Badge>
+      <Badge v-if="saveMutation.isSuccess.value" variant="success">已保存</Badge>
       <span v-if="saveMutation.isError.value" class="font-mono text-xs text-[#ff3b30]">
         {{ saveMutation.error.value instanceof Error ? saveMutation.error.value.message : '保存失败' }}
       </span>

@@ -31,10 +31,13 @@ class Settings(BaseSettings):
     qmt_path: str = ""
     qmt_data_dir: str = ""
 
-    # QuantZone（宽舟科技）因子数据平台 — 对拍/因子值拉取，密钥只存 .env
+    # QuantZone（宽舟科技）因子数据平台 — 对拍/因子值拉取，密钥存系统凭据库（回退 .env）
     qz_access_key: str = ""
     qz_sign_secret: str = ""
     qz_base_url: str = "https://api.quantzone.tech"
+
+    # PandaAI 公开数据 token（仅离线脚本 scrape_factors 使用）
+    panda_token: str = ""
 
     # AI（设置页 → 各场景化 AI 接口）
     openai_api_key: str = ""
@@ -81,6 +84,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# 密钥 overlay：.env / 环境变量之外，再从 OS 凭据库回填空缺的密钥字段。
+# 启动迁移（main.py lifespan 中 migrate_env_secrets）完成后会再次调用 overlay。
+from backend.secrets import overlay_settings as _overlay_secrets
+
+_overlay_secrets(settings)
 
 # 确保数据目录存在
 for d in [

@@ -243,6 +243,28 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE qube_messages ADD COLUMN usage_json TEXT DEFAULT ''"
             )
+        # 迁移：消息携带的附件（[{id, name, kind, size}]，全文在 data/qube_attachments/）
+        if "attachments_json" not in msg_cols:
+            await db.execute(
+                "ALTER TABLE qube_messages ADD COLUMN attachments_json TEXT DEFAULT ''"
+            )
+
+        # QUBE 会话附件（用户上传的文档/表格；提取全文与规范 CSV 存文件系统）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS qube_attachments (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                kind TEXT DEFAULT 'text',
+                mime TEXT DEFAULT '',
+                size INTEGER DEFAULT 0,
+                extracted_chars INTEGER DEFAULT 0,
+                preview TEXT DEFAULT '',
+                table_meta_json TEXT DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES qube_sessions(id)
+            )
+        """)
 
         # QUBE 对话产出的因子（画板工件；与因子库 factors 表独立，存入因子库时落快照）
         await db.execute("""

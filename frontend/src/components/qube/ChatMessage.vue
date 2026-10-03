@@ -6,10 +6,11 @@
  *   用户：复制 / 编辑 / 删除；AI：复制 / 重新生成（仅最末）/ 删除。
  */
 import { computed } from 'vue'
-import { Copy, Pencil, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { Copy, FileText, Pencil, RefreshCw, Table2, Trash2 } from 'lucide-vue-next'
 import { renderMarkdown } from '@/lib/markdown'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCard from './ToolCard.vue'
+import { fmtBytes } from './types'
 import type { ChatMsg, TimelineItem } from './types'
 
 const props = defineProps<{
@@ -63,7 +64,24 @@ const A = 'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[
 <template>
   <!-- 用户消息 -->
   <div v-if="msg.role === 'user'" class="group flex flex-col items-end">
+    <!-- 附件 chips -->
+    <div v-if="msg.attachments?.length" class="mb-1 flex max-w-[78%] flex-wrap justify-end gap-1">
+      <a
+        v-for="a in msg.attachments"
+        :key="a.id"
+        :href="`/api/qube/attachments/${a.id}/file`"
+        :download="a.name"
+        class="flex items-center gap-1 rounded-[3px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-1.5 py-0.5 text-[10px] text-[#201d1d] hover:border-[#201d1d]"
+        :title="`${a.name}（点击下载）`"
+      >
+        <FileText v-if="a.kind === 'text'" :size="10" class="shrink-0 text-[#007aff]" />
+        <Table2 v-else :size="10" class="shrink-0 text-[#30d158]" />
+        <span class="max-w-[180px] truncate">{{ a.name }}</span>
+        <span class="shrink-0 text-[#9a9898]">{{ fmtBytes(a.size) }}</span>
+      </a>
+    </div>
     <div
+      v-if="msg.content"
       class="max-w-[78%] whitespace-pre-wrap rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-3 py-2 text-xs leading-relaxed text-[#201d1d]"
     >
       {{ msg.content }}

@@ -46,6 +46,13 @@ dependencies = [
     "quantzone>=0.10.0",
     "vectorbt>=1.0.0",
     "plotly>=5.24,<6",
+    # QUBE 会话附件解析（PDF/Word/PPT/Excel）
+    "pypdf>=4.0.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=1.0.0",
+    # API 密钥存 OS 凭据库（macOS Keychain / Windows 凭据管理器；不可用时回退 .env）
+    "keyring>=25.0.0",
 ]
 
 [dependency-groups]

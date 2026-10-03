@@ -4,16 +4,18 @@
  *
  * 「我的技能 / 系统内置」两 Tab + 搜索 + 分类胶囊 + 技能卡网格。
  * 卡片标注来源（QuantSkills / LLMQuant）并带外链；可用技能可「在 QUBE 中使用」
- * （跳转到 /qube 并把 prompt 模板预填进输入框）。系统内置只读，本地无能力的置灰「未接入」。
+ * （跳转到 /qube 并把 prompt 模板预填进输入框；声明了 {{参数}} 的技能先弹填参表单）。
+ * 我的技能支持新建/编辑（含参数表单定义）与删除。系统内置只读，本地无能力的置灰「未接入」。
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { BookMarked, ExternalLink } from 'lucide-vue-next'
 import { Select } from '@/components/ui'
 import type { SelectOption } from '@/components/ui'
-import type { Skill } from '@/components/qube/types'
+import type { Skill, SkillParam } from '@/components/qube/types'
 import { jsonFetch } from '@/components/qube/types'
 import SkillDetailDialog from '@/components/skills/SkillDetailDialog.vue'
+import SkillParamsDialog from '@/components/skills/SkillParamsDialog.vue'
 
 const router = useRouter()
 const builtin = ref<Skill[]>([])
@@ -24,9 +26,53 @@ const search = ref('')
 const loading = ref(false)
 
 const creating = ref(false)
-const form = ref({ display_name: '', description: '', category: '对话', prompt: '' })
+const editingSkill = ref<Skill | null>(null)
+// 带参数技能的填参弹窗（确认后渲染模板预填 QUBE 输入框）
+const paramSkill = ref<Skill | null>(null)
+// 表单里的参数行：options 用逗号分隔文本编辑，提交时转回 options 数组
+type FormParam = SkillParam & { optionsText?: string }
+const form = ref({
+  display_name: '',
+  description: '',
+  category: '对话',
+  prompt: '',
+  params: [] as FormParam[],
+})
 const CATEGORIES = ['记忆', '策略', '回测', '调优', '仿真交易', '对话', '因子']
 const categoryOptions: SelectOption[] = CATEGORIES.map((c) => ({ value: c, label: c }))
+const paramTypeOptions: SelectOption[] = [
+  { value: 'text', label: '文本' },
+  { value: 'number', label: '数字' },
+  { value: 'select', label: '单选' },
+]
+
+function emptyParam(): FormParam {
+  return {
+    name: '',
+    label: '',
+    type: 'text',
+    required: false,
+    default: '',
+    options: [],
+    optionsText: '',
+    placeholder: '',
+  }
+}
+
+function parseOptions(p: FormParam): string[] {
+  return (p.optionsText ?? '')
+    .split(/[,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function addParam() {
+  if (form.value.params.length < 12) form.value.params.push(emptyParam())
+}
+
+function resetForm() {
+  form.value = { display_name: '', description: '', category: '对话', prompt: '', params: [] }
+}
 
 // 技能详情弹窗：记录卡片位置，App Store 展开动画从卡片出发
 const cardEls = new Map<number, HTMLElement>()
@@ -91,22 +137,78 @@ const filtered = computed(() =>
 
 function useSkill(s: Skill) {
   if (s.builtin && !s.enabled) return
+  if (!s.builtin && s.params?.length) {
+    paramSkill.value = s // 声明了 {{参数}} 的技能先弹填参表单
+    return
+  }
   const text = s.builtin ? `请帮我${s.display_name}。` : s.prompt
   router.push({ path: '/qube', query: { prompt: text } })
 }
 
+function onParamsConfirm(prompt: string) {
+  paramSkill.value = null
+  router.push({ path: '/qube', query: { prompt } })
+}
+
+function startEdit(s: Skill) {
+  editingSkill.value = s
+  form.value = {
+    display_name: s.display_name,
+    description: s.description,
+    category: s.category || '对话',
+    prompt: s.prompt,
+    params: (s.params || []).map((p) => ({
+      ...p,
+      options: [...(p.options || [])],
+      optionsText: (p.options || []).join(', '),
+    })),
+  }
+  creating.value = true
+}
+
 async function submitCreate() {
   if (!form.value.display_name.trim() || !form.value.prompt.trim()) return
-  await jsonFetch('/api/qube/skills', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(form.value),
-  })
-  form.value = { display_name: '', description: '', category: '对话', prompt: '' }
+  const payload = {
+    display_name: form.value.display_name,
+    description: form.value.description,
+    category: form.value.category,
+    prompt: form.value.prompt,
+    params: form.value.params
+      .filter((p) => p.name.trim())
+      .map((p) => ({ ...p, options: parseOptions(p) })),
+  }
+  if (editingSkill.value) {
+    await jsonFetch(`/api/qube/skills/${editingSkill.value.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } else {
+    await jsonFetch('/api/qube/skills', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  }
+  editingSkill.value = null
+  resetForm()
   creating.value = false
   activeTab.value = 'mine'
   load()
 }
+
+function cancelForm() {
+  creating.value = false
+  editingSkill.value = null
+  resetForm()
+}
+
+// 提示文案含字面 {{参数名}}，放 script 里避免与模板插值语法冲突
+const formHint = computed(() =>
+  editingSkill.value
+    ? `编辑技能：${editingSkill.value.display_name}`
+    : '新建技能 — prompt 模板中可用 {{参数名}} 占位符，配合下方参数定义做成填参表单',
+)
 
 async function removeSkill(s: Skill) {
   await jsonFetch(`/api/qube/skills/${s.id}`, { method: 'DELETE' })
@@ -117,6 +219,7 @@ function switchTab(t: 'builtin' | 'mine') {
   activeTab.value = t
   activeCat.value = 'all'
   creating.value = false
+  editingSkill.value = null
 }
 
 // 来源显示名映射
@@ -184,8 +287,11 @@ function sourceLabel(src: string): string {
       </button>
     </div>
 
-    <!-- 新建技能表单 -->
+    <!-- 新建/编辑技能表单 -->
     <div v-if="creating" class="mb-3 space-y-2 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] p-3">
+      <div class="text-[11px] text-[#9a9898]">
+        {{ formHint }}
+      </div>
       <div class="flex gap-2">
         <input
           v-model="form.display_name"
@@ -204,11 +310,61 @@ function sourceLabel(src: string): string {
       <textarea
         v-model="form.prompt"
         rows="3"
-        placeholder="prompt 模板，例：请对当前策略做一次压力测试并给出改进建议。"
-        class="w-full resize-none rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2.5 py-1.5 text-xs outline-none focus:border-[#201d1d]"
+        placeholder="prompt 模板，例：请对 {{code}} 做一次压力测试，置信水平 {{level}}。"
+        class="w-full resize-none rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-2.5 py-1.5 font-mono text-xs outline-none focus:border-[#201d1d]"
       />
+      <!-- 参数表单定义（最多 12 个；name 对应 prompt 中的 {{name}}） -->
+      <div v-if="form.params.length" class="space-y-1.5">
+        <div
+          v-for="(p, i) in form.params"
+          :key="i"
+          class="flex flex-wrap items-center gap-1.5 rounded-[4px] border border-[rgba(15,0,0,0.1)] bg-[#fdfcfc] px-2 py-1.5"
+        >
+          <input
+            v-model="p.name"
+            placeholder="参数名 period"
+            class="w-[110px] rounded-[3px] border border-[rgba(15,0,0,0.12)] px-1.5 py-0.5 font-mono text-[11px] outline-none focus:border-[#201d1d]"
+          />
+          <input
+            v-model="p.label"
+            placeholder="标签 回看周期"
+            class="w-[100px] rounded-[3px] border border-[rgba(15,0,0,0.12)] px-1.5 py-0.5 text-[11px] outline-none focus:border-[#201d1d]"
+          />
+          <div class="w-[74px] shrink-0">
+            <Select v-model="p.type" :options="paramTypeOptions" />
+          </div>
+          <input
+            v-model="p.default"
+            placeholder="默认值"
+            class="w-[80px] rounded-[3px] border border-[rgba(15,0,0,0.12)] px-1.5 py-0.5 text-[11px] outline-none focus:border-[#201d1d]"
+          />
+          <input
+            v-if="p.type === 'select'"
+            v-model="p.optionsText"
+            placeholder="选项，逗号分隔"
+            class="min-w-[120px] flex-1 rounded-[3px] border border-[rgba(15,0,0,0.12)] px-1.5 py-0.5 text-[11px] outline-none focus:border-[#201d1d]"
+          />
+          <label class="flex shrink-0 items-center gap-1 text-[11px] text-[#646262]">
+            <input v-model="p.required" type="checkbox" class="accent-[#201d1d]" />必填
+          </label>
+          <button
+            class="shrink-0 text-[11px] text-[#9a9898] hover:text-[#ff3b30]"
+            title="删除该参数"
+            @click="form.params.splice(i, 1)"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+      <button
+        v-if="form.params.length < 12"
+        class="rounded-[3px] border border-[rgba(15,0,0,0.12)] px-2 py-0.5 text-[11px] text-[#646262] hover:text-[#201d1d]"
+        @click="addParam"
+      >
+        ＋ 添加参数
+      </button>
       <div class="flex justify-end gap-2">
-        <button class="rounded-[4px] border border-[rgba(15,0,0,0.15)] px-3 py-1 text-xs text-[#646262]" @click="creating = false">
+        <button class="rounded-[4px] border border-[rgba(15,0,0,0.15)] px-3 py-1 text-xs text-[#646262]" @click="cancelForm">
           取消
         </button>
         <button
@@ -216,7 +372,7 @@ function sourceLabel(src: string): string {
           class="rounded-[4px] bg-[#201d1d] px-3 py-1 text-xs text-[#fdfcfc] disabled:opacity-50"
           @click="submitCreate"
         >
-          创建
+          {{ editingSkill ? '保存修改' : '创建' }}
         </button>
       </div>
     </div>
@@ -261,6 +417,14 @@ function sourceLabel(src: string): string {
             </span>
             <button
               v-if="!s.builtin"
+              class="shrink-0 text-[10px] text-[#9a9898] opacity-0 hover:text-[#201d1d] group-hover:opacity-100"
+              title="编辑"
+              @click.stop="startEdit(s)"
+            >
+              编辑
+            </button>
+            <button
+              v-if="!s.builtin"
               class="shrink-0 text-[10px] text-[#9a9898] opacity-0 hover:text-[#ff3b30] group-hover:opacity-100"
               title="删除"
               @click.stop="removeSkill(s)"
@@ -280,10 +444,10 @@ function sourceLabel(src: string): string {
             </span>
             <span
               v-for="p in s.params.slice(0, 4)"
-              :key="p"
+              :key="p.name"
               class="rounded-[3px] bg-[#f8f7f7] px-1 py-0.5 font-mono text-[9px] text-[#646262]"
             >
-              {{ p }}
+              {{ p.label || p.name }}
             </span>
           </div>
           <!-- 来源 + 操作 -->
@@ -314,5 +478,8 @@ function sourceLabel(src: string): string {
 
     <!-- 技能详情弹窗（v-if 控制挂载：每次打开全新实例，App Store 动画从本次点击的卡片出发） -->
     <SkillDetailDialog v-if="detail" :skill-id="detail.id" :origin="detail.origin" @close="detail = null" />
+
+    <!-- 带参数技能的填参弹窗 -->
+    <SkillParamsDialog v-if="paramSkill" :skill="paramSkill" @close="paramSkill = null" @confirm="onParamsConfirm" />
   </div>
 </template>

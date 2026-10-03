@@ -69,7 +69,8 @@ def _normalize_signals(sig) -> pd.DataFrame:
 
 
 # 研究实验执行脚本：读入行情面板 CSV → 执行用户代码 → 取 run_experiment(data)/result
-# → 结果 JSON 写出；异常以 RESEARCH_ERROR 前缀输出到 stdout，供宿主机识别
+# → 结果 JSON 写出；异常以 RESEARCH_ERROR 前缀输出到 stdout，供宿主机识别。
+# 附件表格（用户上传的 csv/xlsx 规范 CSV）注入 attachments 命名空间变量。
 _RESEARCH_RUNNER_TEMPLATE = """\
 import json, sys, traceback
 import pandas as pd
@@ -79,7 +80,11 @@ data = {{}}
 for _name, _path in {panels!r}.items():
     data[_name] = pd.read_csv(_path, index_col=0, parse_dates=True)
 
-_user_ns = {{"pd": pd, "np": np, "data": data}}
+attachments = {{}}
+for _name, _path in {att_files!r}.items():
+    attachments[_name] = pd.read_csv(_path)
+
+_user_ns = {{"pd": pd, "np": np, "data": data, "attachments": attachments}}
 try:
     exec({code!r}, _user_ns)
     result = _user_ns.get("result")
@@ -242,7 +247,9 @@ def _extract_research_result(ns: dict):
 
 
 async def _run_research_in_opensandbox(
-    code: str, panels: dict[str, pd.DataFrame]
+    code: str,
+    panels: dict[str, pd.DataFrame],
+    attachments: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[dict, str]:
     """沙箱内执行研究实验，返回 (结果对象, stdout)；基础设施失败抛 SandboxInfraError"""
     try:
@@ -259,9 +266,14 @@ async def _run_research_in_opensandbox(
         entries.append(
             WriteEntry(path=path, data=df.to_csv(), mode=644)
         )
+    att_paths: dict[str, str] = {}
+    for i, (name, df) in enumerate((attachments or {}).items()):
+        path = f"/tmp/lq_att_{i}.csv"
+        att_paths[str(name)] = path
+        entries.append(WriteEntry(path=path, data=df.to_csv(index=False), mode=644))
     result_path = "/tmp/lq_research_result.json"
     runner = _RESEARCH_RUNNER_TEMPLATE.format(
-        panels=panel_paths, result_path=result_path, code=code
+        panels=panel_paths, att_files=att_paths, result_path=result_path, code=code
     )
     runner_path = "/tmp/lq_research_runner.py"
     entries.append(WriteEntry(path=runner_path, data=runner, mode=644))
@@ -299,7 +311,9 @@ async def _run_research_in_opensandbox(
 
 
 def _run_research_in_process(
-    code: str, panels: dict[str, pd.DataFrame]
+    code: str,
+    panels: dict[str, pd.DataFrame],
+    attachments: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[dict, str]:
     """进程内执行研究实验（降级路径），返回 (结果对象, stdout)"""
     import contextlib
@@ -308,7 +322,13 @@ def _run_research_in_process(
 
     import numpy as np
 
-    ns: dict = {"__builtins__": __builtins__, "pd": pd, "np": np, "data": dict(panels)}
+    ns: dict = {
+        "__builtins__": __builtins__,
+        "pd": pd,
+        "np": np,
+        "data": dict(panels),
+        "attachments": dict(attachments or {}),
+    }
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         exec(code, ns)  # noqa: S102 单命名空间：函数定义与 data 变量同域可见
@@ -317,23 +337,28 @@ def _run_research_in_process(
 
 
 async def run_research_code(
-    code: str, panels: dict[str, pd.DataFrame]
+    code: str,
+    panels: dict[str, pd.DataFrame],
+    attachments: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[dict, str, bool]:
     """执行研究实验代码，返回 (结果 dict, stdout, 是否在沙箱中隔离执行)
 
     与 run_signals 同一套信任模型：沙箱可用时容器内执行；
     用户代码错误抛 ValueError；基础设施故障自动降级进程内。
+    attachments 为用户上传的表格附件 {文件名: DataFrame}，注入命名空间变量。
     """
     if sandbox_available():
         try:
-            result, stdout = await _run_research_in_opensandbox(code, panels)
+            result, stdout = await _run_research_in_opensandbox(code, panels, attachments)
             return result, stdout, True
         except SandboxInfraError as e:
             logger.warning(f"OpenSandbox 不可用，实验降级为进程内执行（无容器隔离）：{e}")
 
     import asyncio
 
-    result, stdout = await asyncio.to_thread(_run_research_in_process, code, panels)
+    result, stdout = await asyncio.to_thread(
+        _run_research_in_process, code, panels, attachments
+    )
     return result, stdout, False
 
 

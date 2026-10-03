@@ -11,20 +11,22 @@
 import asyncio
 import json
 import pathlib
+import re
 import time
 import urllib.parse
 import uuid
 
 import httpx
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
 
 from backend.config import settings
 from backend.database import get_db
 from backend.routes.settings import _write_env
-from backend.services import tasks
+from backend.services import qube_attachments, tasks
 from backend.services.ai_providers import (
     PROVIDER_PRESETS,
     apply_effort,
@@ -51,9 +53,13 @@ QUBE_SYSTEM = """职责：通过多轮对话帮助用户设计、验证、迭代
 【因子】generate_stock_factor_code 写因子进画板 / run_factor_analysis IC+分组分析 /
         save_factor_to_library 存入因子库（验证达标后入库）
 【实验】run_research_code 沙箱跑临时 pandas 实验（公式表达不了的统计检验/原型，
-        run_experiment(data) 返回可序列化摘要）
+        run_experiment(data) 返回可序列化摘要；用户上传的表格附件在 attachments
+        变量 {文件名: DataFrame} 中可直接分析）
+【附件】read_attachment 分页/关键词读取用户上传的文档附件全文
+        （附件清单已随用户消息注入，小附件看预览即可，深读才调用）
 【其它】bind_chat_target 切换画板绑定 / remember 记录用户长期偏好 /
-        list_skills 查看技能库 / use_skill 加载指定技能的操作手册
+        list_skills 查看技能库 / use_skill 加载指定技能的操作手册 /
+        create_skill 把本次沉淀的方法论保存为用户技能（可带 {{参数}} 表单）
 
 技能库：内置大量来自开源社区的量化技能，覆盖因子研究全流程——
 方向/风险形态因子库、挖掘工作流 SOP、因子生产工厂、因子体检、正交化、衰减分析、
@@ -127,6 +133,8 @@ TOOL_DISPLAY_NAMES = {
     "remember": "记录长期记忆",
     "list_skills": "查看技能库",
     "use_skill": "加载技能手册",
+    "read_attachment": "读取附件",
+    "create_skill": "保存为新技能",
 }
 
 
@@ -159,12 +167,6 @@ class QubeConfigUpdate(BaseModel):
     qube_cli_effort: str | None = None
 
 
-def _mask(key: str) -> str:
-    if not key:
-        return ""
-    return "****" if len(key) <= 8 else f"{key[:4]}****{key[-4:]}"
-
-
 @router.get("/config")
 async def get_qube_config():
     provider = resolve_provider(settings.qube_provider)
@@ -173,7 +175,7 @@ async def get_qube_config():
         "qube_provider": provider,
         "qube_model": settings.qube_model or preset["model"],
         "qube_effort": settings.qube_effort,
-        "qube_api_key_masked": _mask(settings.qube_api_key),
+        # 永不回显密钥：只返回是否已配置布尔
         "qube_api_key_set": bool(settings.qube_api_key),
         "qube_base_url": settings.qube_base_url,
         "qube_engine": settings.qube_engine,
@@ -189,18 +191,33 @@ async def get_qube_config():
 
 @router.put("/config")
 async def update_qube_config(body: QubeConfigUpdate):
-    """QUBE 独立配置：写入 .env（QUBE_* 键）并同步内存 settings"""
+    """QUBE 独立配置：密钥存 OS 凭据库（不可用回退 .env），其余写 .env；同步内存 settings"""
     updates: dict[str, str] = {}
+    api_key_value = ""
     for env_key, attr in QUBE_ENV_KEYS.items():
         value = getattr(body, attr)
         if value is None:
             continue
+        if env_key == "QUBE_API_KEY":
+            if str(value).strip():
+                api_key_value = str(value)
+                setattr(settings, attr, str(value))
+            continue
         updates[env_key] = str(value)
         setattr(settings, attr, str(value))
+
+    if api_key_value:
+        from backend.secrets import store_secret
+
+        if not store_secret("QUBE_API_KEY", api_key_value):
+            updates["QUBE_API_KEY"] = api_key_value  # 凭据库不可用 → 回退 .env
+
     if updates:
         _write_env(updates)
-        logger.info(f"QUBE 配置已更新: {', '.join(updates.keys())}")
-    return {"ok": True, "updated": list(updates.keys())}
+    if api_key_value:
+        via = "系统凭据库" if "QUBE_API_KEY" not in updates else ".env（回退）"
+        logger.info(f"QUBE API Key 已更新（存{via}）")
+    return {"ok": True, "updated": sorted(set(updates) | ({"QUBE_API_KEY"} if api_key_value else set()))}
 
 
 # ---------------------------------------------------------------------------
@@ -296,12 +313,17 @@ async def clear_sessions():
     """清空全部对话（侧栏「清空全部对话」，前端二次确认后调用）"""
     db = await get_db()
     try:
+        cursor = await db.execute("SELECT id FROM qube_sessions")
+        session_ids = [r["id"] for r in await cursor.fetchall()]
+        await db.execute("DELETE FROM qube_attachments")
         await db.execute("DELETE FROM qube_messages")
         cursor = await db.execute("DELETE FROM qube_sessions")
         await db.commit()
-        return {"ok": True, "deleted": cursor.rowcount}
     finally:
         await db.close()
+    for sid in session_ids:  # 文件清理放库外，失败不影响删除结果
+        qube_attachments.delete_session_attachments(sid)
+    return {"ok": True, "deleted": cursor.rowcount}
 
 
 @router.delete("/sessions/{session_id}")
@@ -311,6 +333,9 @@ async def delete_session(session_id: str):
         await db.execute(
             "DELETE FROM qube_messages WHERE session_id = ?", (session_id,)
         )
+        await db.execute(
+            "DELETE FROM qube_attachments WHERE session_id = ?", (session_id,)
+        )
         cursor = await db.execute(
             "DELETE FROM qube_sessions WHERE id = ?", (session_id,)
         )
@@ -319,7 +344,142 @@ async def delete_session(session_id: str):
             raise HTTPException(status_code=404, detail="会话不存在")
     finally:
         await db.close()
+    qube_attachments.delete_session_attachments(session_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# 会话附件（上传解析 / 下载 / 删除；LLM 注入在 _stream_reply，工具读取在 qube_agent）
+# ---------------------------------------------------------------------------
+
+
+async def _session_attachment_map(session_id: str) -> dict[str, dict]:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM qube_attachments WHERE session_id = ?", (session_id,)
+        )
+        return {r["id"]: dict(r) for r in await cursor.fetchall()}
+    finally:
+        await db.close()
+
+
+async def _resolve_attachments(
+    session_id: str, attachment_ids: list[str]
+) -> list[dict]:
+    """校验附件 id 归属当前会话并返回行 dict（保持请求顺序）"""
+    if not attachment_ids:
+        return []
+    att_map = await _session_attachment_map(session_id)
+    rows = []
+    for att_id in attachment_ids:
+        row = att_map.get(att_id)
+        if row is None:
+            raise HTTPException(
+                status_code=400, detail=f"附件不存在或不属于当前会话: {att_id}"
+            )
+        rows.append(row)
+    return rows
+
+
+@router.post("/sessions/{session_id}/attachments")
+async def upload_attachment(session_id: str, file: UploadFile):
+    """上传并解析一个附件（PDF/DOCX/PPTX/TXT/MD 文本；CSV/XLSX 表格）"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT 1 FROM qube_sessions WHERE id = ?", (session_id,)
+        )
+        if (await cursor.fetchone()) is None:
+            raise HTTPException(status_code=404, detail="会话不存在")
+    finally:
+        await db.close()
+
+    data = await file.read()
+    try:
+        row = await run_in_threadpool(
+            qube_attachments.parse_upload, session_id, file.filename or "", data
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO qube_attachments (id, session_id, filename, kind, mime, "
+            "size, extracted_chars, preview, table_meta_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                row["id"],
+                session_id,
+                row["filename"],
+                row["kind"],
+                file.content_type or "",
+                row["size"],
+                row["extracted_chars"],
+                row["preview"],
+                row["table_meta_json"],
+                int(time.time()),
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return {
+        "attachment": {
+            "id": row["id"],
+            "session_id": session_id,
+            "filename": row["filename"],
+            "kind": row["kind"],
+            "size": row["size"],
+            "extracted_chars": row["extracted_chars"],
+            "preview": row["preview"][:200],
+        }
+    }
+
+
+@router.get("/attachments/{attachment_id}/file")
+async def download_attachment(attachment_id: str):
+    """下载附件原始文件"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT session_id, filename FROM qube_attachments WHERE id = ?",
+            (attachment_id,),
+        )
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="附件不存在")
+    path = qube_attachments.attachment_dir(row["session_id"]) / (
+        f"{attachment_id}_{row['filename']}"
+    )
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="附件文件缺失")
+    return FileResponse(path, filename=row["filename"])
+
+
+@router.delete("/attachments/{attachment_id}")
+async def delete_attachment(attachment_id: str):
+    """删除附件（清理未随消息发送的上传残留）"""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT session_id FROM qube_attachments WHERE id = ?", (attachment_id,)
+        )
+        row = await cursor.fetchone()
+        if row:
+            await db.execute(
+                "DELETE FROM qube_attachments WHERE id = ?", (attachment_id,)
+            )
+            await db.commit()
+    finally:
+        await db.close()
+    if row:
+        qube_attachments.delete_attachment_files(row["session_id"], attachment_id)
+        return {"ok": True}
+    raise HTTPException(status_code=404, detail="附件不存在")
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -328,8 +488,8 @@ async def list_messages(session_id: str):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, role, content, created_at, tool_calls_json, usage_json "
-            "FROM qube_messages "
+            "SELECT id, role, content, created_at, tool_calls_json, usage_json, "
+            "attachments_json FROM qube_messages "
             "WHERE session_id = ? ORDER BY id ASC",
             (session_id,),
         )
@@ -342,6 +502,7 @@ async def list_messages(session_id: str):
                 "created_at": r["created_at"],
                 "tool_calls": None,
                 "usage": None,
+                "attachments": _parse_message_attachments(r["attachments_json"]),
             }
             if r["tool_calls_json"]:
                 try:
@@ -379,13 +540,25 @@ async def _save_message(
     tool_calls: dict | None = None,
     is_first_user: bool = False,
     usage: dict | None = None,
+    attachments: list[dict] | None = None,
 ) -> None:
     now = int(time.time())
+    att_json = (
+        json.dumps(
+            [
+                {"id": a["id"], "name": a["filename"], "kind": a["kind"], "size": a["size"]}
+                for a in (attachments or [])
+            ],
+            ensure_ascii=False,
+        )
+        if attachments
+        else ""
+    )
     db = await get_db()
     try:
         await db.execute(
             "INSERT INTO qube_messages (session_id, role, content, created_at, "
-            "tool_calls_json, usage_json) VALUES (?, ?, ?, ?, ?, ?)",
+            "tool_calls_json, usage_json, attachments_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id,
                 role,
@@ -393,14 +566,15 @@ async def _save_message(
                 now,
                 json.dumps(tool_calls, ensure_ascii=False) if tool_calls else "",
                 json.dumps(usage, ensure_ascii=False) if usage else "",
+                att_json,
             ),
         )
-        # 首条用户消息作为会话标题（若 AI 自动标题可用会稍后覆盖）
+        # 首条用户消息作为会话标题（空文本+纯附件消息不影响默认标题）
         await db.execute(
             "UPDATE qube_sessions SET updated_at = ?, "
             "title = CASE WHEN title = '新对话' AND ? = 'user' THEN ? ELSE title END "
             "WHERE id = ?",
-            (now, role, content[:40], session_id),
+            (now, role, content[:40].strip() or "新对话", session_id),
         )
         await db.commit()
     finally:
@@ -469,6 +643,7 @@ async def _auto_title(session_id: str, content: str) -> None:
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    attachment_ids: list[str] = []
 
 
 def _resolve_qube_api() -> tuple[str, str, str]:
@@ -506,18 +681,39 @@ async def _count_messages(session_id: str) -> int:
         await db.close()
 
 
+def _parse_message_attachments(att_json: str | None) -> list[dict]:
+    """解析消息上的附件引用（[{id, name, kind, size}]，无附件返回 []）"""
+    if not att_json:
+        return []
+    try:
+        data = json.loads(att_json)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
 async def _load_history(session_id: str, limit: int = 40) -> list[dict]:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, role, content FROM qube_messages WHERE session_id = ? "
-            "ORDER BY id DESC LIMIT ?",
+            "SELECT id, role, content, attachments_json FROM qube_messages "
+            "WHERE session_id = ? ORDER BY id DESC LIMIT ?",
             (session_id, limit),
         )
         rows = list(await cursor.fetchall())[::-1]
-        return [
-            {"id": r["id"], "role": r["role"], "content": r["content"]} for r in rows
-        ]
+        att_map = await _session_attachment_map(session_id)
+        items = []
+        for r in rows:
+            refs = _parse_message_attachments(r["attachments_json"])
+            items.append(
+                {
+                    "id": r["id"],
+                    "role": r["role"],
+                    "content": r["content"],
+                    "attachments": [att_map[a["id"]] for a in refs if a.get("id") in att_map],
+                }
+            )
+        return items
     finally:
         await db.close()
 
@@ -561,13 +757,23 @@ async def _load_compacted_history(session_id: str, limit: int = 40) -> list[dict
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, role, content FROM qube_messages WHERE session_id = ? "
-            "AND id > ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, role, content, attachments_json FROM qube_messages "
+            "WHERE session_id = ? AND id > ? ORDER BY id DESC LIMIT ?",
             (session_id, compact["compact_upto"], limit),
         )
         rows = list(await cursor.fetchall())[::-1]
+        att_map = await _session_attachment_map(session_id)
         return [
-            {"id": r["id"], "role": r["role"], "content": r["content"]}
+            {
+                "id": r["id"],
+                "role": r["role"],
+                "content": r["content"],
+                "attachments": [
+                    att_map[a["id"]]
+                    for a in _parse_message_attachments(r["attachments_json"])
+                    if a.get("id") in att_map
+                ],
+            }
             for r in rows
         ]
     finally:
@@ -601,11 +807,20 @@ async def regenerate_chat(session_id: str, message_id: int):
         raise HTTPException(status_code=400, detail="没有可重新生成的消息")
     last_user = history[user_idx]
     await _truncate_after(session_id, last_user["id"])
-    prior = [{"role": m["role"], "content": m["content"]} for m in history[:user_idx]]
+    prior = [
+        {"role": m["role"], "content": m["content"], "attachments": m.get("attachments")}
+        for m in history[:user_idx]
+    ]
     engine = settings.qube_engine
     api_cfg = _resolve_qube_api() if engine != "cli" else None
     return StreamingResponse(
-        _stream_reply(session_id, prior, last_user["content"], api_cfg),
+        _stream_reply(
+            session_id,
+            prior,
+            last_user["content"],
+            api_cfg,
+            attachments=last_user.get("attachments"),
+        ),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -616,15 +831,26 @@ async def _load_history_before(session_id: str, before_id: int) -> list[dict]:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT role, content FROM qube_messages WHERE session_id = ? AND id < ? "
-            "ORDER BY id ASC",
+            "SELECT role, content, attachments_json FROM qube_messages "
+            "WHERE session_id = ? AND id < ? ORDER BY id ASC",
             (session_id, before_id),
         )
-        return [
-            {"role": r["role"], "content": r["content"]} for r in await cursor.fetchall()
-        ]
+        rows = await cursor.fetchall()
     finally:
         await db.close()
+    att_map = await _session_attachment_map(session_id)
+    return [
+        {
+            "role": r["role"],
+            "content": r["content"],
+            "attachments": [
+                att_map[a["id"]]
+                for a in _parse_message_attachments(r["attachments_json"])
+                if a.get("id") in att_map
+            ],
+        }
+        for r in rows
+    ]
 
 
 class MessageEdit(BaseModel):
@@ -642,7 +868,8 @@ async def edit_chat_message(body: MessageEdit):
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT role FROM qube_messages WHERE id = ? AND session_id = ?",
+            "SELECT role, attachments_json FROM qube_messages "
+            "WHERE id = ? AND session_id = ?",
             (body.message_id, body.session_id),
         )
         row = await cursor.fetchone()
@@ -650,6 +877,7 @@ async def edit_chat_message(body: MessageEdit):
             raise HTTPException(status_code=404, detail="消息不存在")
         if row["role"] != "user":
             raise HTTPException(status_code=400, detail="只能编辑用户消息")
+        att_json = row["attachments_json"]
     finally:
         await db.close()
     await _truncate_after(body.session_id, body.message_id)
@@ -669,10 +897,18 @@ async def edit_chat_message(body: MessageEdit):
     finally:
         await db.close()
     history = await _load_history_before(body.session_id, body.message_id)
+    att_map = await _session_attachment_map(body.session_id)
+    edited_attachments = [
+        att_map[a["id"]]
+        for a in _parse_message_attachments(att_json)
+        if a.get("id") in att_map
+    ]
     engine = settings.qube_engine
     api_cfg = _resolve_qube_api() if engine != "cli" else None
     return StreamingResponse(
-        _stream_reply(body.session_id, history, content, api_cfg),
+        _stream_reply(
+            body.session_id, history, content, api_cfg, attachments=edited_attachments
+        ),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -820,16 +1056,26 @@ _SSE_HEADERS = {
 }
 
 
+def _message_llm_content(content: str, attachments: list[dict] | None) -> str:
+    """喂给模型的消息内容 = 原文 + 附件清单（清单只在发送时拼接，不落库）"""
+    manifest = qube_attachments.build_manifest(attachments or [])
+    if not manifest:
+        return content
+    return f"{content}\n\n{manifest}" if content else manifest
+
+
 async def _stream_reply(
     session_id: str,
     history: list[dict],
     user_content: str,
     api_cfg: tuple[str, str, str] | None,
+    attachments: list[dict] | None = None,
 ):
     """共享流式应答生成器（chat / edit / regenerate 复用）。
 
-    history 为不含本次 user 消息的前史（[{role, content}, ...]），
-    user_content 为本次要应答的用户内容（已由调用方落库/截断）。
+    history 为不含本次 user 消息的前史（[{role, content, attachments?}, ...]），
+    user_content 为本次要应答的用户内容（已由调用方落库/截断），
+    attachments 为本次用户消息携带的附件（仅 chat 传入；regenerate 从历史消息取）。
     api_cfg: (base_url, api_key, model)；cli 引擎传 None。
     """
     engine = settings.qube_engine
@@ -854,8 +1100,9 @@ async def _stream_reply(
         # CLI 无会话记忆：把系统提示 + 压缩摘要 + 近几轮对话拼进一次性提示词
         parts = [_system_with_summary(compact["summary"]), ""]
         for m in history[-10:]:
-            parts.append(f"{'用户' if m['role'] == 'user' else 'QUBE'}：{m['content']}")
-        parts.append(f"用户：{user_content}")
+            text = _message_llm_content(m["content"], m.get("attachments"))
+            parts.append(f"{'用户' if m['role'] == 'user' else 'QUBE'}：{text}")
+        parts.append(f"用户：{_message_llm_content(user_content, attachments)}")
         prompt = "\n".join(parts)
         full: list[str] = []
         try:
@@ -897,8 +1144,12 @@ async def _stream_reply(
         effort=settings.qube_effort,
     )
     messages = [
-        {"role": m["role"], "content": m["content"]} for m in history
-    ] + [{"role": "user", "content": user_content}]
+        {
+            "role": m["role"],
+            "content": _message_llm_content(m["content"], m.get("attachments")),
+        }
+        for m in history
+    ] + [{"role": "user", "content": _message_llm_content(user_content, attachments)}]
     # 结构化轨迹：text/tool 交替时间线 + 工具调用列表 + 思考文本
     calls: list[dict] = []
     timeline: list[dict] = []
@@ -1164,17 +1415,24 @@ async def qube_chat(body: ChatRequest):
       tool 事件携带结构化 call（name/args/result/display_name/各类 id）
     cli 引擎：{delta} 增量 + {done}（CLI 自身即 agent，无工具事件）
     """
-    if not body.message.strip():
+    if not body.message.strip() and not body.attachment_ids:
         raise HTTPException(status_code=400, detail="消息不能为空")
-
     is_first = (await _count_messages(body.session_id)) == 0
     history = await _load_history(body.session_id)
     # 断网/后端未返回兜底：若最后一条正是本次文本且尚无回复，视为客户端
     # 重试，不再重复落库（避免重发后同一条用户消息出现在历史里两次）
     idempotent_retry = _is_retry(body.message, history)
+    attachments: list[dict] = []
     if not idempotent_retry:
+        attachments = await _resolve_attachments(
+            body.session_id, body.attachment_ids
+        )
         await _save_message(
-            body.session_id, "user", body.message, is_first_user=is_first
+            body.session_id,
+            "user",
+            body.message,
+            is_first_user=is_first,
+            attachments=attachments,
         )
 
     engine = settings.qube_engine
@@ -1182,7 +1440,9 @@ async def qube_chat(body: ChatRequest):
     api_cfg = _resolve_qube_api() if engine != "cli" else None
 
     return StreamingResponse(
-        _stream_reply(body.session_id, history, body.message, api_cfg),
+        _stream_reply(
+            body.session_id, history, body.message, api_cfg, attachments=attachments
+        ),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
@@ -1288,11 +1548,24 @@ async def list_user_skills():
         await db.close()
 
 
+class SkillParam(BaseModel):
+    """技能参数表单字段（填参后替换 prompt 中的 {{name}} 占位符）"""
+
+    name: str
+    label: str
+    type: str = "text"  # text / number / select
+    required: bool = False
+    default: str = ""
+    options: list[str] = []
+    placeholder: str = ""
+
+
 class SkillCreate(BaseModel):
     display_name: str
     description: str = ""
     category: str = "对话"
     prompt: str = ""
+    params: list[SkillParam] = []
 
 
 _SKILL_CATEGORY_IDS = {
@@ -1305,27 +1578,72 @@ _SKILL_CATEGORY_IDS = {
     "因子": "factor",
 }
 
+_PARAM_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def validate_skill_params(raw: list) -> tuple[list[dict], str]:
+    """校验技能参数定义（UI 与 create_skill 工具共用）；返回 (规范后的 list, 错误信息)"""
+    if not raw:
+        return [], ""
+    if len(raw) > 12:
+        return [], "参数最多 12 个"
+    seen: set[str] = set()
+    out: list[dict] = []
+    for i, item in enumerate(raw):
+        p = item if isinstance(item, dict) else item.model_dump()
+        name = str(p.get("name") or "").strip()
+        label = str(p.get("label") or "").strip()
+        if not name or not _PARAM_NAME_RE.match(name):
+            return [], f"第 {i + 1} 个参数名非法（需小写字母/下划线开头，如 period）"
+        if name in seen:
+            return [], f"参数名重复: {name}"
+        if not label:
+            return [], f"参数 {name} 缺少显示标签 label"
+        ptype = str(p.get("type") or "text")
+        if ptype not in ("text", "number", "select"):
+            return [], f"参数 {name} 的 type 需为 text/number/select"
+        options = [str(o) for o in (p.get("options") or []) if str(o).strip()]
+        if ptype == "select" and not options:
+            return [], f"参数 {name} 为 select 时必须提供 options"
+        seen.add(name)
+        out.append(
+            {
+                "name": name,
+                "label": label,
+                "type": ptype,
+                "required": bool(p.get("required")),
+                "default": str(p.get("default") or ""),
+                "options": options,
+                "placeholder": str(p.get("placeholder") or ""),
+            }
+        )
+    return out, ""
+
 
 @router.post("/skills")
 async def create_skill(body: SkillCreate):
-    """新建自定义技能（prompt 模板，点击插入输入框）"""
+    """新建自定义技能（prompt 模板 + 可选参数表单，点击插入输入框/填参后发送）"""
     if not body.display_name.strip():
         raise HTTPException(status_code=400, detail="技能名称不能为空")
     if not body.prompt.strip():
         raise HTTPException(status_code=400, detail="prompt 模板不能为空")
+    params, err = validate_skill_params([p.model_dump() for p in body.params])
+    if err:
+        raise HTTPException(status_code=400, detail=err)
     name = f"user_{uuid.uuid4().hex[:8]}"
     db = await get_db()
     try:
         cursor = await db.execute(
             "INSERT INTO qube_skills (name, display_name, description, category, "
             "category_id, params_json, prompt, builtin, enabled, created_at) "
-            "VALUES (?, ?, ?, ?, ?, '[]', ?, 0, 1, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?)",
             (
                 name,
                 body.display_name.strip(),
                 body.description,
                 body.category,
                 _SKILL_CATEGORY_IDS.get(body.category, "chat"),
+                json.dumps(params, ensure_ascii=False),
                 body.prompt,
                 int(time.time()),
             ),
@@ -1341,6 +1659,7 @@ class SkillUpdate(BaseModel):
     description: str | None = None
     category: str | None = None
     prompt: str | None = None
+    params: list[SkillParam] | None = None
 
 
 async def _require_user_skill(db, skill_id: int):
@@ -1368,6 +1687,11 @@ async def update_skill(skill_id: int, body: SkillUpdate):
             fields["category_id"] = _SKILL_CATEGORY_IDS.get(body.category, "chat")
         if body.prompt is not None:
             fields["prompt"] = body.prompt
+        if body.params is not None:
+            params, err = validate_skill_params([p.model_dump() for p in body.params])
+            if err:
+                raise HTTPException(status_code=400, detail=err)
+            fields["params_json"] = json.dumps(params, ensure_ascii=False)
         if fields:
             keys = ", ".join(f"{k} = ?" for k in fields)
             await db.execute(

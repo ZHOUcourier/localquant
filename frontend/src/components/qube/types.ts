@@ -33,6 +33,13 @@ export interface TokenUsage {
   estimated?: boolean
 }
 
+export interface ChatAttachment {
+  id: string
+  name: string
+  kind: 'text' | 'table'
+  size: number
+}
+
 export interface ChatMsg {
   id?: number
   role: 'user' | 'assistant'
@@ -40,6 +47,7 @@ export interface ChatMsg {
   created_at?: number
   tool_calls?: ToolCalls | null
   usage?: TokenUsage | null
+  attachments?: ChatAttachment[] | null
 }
 
 export interface ContextStats {
@@ -147,6 +155,16 @@ export interface QubeFactor {
   code: string
 }
 
+export interface SkillParam {
+  name: string
+  label: string
+  type: 'text' | 'number' | 'select'
+  required: boolean
+  default: string
+  options: string[]
+  placeholder: string
+}
+
 export interface Skill {
   id: number
   name: string
@@ -154,7 +172,7 @@ export interface Skill {
   description: string
   category: string
   category_id: string
-  params: string[]
+  params: SkillParam[]
   prompt: string
   builtin: boolean
   enabled: boolean
@@ -197,6 +215,31 @@ export async function jsonFetch(url: string, options?: RequestInit) {
   const body = await res.json().catch(() => null)
   if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`)
   return body
+}
+
+/** multipart 上传（FormData 时不要手动设 Content-Type，交给浏览器带 boundary） */
+export async function uploadFetch<T = Record<string, unknown>>(
+  url: string,
+  form: FormData,
+): Promise<T> {
+  const res = await fetch(url, { method: 'POST', body: form })
+  const body = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`)
+  return body as T
+}
+
+/** 技能 prompt 模板 {{参数}} 替换 */
+export function renderSkillPrompt(tpl: string, values: Record<string, string>): string {
+  return tpl.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (m, key: string) =>
+    key in values && values[key] !== '' ? values[key] : m,
+  )
+}
+
+export function fmtBytes(size?: number | null): string {
+  if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) return '-'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(0)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
 export function fmtPct(v?: number | null): string {

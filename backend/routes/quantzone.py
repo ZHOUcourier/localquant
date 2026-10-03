@@ -25,7 +25,7 @@ async def status():
     if not qz_svc.is_configured():
         return {
             "configured": False,
-            "message": "未配置 — 请在 .env 设置 QZ_ACCESS_KEY / QZ_SIGN_SECRET",
+            "message": "未配置 — 请在「设置 → QuantZone」填写 Access Key / Sign Secret",
         }
     try:
         quota = qz_svc.get_quota()

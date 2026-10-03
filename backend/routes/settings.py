@@ -1,4 +1,4 @@
-"""设置路由 — 读取/写入 .env 配置，供前端设置页持久化"""
+"""设置路由 — 读取/写入配置（密钥存 OS 凭据库，其余写 .env），供前端设置页持久化"""
 
 from pathlib import Path
 
@@ -7,6 +7,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.secrets import SECRET_FIELDS, is_available, store_secret
 
 router = APIRouter()
 
@@ -25,6 +26,8 @@ EDITABLE_KEYS = {
     "AI_CLI": "ai_cli",
     "AI_CLI_MODEL": "ai_cli_model",
     "AI_CLI_EFFORT": "ai_cli_effort",
+    "QZ_ACCESS_KEY": "qz_access_key",
+    "QZ_SIGN_SECRET": "qz_sign_secret",
     "BACKEND_PORT": "backend_port",
     "FRONTEND_PORT": "frontend_port",
 }
@@ -42,26 +45,18 @@ class ConfigUpdate(BaseModel):
     ai_cli: str | None = None
     ai_cli_model: str | None = None
     ai_cli_effort: str | None = None
+    qz_access_key: str | None = None
+    qz_sign_secret: str | None = None
     backend_port: int | None = None
     frontend_port: int | None = None
 
 
-def _mask_key(key: str) -> str:
-    """API Key 脱敏显示"""
-    if not key:
-        return ""
-    if len(key) <= 8:
-        return "****"
-    return f"{key[:4]}****{key[-4:]}"
-
-
 @router.get("/")
 async def get_config():
-    """返回当前生效配置（API Key 脱敏）"""
+    """返回当前生效配置（永不回显密钥：只返回 *_set 布尔，不返回明文/掩码）"""
     return {
         "qmt_path": settings.qmt_path,
         "qmt_data_dir": settings.qmt_data_dir,
-        "openai_api_key_masked": _mask_key(settings.openai_api_key),
         "openai_api_key_set": bool(settings.openai_api_key),
         "openai_base_url": settings.openai_base_url,
         "ai_provider": settings.ai_provider,
@@ -71,6 +66,10 @@ async def get_config():
         "ai_cli": settings.ai_cli,
         "ai_cli_model": settings.ai_cli_model,
         "ai_cli_effort": settings.ai_cli_effort or "default",
+        "qz_access_key_set": bool(settings.qz_access_key),
+        "qz_sign_secret_set": bool(settings.qz_sign_secret),
+        # 密钥存储后端：os_keychain=系统凭据库 / env_file=回退 .env
+        "secrets_backend": "os_keychain" if is_available() else "env_file",
         "backend_port": settings.backend_port,
         "frontend_port": settings.frontend_port,
         "data_dir": str(settings.data_dir),
@@ -82,21 +81,38 @@ async def get_config():
 
 @router.put("/")
 async def update_config(body: ConfigUpdate):
-    """更新配置：写入 .env 并同步内存中的 settings（端口类修改需重启后端生效）"""
+    """更新配置：密钥优先存 OS 凭据库（不可用回退 .env），其余写 .env；同步内存 settings"""
     updates: dict[str, str] = {}
+    secret_updates: dict[str, str] = {}
     for env_key, attr in EDITABLE_KEYS.items():
         value = getattr(body, attr)
         if value is None:
+            continue
+        if env_key in SECRET_FIELDS:
+            # 密钥：空串视为不修改（凭据库无法表达空值），其余存凭据库不落盘
+            if str(value).strip():
+                secret_updates[env_key] = str(value)
+                setattr(settings, attr, str(value))
             continue
         updates[env_key] = str(value)
         # 同步内存配置，路径/AI 类配置即时生效
         setattr(settings, attr, type(getattr(settings, attr))(value))
 
+    for env_key, value in secret_updates.items():
+        if not store_secret(env_key, value, ENV_FILE):
+            # 凭据库不可用/写入失败 → 回退 .env 明文（与既有行为一致）
+            updates[env_key] = value
+
     if updates:
         _write_env(updates)
-        logger.info(f"配置已更新: {', '.join(updates.keys())}")
+    if secret_updates:
+        fallback = [k for k in secret_updates if k in updates]
+        logger.info(
+            f"密钥已更新: {', '.join(secret_updates.keys())}"
+            + (f"；{', '.join(fallback)} 回退 .env" if fallback else "（存系统凭据库）")
+        )
 
-    return {"ok": True, "updated": list(updates.keys())}
+    return {"ok": True, "updated": sorted(set(updates) | set(secret_updates))}
 
 
 def _write_env(updates: dict[str, str]) -> None:

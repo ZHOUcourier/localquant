@@ -29,6 +29,18 @@ def _allowed_origins() -> list[str]:
 async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting {settings.project_name} v{settings.version}")
+
+    # .env 明文密钥 → OS 凭据库一次性迁移（幂等；凭据库不可用时跳过，保持 .env 行为）
+    try:
+        from backend.secrets import migrate_env_secrets, overlay_settings
+
+        migrated = migrate_env_secrets()
+        if migrated:
+            logger.info(f"密钥已迁入系统凭据库并从 .env 清除: {', '.join(migrated)}")
+        overlay_settings(settings)
+    except Exception as e:
+        logger.warning(f"密钥迁移跳过（不影响启动）: {e}")
+
     await init_db()
     logger.info("Database initialized")
 

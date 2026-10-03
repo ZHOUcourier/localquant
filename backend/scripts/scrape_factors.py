@@ -112,11 +112,14 @@ def get_headers(token: str = "") -> dict:
 
 # ── Token 获取 ──────────────────────────────────────────────────────────────────
 def get_token() -> str:
-    """从环境变量或 .env 文件获取 token"""
-    token = os.getenv("PANDA_TOKEN", "").strip()
+    """从 .env / 环境变量 / OS 凭据库获取 token（PANDA_TOKEN 属密钥类配置）"""
+    from backend.config import settings
+    from backend.secrets import get_secret
+
+    token = (settings.panda_token or os.getenv("PANDA_TOKEN", "") or get_secret("PANDA_TOKEN")).strip()
     if not token:
         print("=" * 60)
-        print("  ❌ 未找到 PANDA_TOKEN 环境变量")
+        print("  ❌ 未找到 PANDA_TOKEN")
         print("=" * 60)
         print()
         print("  参考网站 API 需要认证才能获取因子列表数据。")
