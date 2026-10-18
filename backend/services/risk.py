@@ -687,7 +687,7 @@ def historical_scenario_stress(
             continue
         port = win.reindex(columns=common).fillna(0.0)
         daily = (port.to_numpy() * w.to_numpy()[None, :]).sum(axis=1)
-        cum = float(_cumprod_ret(daily) - 1.0)
+        cum = _cumprod_ret(daily)
         eq = np.cumprod(1 + daily)
         dd = float((eq / np.maximum.accumulate(eq) - 1.0).min())
         out[name] = {

@@ -98,6 +98,71 @@ def test_stress_test_impact():
     assert out["sharp_crash"]["impact_pct"] == pytest.approx(-0.09, abs=1e-9)
 
 
+@pytest.mark.parametrize(
+    ("daily_returns", "expected_pct"),
+    [
+        pytest.param([0.0, 0.0], 0.0, id="zero-return"),
+        pytest.param([0.1, -0.1], -1.0, id="compound-loss"),
+        pytest.param([-0.1], -10.0, id="single-day-loss"),
+        pytest.param([0.1], 10.0, id="single-day-gain"),
+        pytest.param([0.0, -1.0, 0.1], -100.0, id="total-loss"),
+    ],
+)
+def test_historical_scenario_stress_cumulative_return(daily_returns, expected_pct):
+    dates = pd.bdate_range("2024-01-02", periods=len(daily_returns))
+    returns = pd.DataFrame({"000001.SZ": daily_returns}, index=dates)
+    start, end = dates[0].strftime("%Y-%m-%d"), dates[-1].strftime("%Y-%m-%d")
+
+    result = risk.historical_scenario_stress(
+        returns,
+        pd.Series({"000001.SZ": 1.0}),
+        {"known_answer": (start, end)},
+    )["known_answer"]
+
+    assert result["cum_return_pct"] == pytest.approx(expected_pct)
+    assert result["n_days"] == len(daily_returns)
+    assert result["start"] == start
+    assert result["end"] == end
+    assert result["worst_day_pct"] == pytest.approx(min(daily_returns) * 100)
+
+
+def test_historical_scenario_stress_weighted_window():
+    dates = pd.bdate_range("2024-01-02", periods=4)
+    returns = pd.DataFrame(
+        {"000001.SZ": [0.5, 0.1, -0.1, 0.5], "000002.SZ": [0.5, 0.0, 0.0, 0.5]},
+        index=dates,
+    )
+
+    result = risk.historical_scenario_stress(
+        returns,
+        pd.Series({"000001.SZ": 0.5, "000002.SZ": 0.5}),
+        {"known_answer": ("2024-01-03", "2024-01-04")},
+    )["known_answer"]
+
+    assert result["cum_return_pct"] == pytest.approx(-0.25)
+    assert result["n_days"] == 2
+    assert result["max_drawdown_pct"] == pytest.approx(-5.0)
+    assert result["worst_day_pct"] == pytest.approx(-5.0)
+
+
+def test_historical_scenario_stress_empty_window():
+    returns = pd.DataFrame(
+        {"000001.SZ": [0.1]}, index=pd.to_datetime(["2024-01-02"])
+    )
+
+    result = risk.historical_scenario_stress(
+        returns,
+        pd.Series({"000001.SZ": 1.0}),
+        {"missing": ("2024-02-01", "2024-02-02")},
+    )["missing"]
+
+    assert result["n_days"] == 0
+    assert result["cum_return_pct"] is None
+    assert result["max_drawdown_pct"] is None
+    assert result["worst_day_pct"] is None
+    assert result["note"] == "区间内无行情缓存"
+
+
 def test_covariance_shrinkage_shape():
     p = _panel(seed=2)
     sigma = risk.covariance_estimator(p["close"].pct_change(), shrinkage=0.2)
