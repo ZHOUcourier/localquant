@@ -264,6 +264,119 @@ class TestSampleGate:
 
 
 class TestFactorHealth:
+    @pytest.fixture
+    def health_db(self, tmp_path, monkeypatch):
+        from backend import database
+
+        db_path = tmp_path / "health.db"
+        monkeypatch.setattr(database, "DB_PATH", db_path)
+        asyncio.run(database.init_db())
+        fid = _insert_preset_factor(db_path, "health", "RANK(CLOSE)", "TECHNICAL")
+        asyncio.run(svc.get_factor_ic_history(fid))
+        with sqlite3.connect(db_path) as db:
+            db.execute(
+                "UPDATE preset_factors SET ic_mean = 0.005, rank_ic = 0.004, "
+                "data_date = '2024-01-08' WHERE id = ?",
+                (fid,),
+            )
+            db.executemany(
+                "INSERT INTO preset_factor_ic_history "
+                "(factor_id, ic_mean, data_date, snapshot_at) VALUES (?, ?, ?, ?)",
+                [(fid, 0.05, "2024-01-02", 1), (fid, 0.05, "2024-01-03", 2)],
+            )
+        return db_path, fid
+
+    def test_health_uses_current_metric_instead_of_previous_snapshot(self, health_db):
+        result = asyncio.run(svc.factor_health())[0]
+
+        assert result["latest_ic_mean"] == 0.005
+        assert result["stage"] == "失效"
+        assert result["recent_ic_mean"] == pytest.approx(0.035)
+        assert result["n_observations"] == 3
+
+    def test_same_data_date_does_not_create_more_observations(self, health_db):
+        db_path, fid = health_db
+        with sqlite3.connect(db_path) as db:
+            db.execute(
+                "UPDATE preset_factor_ic_history SET data_date = '2024-01-08' "
+                "WHERE factor_id = ?", (fid,),
+            )
+
+        result = asyncio.run(svc.factor_health())[0]
+
+        assert result["n_snapshots"] == 2
+        assert result["n_observations"] == 1
+        assert result["stage"] == "样本不足"
+
+    def test_missing_current_metric_is_not_classified_from_history(self, health_db):
+        db_path, fid = health_db
+        with sqlite3.connect(db_path) as db:
+            db.execute("UPDATE preset_factors SET ic_mean = NULL WHERE id = ?", (fid,))
+
+        result = asyncio.run(svc.factor_health())[0]
+
+        assert result["latest_ic_mean"] is None
+        assert result["stage"] == "样本不足"
+
+    def test_later_data_dates_are_not_used_for_an_earlier_recalculation(self, health_db):
+        db_path, fid = health_db
+        with sqlite3.connect(db_path) as db:
+            db.execute(
+                "UPDATE preset_factor_ic_history SET data_date = '2024-02-01' "
+                "WHERE factor_id = ?", (fid,),
+            )
+
+        result = asyncio.run(svc.factor_health())[0]
+
+        assert result["n_observations"] == 1
+        assert result["stage"] == "样本不足"
+
+    @pytest.mark.parametrize("min_snapshots", [1, 2])
+    def test_current_metric_without_archived_snapshots(self, health_db, min_snapshots):
+        db_path, fid = health_db
+        with sqlite3.connect(db_path) as db:
+            db.execute("DELETE FROM preset_factor_ic_history WHERE factor_id = ?", (fid,))
+
+        result = asyncio.run(svc.factor_health(min_snapshots=min_snapshots))[0]
+
+        assert result["n_snapshots"] == 0
+        assert result["n_observations"] == 1
+        assert result.get("last_snapshot_at") is None
+        if min_snapshots == 2:
+            assert result["stage"] == "样本不足"
+
+    def test_failed_recalculation_does_not_archive_another_snapshot(self, health_db, monkeypatch):
+        _, fid = health_db
+        before = asyncio.run(svc.get_factor_ic_history(fid))
+
+        async def no_data(factor):
+            return {"ok": False, "code": "insufficient_data"}
+
+        monkeypatch.setattr(svc, "_recompute_ic_from_local", no_data)
+        result = asyncio.run(svc.recalculate_preset_factor(fid))
+
+        assert result["recalc_mode"] == "insufficient_data"
+        assert asyncio.run(svc.get_factor_ic_history(fid)) == before
+
+    def test_repeated_recalculation_preserves_effective_observation_count(self, health_db, monkeypatch):
+        _, fid = health_db
+
+        async def same_data(factor):
+            return {
+                "ok": True, "metrics": {"ic_mean": 0.005, "rank_ic": 0.004},
+                "n_stocks": 300, "n_dates": 252,
+                "start_date": "2023-01-02", "data_date": "2024-01-08",
+            }
+
+        monkeypatch.setattr(svc, "_recompute_ic_from_local", same_data)
+        for _ in range(2):
+            assert asyncio.run(svc.recalculate_preset_factor(fid))["recalc_mode"] == "recomputed"
+        result = asyncio.run(svc.factor_health())[0]
+
+        assert result["n_snapshots"] == 4
+        assert result["n_observations"] == 3
+        assert result["stage"] == "失效"
+
     def test_health_with_history(self, tmp_path, monkeypatch):
         from pathlib import Path
 
@@ -287,7 +400,7 @@ class TestFactorHealth:
                 # 因子 A：IC 稳定在 0.05；因子 B：从 0.06 掉到 0.005（失效）
                 await db.execute(
                     "INSERT INTO preset_factors (factor_code, factor_name, category_name, category_code, ic_mean, rank_ic, data_date) "
-                    "VALUES ('F_STABLE', 'f_stable', 'TECHNICAL', 'TECHNICAL', 0.05, 0.04, '2024-01-01')"
+                    "VALUES ('F_STABLE', 'f_stable', 'TECHNICAL', 'TECHNICAL', 0.05, 0.04, '2024-01-08')"
                 )
                 await db.execute(
                     "INSERT INTO preset_factors (factor_code, factor_name, category_name, category_code, ic_mean, rank_ic, data_date) "
@@ -299,7 +412,7 @@ class TestFactorHealth:
                         "INSERT INTO preset_factor_ic_history "
                         "(factor_id, ic_mean, ic_std, ic_ir, data_date, snapshot_at) "
                         "VALUES (?, ?, 0.02, ?, ?, ?)",
-                        (fid1, ic, ic / 0.02, "2024-01-01", ts),
+                        (fid1, ic, ic / 0.02, f"2024-01-{ts // 100 + 1:02d}", ts),
                     )
                 for ic, ts in [
                     (0.06, 100), (0.06, 200), (0.06, 300),
@@ -310,7 +423,7 @@ class TestFactorHealth:
                         "INSERT INTO preset_factor_ic_history "
                         "(factor_id, ic_mean, ic_std, ic_ir, data_date, snapshot_at) "
                         "VALUES (?, ?, 0.02, ?, ?, ?)",
-                        (fid2, ic, ic / 0.02, "2024-01-01", ts),
+                        (fid2, ic, ic / 0.02, f"2024-01-{ts // 100:02d}", ts),
                     )
                 await db.commit()
 

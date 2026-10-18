@@ -4,6 +4,7 @@ import json
 import re
 import time
 from collections.abc import AsyncGenerator
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -426,13 +427,13 @@ class FactorResearchService:
 
             groups = pd.qcut(f, q=n_groups, labels=False, duplicates="drop")
             for g in range(n_groups):
-                mask = groups == g
-                if mask.sum() > 0:
+                group_mask = groups == g
+                if group_mask.sum() > 0:
                     group_returns[f"group_{g + 1}"].append(
                         {
                             "date": str(nxt),
-                            "return": float(r[mask].mean()),
-                            "count": int(mask.sum()),
+                            "return": float(r[group_mask].mean()),
+                            "count": int(group_mask.sum()),
                         }
                     )
 
@@ -678,9 +679,9 @@ class FactorResearchService:
             except Exception:
                 continue
             for g in range(n_groups):
-                mask = groups == g
-                if mask.sum() > 0:
-                    group_daily[f"G{g + 1}"][nxt] = float(r[mask].mean())
+                group_mask = groups == g
+                if group_mask.sum() > 0:
+                    group_daily[f"G{g + 1}"][nxt] = float(r[group_mask].mean())
         gd = {k: pd.Series(v).sort_index() for k, v in group_daily.items() if v}
         return gd, pd.Series(bench).sort_index()
 
@@ -881,21 +882,23 @@ class FactorResearchService:
         industry_data: pd.DataFrame,
         market_cap_data: pd.DataFrame,
     ) -> pd.DataFrame:
-        """因子中性化（对市值和行业做回归取残差）"""
-        neutralized = factor_data.copy()
+        """因子中性化（对市值和行业做回归取残差；不可回归样本保持缺失）"""
+        neutralized = pd.DataFrame(np.nan, index=factor_data.index, columns=factor_data.columns)
         dates = factor_data.index
 
         for date in dates:
             if date not in industry_data.index or date not in market_cap_data.index:
                 continue
 
-            factor_values = factor_data.loc[date].dropna()
+            factor_values = factor_data.loc[date]
+            factor_values = factor_values[np.isfinite(factor_values)]
             industry = industry_data.loc[date]
             market_cap = market_cap_data.loc[date]
+            market_cap = market_cap[np.isfinite(market_cap) & (market_cap > 0)]
 
             common = factor_values.index.intersection(
                 industry.dropna().index
-            ).intersection(market_cap.dropna().index)
+            ).intersection(market_cap.index)
             if len(common) < 30:
                 continue
 
@@ -1294,13 +1297,13 @@ class FactorResearchService:
         )
 
     async def get_factor_ic_history(self, factor_id: int) -> list[dict]:
-        """因子 IC 指标的历史快照列表（每次重算前自动留存）"""
+        """因子 IC 指标的历史快照列表（成功重算覆盖前自动留存）"""
         db = await get_db()
         try:
             await self._ensure_history_table(db)
             cursor = await db.execute(
                 "SELECT * FROM preset_factor_ic_history WHERE factor_id = ? "
-                "ORDER BY snapshot_at DESC LIMIT 50",
+                "ORDER BY snapshot_at DESC, id DESC LIMIT 50",
                 (factor_id,),
             )
             rows = await cursor.fetchall()
@@ -1382,36 +1385,33 @@ class FactorResearchService:
                     logger.warning(f"记录因子溯源失败: {e}")
                 return factor
 
-            # 覆盖前留存历史快照
-            await self._ensure_history_table(db)
-            await db.execute(
-                "INSERT INTO preset_factor_ic_history "
-                "(factor_id, ic_mean, rank_ic, ic_ir, ic_std, annualized_return, "
-                " maximum_drawdown, sharpe_ratio, turnover_rate, data_date, snapshot_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    factor_id,
-                    factor.get("ic_mean"),
-                    factor.get("rank_ic"),
-                    factor.get("ic_ir"),
-                    factor.get("ic_std"),
-                    factor.get("annualized_return"),
-                    factor.get("maximum_drawdown"),
-                    factor.get("sharpe_ratio"),
-                    factor.get("turnover_rate"),
-                    factor.get("data_date"),
-                    int(time.time()),
-                ),
-            )
-            await db.execute(
-                "UPDATE preset_factors SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (factor_id,),
-            )
-            await db.commit()
-
             # 基于本地缓存行情真实重算 IC（数据充足时）；数据不足时明确告知，不伪造
             recalc = await self._recompute_ic_from_local(factor)
             if recalc.get("ok"):
+                await self._ensure_history_table(db)
+                await db.execute(
+                    "INSERT INTO preset_factor_ic_history "
+                    "(factor_id, ic_mean, rank_ic, ic_ir, ic_std, annualized_return, "
+                    " maximum_drawdown, sharpe_ratio, turnover_rate, data_date, snapshot_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        factor_id,
+                        factor.get("ic_mean"),
+                        factor.get("rank_ic"),
+                        factor.get("ic_ir"),
+                        factor.get("ic_std"),
+                        factor.get("annualized_return"),
+                        factor.get("maximum_drawdown"),
+                        factor.get("sharpe_ratio"),
+                        factor.get("turnover_rate"),
+                        factor.get("data_date"),
+                        int(time.time()),
+                    ),
+                )
+                await db.execute(
+                    "UPDATE preset_factors SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (factor_id,),
+                )
                 metrics = recalc["metrics"]
                 sample_meta = {
                     "source": "local_qmt",
@@ -1832,7 +1832,7 @@ class FactorResearchService:
         }
 
     # 运行时公式错误码 → 库内状态；数据不足/分钟缓存缺失不改状态（非公式问题）
-    _FAILED_FORMULA_STATUS = {
+    _FAILED_FORMULA_STATUS: ClassVar[dict[str, str]] = {
         "syntax_error": "syntax_error",
         "undefined_name": "unsupported",
         "runtime_error": "runtime_error",
@@ -2426,9 +2426,9 @@ class FactorResearchService:
         category_code: str | None = None,
         min_snapshots: int = 2,
     ) -> list[dict]:
-        """因子体检：基于 IC 历史快照判断生命周期阶段与 IC 趋势
+        """因子体检：按数据日期去重并包含当前 IC，快照仅作启发式诊断
 
-        阶段判定（快照 ≥ min_snapshots 时）：
+        阶段判定（有效数据日期数 ≥ min_snapshots 时）：
           失效: |最近 IC| < 0.01；  衰减: 最近 IC 显著低于历史均值；
           萌芽: 最近 IC 显著高于历史均值；  稳定: 其余且 |IC| ≥ 0.02；  观察: 其余。
         """
@@ -2448,7 +2448,7 @@ class FactorResearchService:
 
             cursor = await db.execute(
                 "SELECT factor_id, ic_mean, ic_std, ic_ir, data_date, snapshot_at "
-                "FROM preset_factor_ic_history ORDER BY factor_id, snapshot_at ASC"
+                "FROM preset_factor_ic_history ORDER BY factor_id, snapshot_at ASC, id ASC"
             )
             hist: dict[int, list[dict]] = {}
             for r in await cursor.fetchall():
@@ -2458,24 +2458,37 @@ class FactorResearchService:
 
         out: list[dict] = []
         for f in factors:
-            snaps = [s for s in hist.get(f["id"], []) if s.get("ic_mean") is not None]
+            snaps = [
+                s for s in hist.get(f["id"], [])
+                if s.get("ic_mean") is not None and np.isfinite(s["ic_mean"])
+            ]
+            current_date = f.get("data_date")
+            current_ic = f.get("ic_mean")
+            current_valid = bool(current_date) and current_ic is not None and np.isfinite(current_ic)
+            observations = {
+                s["data_date"]: s["ic_mean"] for s in snaps
+                if s.get("data_date") and current_date and s["data_date"] <= current_date
+            }
+            if current_valid:
+                observations[current_date] = current_ic
             item = {
                 "factor_id": f["id"],
                 "factor_name": f["factor_name"],
                 "category_name": f["category_name"],
                 "category_code": f["category_code"],
-                "latest_ic_mean": f.get("ic_mean") or 0.0,
-                "latest_rank_ic": f.get("rank_ic") or 0.0,
-                "data_date": f.get("data_date"),
+                "latest_ic_mean": current_ic if current_valid else None,
+                "latest_rank_ic": f.get("rank_ic"),
+                "data_date": current_date,
                 "n_snapshots": len(snaps),
+                "n_observations": len(observations),
             }
-            if len(snaps) < min_snapshots:
+            if not current_valid or len(observations) < min_snapshots:
                 item["stage"] = "样本不足"
                 item["ic_trend"] = 0.0
                 item["trend_label"] = "—"
                 out.append(item)
                 continue
-            hist_ics = [s["ic_mean"] for s in snaps]
+            hist_ics = [observations[date] for date in sorted(observations)]
             hist_mean = float(np.mean(hist_ics))
             hist_std = float(np.std(hist_ics, ddof=1)) if len(hist_ics) > 1 else 0.0
             recent = hist_ics[-min(6, len(hist_ics)):]
@@ -2500,7 +2513,7 @@ class FactorResearchService:
                     "trend_label": "↑" if trend > 0 else ("↓" if trend < 0 else "→"),
                     "hist_ic_mean": round(hist_mean, 4),
                     "recent_ic_mean": round(recent_mean, 4),
-                    "last_snapshot_at": snaps[-1].get("snapshot_at"),
+                    "last_snapshot_at": snaps[-1].get("snapshot_at") if snaps else None,
                 }
             )
             out.append(item)

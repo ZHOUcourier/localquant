@@ -9,6 +9,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from backend.services.factor_research import FactorResearchService
 
@@ -95,3 +96,39 @@ def test_full_factor_analysis_smoke():
     assert report["summary"]["rank_ic"] > 0.9
     assert len(report["group_perf"]) >= 5
     assert report["summary"]["monotonicity"] >= 0.75
+
+
+@pytest.mark.parametrize("analysis", ["quantile", "daily_groups"])
+@pytest.mark.parametrize("changing_mask", [False, True])
+def test_grouped_returns_apply_tradable_mask_every_day(analysis, changing_mask):
+    dates = pd.bdate_range("2024-01-02", periods=4)
+    stocks = [f"S{i:02d}" for i in range(6)]
+    factor = pd.DataFrame([list(range(6))] * 4, index=dates, columns=stocks)
+    returns = pd.DataFrame(0.01, index=dates, columns=stocks)
+    mask = pd.DataFrame(True, index=dates, columns=stocks)
+    for i, date in enumerate(dates[:-1]):
+        excluded = [stocks[i if changing_mask else 4], stocks[5]]
+        mask.loc[date, excluded] = False
+        returns.loc[dates[i + 1], excluded] = 0.9
+    original_mask = mask.copy()
+
+    if analysis == "quantile":
+        result = svc.quantile_analysis(factor, returns, n_groups=2, mask=mask)
+        expected = svc.quantile_analysis(factor.where(mask), returns, n_groups=2)
+        assert result == expected
+        for group in result["group_returns"].values():
+            assert len(group) == 3
+            assert [day["return"] for day in group] == pytest.approx([0.01] * 3)
+            assert [day["count"] for day in group] == [2] * 3
+    else:
+        groups, benchmark = svc._group_daily_returns(factor, returns, 2, mask=mask)
+        expected_groups, expected_benchmark = svc._group_daily_returns(
+            factor.where(mask), returns, 2
+        )
+        assert set(groups) == {"G1", "G2"}
+        for name, group in groups.items():
+            pd.testing.assert_series_equal(group, expected_groups[name])
+            assert group.tolist() == pytest.approx([0.01] * 3)
+        pd.testing.assert_series_equal(benchmark, expected_benchmark)
+        assert benchmark.tolist() == pytest.approx([0.01] * 3)
+    pd.testing.assert_frame_equal(mask, original_mask)
