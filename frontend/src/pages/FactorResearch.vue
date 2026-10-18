@@ -11,11 +11,13 @@ import SystemResourceMonitor from '@/components/factor/SystemResourceMonitor.vue
 import ComprehensiveReport from '@/components/factor/ComprehensiveReport.vue'
 import AlphaLensReport from '@/components/factor/AlphaLensReport.vue'
 import IntradayFactor from '@/components/factor/IntradayFactor.vue'
+import ResearchWorkbench from '@/components/factor/ResearchWorkbench.vue'
 import type { FactorResult, FactorReport, AlphaLensReport as AlphaLensReportT } from '@/components/factor/types'
 
-// 页级主 tab：因子研究 | 因子库
+// 页级主 tab：因子研究 | 研究证据 | 分钟因子 | 因子库
 const pageTabs: TabItem[] = [
   { key: 'research', label: '因子研究' },
+  { key: 'evidence', label: '研究证据' },
   { key: 'intraday', label: '分钟因子 · 日内高频', badge: 'Beta' },
   { key: 'library', label: '因子库' },
 ]
@@ -278,6 +280,11 @@ const corrOption = computed(() => {
       <Tabs :items="pageTabs" :active-key="pageTab" @change="(k) => (pageTab = k)" />
     </div>
 
+    <!-- 保留长计算与表单状态，切换页级 tab 不重复发起请求。 -->
+    <KeepAlive>
+      <ResearchWorkbench v-if="pageTab === 'evidence'" />
+    </KeepAlive>
+
     <!-- ============ 分钟因子 · 日内高频 ============ -->
     <div v-if="pageTab === 'intraday'">
       <IntradayFactor />
@@ -304,7 +311,7 @@ const corrOption = computed(() => {
     </div>
 
     <!-- ============ 因子研究 ============ -->
-    <template v-else>
+    <template v-else-if="pageTab === 'research'">
       <!-- 已计算因子 + 分层组数 + 合成 -->
       <div class="flex flex-wrap items-center gap-2 rounded-[4px] border border-[rgba(15,0,0,0.12)] bg-[#fdfcfc] px-3 py-2">
         <span class="text-xs text-[#646262]">已计算因子:</span>

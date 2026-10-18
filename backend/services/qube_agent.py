@@ -29,6 +29,17 @@ import pandas as pd
 from loguru import logger
 
 MAX_TURNS = 8  # 单条用户消息允许的最大 LLM 轮数（防失控循环）
+_RESEARCH_TOOL_NAMES = frozenset({
+    "research_list", "research_create", "research_register_trial", "research_validate",
+})
+
+
+def _serialize_tool_result(name: str, result: Any) -> str:
+    text = json.dumps(result, ensure_ascii=False, default=str)
+    # 研究 handler 已移除日序列；不能再按字符切断 JSON、证据边界或记录 id。
+    if name in _RESEARCH_TOOL_NAMES:
+        return text
+    return text[:4000]
 
 
 @dataclass
@@ -222,7 +233,7 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
                     logger.warning(f"QUBE 工具 {name} 执行失败: {e}")
                     result = {"error": str(e)[:500]}
                 logger.info(f"QUBE 工具 {name} 耗时 {time.time() - started:.1f}s")
-            result_str = json.dumps(result, ensure_ascii=False, default=str)[:4000]
+            result_str = _serialize_tool_result(name, result)
             yield {"type": "tool_result", "name": name, "result": result_str}
             convo.append(
                 {
@@ -955,6 +966,134 @@ async def _tool_search_factor_library(args: dict) -> dict:
         await db.close()
 
 
+_RESEARCH_SERIES_KEYS = frozenset({
+    "returns", "daily_ic", "daily_rank_ic", "ic_series", "rank_ic_series",
+    "dates", "equity_curve", "nav", "drawdowns", "positions", "holdings", "weights",
+})
+_RESEARCH_EVIDENCE_KEYS = frozenset({"summary", "primary", "manifest", "limitations"})
+
+
+def _research_summary(value: Any) -> Any:
+    """只裁剪上下文副本；完整日序列仍保留在研究页面可按 id 查询的记录中。"""
+    if isinstance(value, list):
+        return [_research_summary(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out = {}
+    omitted = []
+    for key, item in value.items():
+        if key in _RESEARCH_EVIDENCE_KEYS:
+            out[key] = item
+        elif isinstance(item, (list, dict)) and (
+            key in _RESEARCH_SERIES_KEYS or key.startswith("daily_")
+            or key.endswith(("_returns", "_series"))
+        ):
+            omitted.append(key)
+        else:
+            out[key] = _research_summary(item)
+    if omitted:
+        out["omitted_series"] = omitted
+    return out
+
+
+def _research_record(record: dict, kind: str, **ids: str) -> dict:
+    out = _research_summary(record)
+    out.update(ids)
+    out[f"{kind}_id"] = record["id"]
+    if kind == "study":
+        for field, child_kind in (("trials", "trial"), ("runs", "run")):
+            if field in record:
+                out[field] = [
+                    _research_record(item, child_kind, study_id=record["id"])
+                    for item in record[field]
+                ]
+    return out
+
+
+def _research_args(args: dict, allowed: set[str]) -> None:
+    if not isinstance(args, dict):
+        raise TypeError("工具参数必须是 JSON object")
+    extra = args.keys() - allowed
+    if extra:
+        raise ValueError(f"不允许的参数: {', '.join(sorted(extra))}")
+
+
+def _research_id(args: dict, key: str) -> str:
+    value = args.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} 必须是非空字符串")
+    return value.strip()
+
+
+def _research_error(tool: str, exc: Exception, **ids: str) -> dict:
+    return {"ok": False, "error": f"{tool} 失败: {str(exc)[:500]}",
+            "error_type": type(exc).__name__, **ids}
+
+
+async def _tool_research_list(args: dict) -> dict:
+    """研究登记查重；指定 id 时包含试验、运行证据摘要与人工复核记录。"""
+    ids = {}
+    try:
+        from backend.services import research_registry
+
+        _research_args(args, {"study_id"})
+        if "study_id" not in args:
+            studies = await research_registry.list_studies()
+            return {"studies": [_research_record(s, "study") for s in studies]}
+        ids["study_id"] = _research_id(args, "study_id")
+        study = await research_registry.get_study(ids["study_id"])
+        if study is None:
+            raise ValueError(f"研究不存在: {ids['study_id']}")
+        return _research_record(study, "study")
+    except Exception as exc:
+        return _research_error("research_list", exc, **ids)
+
+
+async def _tool_research_create(args: dict) -> dict:
+    try:
+        from backend.models.research import StudyCreate
+        from backend.services import research_registry
+
+        req = StudyCreate.model_validate(args)
+        return _research_record(await research_registry.create_study(req), "study")
+    except Exception as exc:
+        return _research_error("research_create", exc)
+
+
+async def _tool_research_register_trial(args: dict) -> dict:
+    ids = {}
+    try:
+        from backend.models.research import TrialCreate
+        from backend.services import research_registry
+
+        ids["study_id"] = _research_id(args, "study_id")
+        req = TrialCreate.model_validate({k: v for k, v in args.items() if k != "study_id"})
+        trial = await research_registry.register_trial(ids["study_id"], req)
+        return _research_record(trial, "trial", **ids)
+    except Exception as exc:
+        return _research_error("research_register_trial", exc, **ids)
+
+
+async def _tool_research_validate(args: dict) -> dict:
+    ids = {}
+    try:
+        # 不接收 phase/批准参数：最终留出释放与生命周期 review 只允许前端人工执行。
+        _research_args(args, {"trial_id"})
+        ids["trial_id"] = _research_id(args, "trial_id")
+        from backend.services.research_service import run_trial
+
+        run = await run_trial(ids["trial_id"], phase="validation")
+        out = _research_record(run, "run", **ids)
+        out["ok"] = run["status"] == "completed"
+        if run["status"] == "awaiting_data":
+            out["note"] = "待验证：等待 Windows QMT 数据，不切换行情源，不生成收益指标。"
+        elif run["status"] == "failed":
+            out["error"] = run.get("error") or "研究验证失败，请按 run_id 查看证据。"
+        return out
+    except Exception as exc:
+        return _research_error("research_validate", exc, **ids)
+
+
 async def _load_session_table_attachments(session_id: str) -> dict[str, pd.DataFrame]:
     """加载会话内全部表格附件为 {文件名(去后缀): DataFrame}（读取失败的单个跳过）"""
     from backend.database import get_db
@@ -1299,6 +1438,60 @@ async def _tool_create_skill(args: dict) -> dict:
         }
     finally:
         await db.close()
+
+
+def _build_research_tools() -> list[Tool]:
+    from backend.models.research import StudyCreate, TrialCreate
+
+    # 扁平扩展 TrialCreate 的根 schema，不包进 properties，确保 #/$defs 引用仍有效。
+    trial_schema = TrialCreate.model_json_schema()
+    trial_schema["properties"]["study_id"] = {"type": "string", "minLength": 1}
+    trial_schema["required"] = ["study_id", *trial_schema.get("required", [])]
+    return [
+        Tool(
+            name="research_list",
+            description="先查研究登记避免重复；可传 study_id 读取试验、证据摘要与人工复核。完整日序列按记录 id 在研究页面查看。",
+            parameters={
+                "type": "object", "additionalProperties": False,
+                "properties": {"study_id": {"type": "string", "minLength": 1}},
+                "required": [],
+            },
+            handler=_tool_research_list,
+        ),
+        Tool(
+            name="research_create",
+            description=(
+                "仅在用户确认完整预注册协议后创建研究。先 research_list 查重；"
+                "四日期须 start_date < train_end < validation_end < end_date。"
+                "来源不明应写研究员假设，不编引用；无数据也只登记待验证。"
+            ),
+            parameters=StudyCreate.model_json_schema(),
+            handler=_tool_research_create,
+        ),
+        Tool(
+            name="research_register_trial",
+            description=(
+                "在已确认协议下登记公式、固定方向和理由，计入试验预算；"
+                "失败、人工调参与 LLM 变体也须登记。不会释放最终留出或批准生命周期迁移。"
+            ),
+            parameters=trial_schema,
+            handler=_tool_research_register_trial,
+        ),
+        Tool(
+            name="research_validate",
+            description=(
+                "对已登记 trial_id 仅执行 validation，返回 run_id 与研究证据摘要；"
+                "无 Windows QMT 数据返回 awaiting_data，不编指标、不换行情源。"
+                "final holdout 释放和生命周期 review 必须由前端人工执行，Agent 无批准权限。"
+            ),
+            parameters={
+                "type": "object", "additionalProperties": False,
+                "properties": {"trial_id": {"type": "string", "minLength": 1}},
+                "required": ["trial_id"],
+            },
+            handler=_tool_research_validate,
+        ),
+    ]
 
 
 def build_qube_tools(session_id: str) -> list[Tool]:
@@ -1794,4 +1987,5 @@ def build_qube_tools(session_id: str) -> list[Tool]:
             },
             handler=_tool_create_skill,
         ),
+        *_build_research_tools(),
     ]

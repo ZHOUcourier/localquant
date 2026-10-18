@@ -53,7 +53,7 @@ def _synth_panels(n_days=80, n_stocks=12, seed=7):
 
 
 def test_builtin_skills_seeded(qube_db):
-    """init_db 后内置技能 = QuantSkills 14 个 + LLMQuant 18 个，均带来源标注"""
+    """内置技能均标注来源；本地研究技能不伪造外部链接。"""
 
     async def _check():
         db = await database.get_db()
@@ -65,7 +65,7 @@ def test_builtin_skills_seeded(qube_db):
             counts = {r["source"]: r["n"] for r in await cur.fetchall()}
             cur = await db.execute(
                 "SELECT COUNT(*) AS n FROM qube_skills WHERE builtin = 1 "
-                "AND (url = '' OR source = '')"
+                "AND (source = '' OR (source != 'LocalQuant' AND url = ''))"
             )
             missing_meta = (await cur.fetchone())["n"]
         finally:
@@ -73,8 +73,8 @@ def test_builtin_skills_seeded(qube_db):
         return counts, missing_meta
 
     counts, missing_meta = asyncio.run(_check())
-    assert counts == {"QuantSkills": 14, "LLMQuant": 18}
-    assert missing_meta == 0, "每个内置技能都必须标注来源与链接"
+    assert counts == {"QuantSkills": 14, "LLMQuant": 18, "LocalQuant": 1}
+    assert missing_meta == 0, "内置技能必须标注来源，外部技能还需原文链接"
 
 
 def test_builtin_skills_have_detailed_prompt(qube_db):
@@ -91,7 +91,7 @@ def test_builtin_skills_have_detailed_prompt(qube_db):
             await db.close()
 
     lengths = asyncio.run(_check())
-    assert len(lengths) == 32
+    assert len(lengths) == 33
     assert all(n > 200 for n in lengths.values()), "每个内置技能正文应详实（>200 字符）"
 
 

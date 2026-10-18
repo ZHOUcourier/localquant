@@ -126,6 +126,7 @@ from backend.routes import (
     quantzone,
     qube,
     regime,
+    research,
     risk,
     strategy,
     system,
@@ -151,6 +152,7 @@ app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(risk.router, prefix="/api/risk", tags=["risk"])
 app.include_router(ops.router, prefix="/api/ops", tags=["ops"])
 app.include_router(regime.router, prefix="/api/regime", tags=["regime"])
+app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(quantzone.router, prefix="/api/quantzone", tags=["quantzone"])
 app.include_router(vectorbt.router, prefix="/api/vectorbt", tags=["vectorbt"])
 

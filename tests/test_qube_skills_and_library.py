@@ -487,8 +487,12 @@ def test_build_qube_tools_registers_new_tools():
         "run_research_code",
         "read_attachment",
         "create_skill",
+        "research_list",
+        "research_create",
+        "research_register_trial",
+        "research_validate",
     } <= names
-    assert len(names) == 23
+    assert len(names) == 27
 
 
 def test_read_doc_whitelist_expanded(qube_db):
