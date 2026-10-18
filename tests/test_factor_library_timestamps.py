@@ -2,7 +2,6 @@
 
 import asyncio
 import time
-from pathlib import Path
 
 from backend.models.factor import FactorCreate
 from backend.routes import factor as factor_route

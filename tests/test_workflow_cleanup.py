@@ -4,6 +4,8 @@ import os
 import time
 from pathlib import Path
 
+import pandas as pd
+
 from backend.services import workflow_service
 
 
@@ -57,8 +59,6 @@ def test_compact_node_outputs_does_not_store_dataframe_strings():
 
 def _wide_df(n_rows: int) -> "pd.DataFrame":
     """非日期索引的宽表，确保走表格分支而非多线图分支"""
-    import pandas as pd
-
     return pd.DataFrame(
         {f"c{j}": range(n_rows) for j in range(14)},
         index=[f"r{i}" for i in range(n_rows)],

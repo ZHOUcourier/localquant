@@ -126,5 +126,5 @@ class TestPresetFormulaExecutability:
         """防止库变动导致代表性因子不再覆盖目标方言（测试失去意义）"""
         _, formulas = eval_env
         by_name = dict(formulas)
-        assert re.search(r"\bADV\(\s*\d+\s*\)", by_name["Alpha101因子_085"], re.I)
-        assert re.search(r"\bRETURNS\b(?!\s*\()", by_name["Alpha101因子_014"], re.I)
+        assert re.search(r"\bADV\(\s*\d+\s*\)", by_name["Alpha101因子_085"], re.IGNORECASE)
+        assert re.search(r"\bRETURNS\b(?!\s*\()", by_name["Alpha101因子_014"], re.IGNORECASE)

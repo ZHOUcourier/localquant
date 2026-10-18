@@ -103,7 +103,7 @@ def _load_node_report(candidate_ids: list[str], node_uuid: str) -> tuple[Any, bo
             continue
         pkl_found = True
         try:
-            with open(pkl, "rb") as f:  # noqa: ASYNC230
+            with open(pkl, "rb") as f:
                 output = pickle.load(f)
         except Exception:
             continue

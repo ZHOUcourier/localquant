@@ -19,7 +19,6 @@ import pandas as pd
 import pytest
 
 from backend import database
-from backend.services.formula_normalizer import normalize_formula
 from backend.services.factor_operators import (
     REGBETA,
     SEQUENCE,
@@ -27,6 +26,7 @@ from backend.services.factor_operators import (
     eval_factor_formula,
 )
 from backend.services.factor_research import classify_formula_status
+from backend.services.formula_normalizer import normalize_formula
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "localquant.db"
 
@@ -200,8 +200,11 @@ def test_real_dialect_formulas_evaluate():
         "(((sum(high, 20) / 20) < high) ? (-1 * delta(high, 2)) : 0)",
         "(((high * low)^0.5) -vwap)",
         "regbeta(mean(close,6),sequence(6))",
-        "mean(abs(sum((ld>0 & ld>hd)?ld:0,14)*100/sum(tr,14)"
-        "-sum((hd>0 &hd>ld)?hd:0,14)*100/sum(tr,14))/(sum(tr,14)),6)",
+        (
+            "mean(abs(sum((ld>0 & ld>hd)?ld:0,14)*100/sum(tr,14)"
+            "-sum((hd>0 &hd>ld)?hd:0,14)*100/sum(tr,14))/(sum(tr,14)),6)"
+        ),
+
     ]
     for f in formulas:
         out = eval_factor_formula(f, ns)
