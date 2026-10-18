@@ -4,6 +4,9 @@ withDefaults(
     placeholder?: string
     disabled?: boolean
     type?: string
+    min?: number
+    max?: number
+    step?: number | string
   }>(),
   { placeholder: '', disabled: false, type: 'text' },
 )
@@ -23,6 +26,9 @@ const model = defineModel<string>({ default: '' })
       :type="type"
       :disabled="disabled"
       :placeholder="placeholder"
+      :min="min"
+      :max="max"
+      :step="step"
       class="w-full bg-transparent px-3 py-1.5 text-sm text-[#201d1d] outline-none font-mono placeholder:text-[#9a9898]"
     />
     <span v-if="$slots.suffix" class="pr-2 text-[#646262] flex-shrink-0"><slot name="suffix" /></span>
