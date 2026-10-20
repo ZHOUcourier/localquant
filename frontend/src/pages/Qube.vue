@@ -1009,7 +1009,7 @@ watch(activeId, () => {
             </div>
             <span class="shrink-0 font-mono text-[#646262]">
               <span :style="{ color: contextColor }">{{ contextPct.toFixed(0) }}%</span>
-              · <span>{{ fmtTokens(stats.context_used) }}/{{ fmtTokens(stats.context_window) }}</span>
+              · <span>{{ fmtTokens(stats.context_used) }}/{{ fmtTokens(stats.context_window) }} tok</span>
             </span>
             <button
               class="shrink-0 rounded px-1.5 py-0.5 text-[#9a9898] hover:bg-[#f1eeee] hover:text-[#201d1d]"
@@ -1030,13 +1030,13 @@ watch(activeId, () => {
           </div>
           <div v-if="showBreakdown && stats" class="mt-1.5 space-y-0.5 rounded-[4px] border border-[rgba(15,0,0,0.1)] bg-[#f8f7f7] px-2.5 py-1.5 font-mono text-[10px] text-[#646262]">
             <div v-if="stats.compacted" class="text-[#9a6200]">（已压缩早期对话 — 摘要并入系统提示词，节省上下文）</div>
-            <div class="flex justify-between"><span>系统提示</span><span>{{ fmtTokens(stats.breakdown.system) }}</span></div>
-            <div v-if="stats.breakdown.summary" class="flex justify-between"><span>会话摘要</span><span>{{ fmtTokens(stats.breakdown.summary) }}</span></div>
-            <div class="flex justify-between"><span>最近对话</span><span>{{ fmtTokens(stats.breakdown.conversation) }}</span></div>
-            <div class="flex justify-between"><span>累计输出</span><span>{{ fmtTokens(stats.breakdown.completion) }}</span></div>
-            <div class="flex justify-between"><span>深度思考</span><span>{{ fmtTokens(stats.breakdown.reasoning) }}</span></div>
+            <div class="flex justify-between"><span>系统提示</span><span>{{ fmtTokens(stats.breakdown.system) }} tok</span></div>
+            <div v-if="stats.breakdown.summary" class="flex justify-between"><span>会话摘要</span><span>{{ fmtTokens(stats.breakdown.summary) }} tok</span></div>
+            <div class="flex justify-between"><span>最近对话</span><span>{{ fmtTokens(stats.breakdown.conversation) }} tok</span></div>
+            <div class="flex justify-between"><span>累计输出</span><span>{{ fmtTokens(stats.breakdown.completion) }} tok</span></div>
+            <div class="flex justify-between"><span>深度思考</span><span>{{ fmtTokens(stats.breakdown.reasoning) }} tok</span></div>
             <div class="mt-0.5 flex justify-between border-t border-[rgba(15,0,0,0.1)] pt-0.5 text-[#201d1d]">
-              <span>合计</span><span>{{ fmtTokens(stats.total_tokens) }}</span>
+              <span>合计</span><span>{{ fmtTokens(stats.total_tokens) }} tok</span>
             </div>
           </div>
         </div>

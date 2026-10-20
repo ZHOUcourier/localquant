@@ -2,8 +2,9 @@
 /**
  * ChatMessage — 单条消息渲染（对齐参考站 display_timeline 结构）
  * 用户：右对齐描边气泡；AI：思考块 + text/tool 交替时间线（markdown + 工具卡）。
- * 消息操作（参考站动作条，hover 显示，圆形浅灰反馈）：
+ * 消息操作（参考站动作条，常驻显示，圆形浅灰反馈）：
  *   用户：复制 / 编辑 / 删除；AI：复制 / 重新生成（仅最末）/ 删除。
+ * AI 页脚常驻展示：时间 · token 用量（输入/输出/思考，tok 单位）· 速度（tok/s）。
  */
 import { computed } from 'vue'
 import { Copy, FileText, Pencil, RefreshCw, Table2, Trash2 } from 'lucide-vue-next'
@@ -47,14 +48,32 @@ const timeLabel = computed(() =>
 )
 
 // 每句 AI 回复的 token 用量（来自后端 usage；无则隐藏）
+// 数字统一带单位：tok（k/M 缩放），便于横向比较
+function fmtTokenCount(n?: number): string {
+  if (!n || n <= 0) return ''
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
 const tokenLabel = computed(() => {
   const u = props.msg.usage
   if (!u) return ''
   const parts: string[] = []
-  if (u.reasoning_tokens) parts.push(`思考 ${u.reasoning_tokens.toLocaleString()}`)
-  if (u.completion_tokens) parts.push(`输出 ${u.completion_tokens.toLocaleString()}`)
+  if (u.prompt_tokens) parts.push(`输入 ${fmtTokenCount(u.prompt_tokens)} tok`)
+  if (u.completion_tokens) parts.push(`输出 ${fmtTokenCount(u.completion_tokens)} tok`)
+  if (u.reasoning_tokens) parts.push(`思考 ${fmtTokenCount(u.reasoning_tokens)} tok`)
   if (!parts.length) return ''
-  return `${parts.join(' · ')} ${u.estimated ? '(估)' : ''}`
+  return parts.join(' · ') + (u.estimated ? '（估）' : '')
+})
+
+// token 速度：仅当后端记录了本轮耗时（elapsed_seconds）时显示
+const speedLabel = computed(() => {
+  const u = props.msg.usage
+  if (!u?.completion_tokens || !u.elapsed_seconds || u.elapsed_seconds <= 0) return ''
+  const speed = u.completion_tokens / u.elapsed_seconds
+  return `${speed >= 100 ? speed.toFixed(0) : speed.toFixed(1)} tok/s`
 })
 
 // 操作按钮统一样式（圆形 hover 浅灰底，对齐参考站）
@@ -86,8 +105,8 @@ const A = 'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[
     >
       {{ msg.content }}
     </div>
-    <!-- 动作条：hover 显示 -->
-    <div class="mt-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+    <!-- 动作条：常驻显示 -->
+    <div class="mt-1 flex items-center gap-0.5">
       <button :class="A" title="复制" @click="emit('copy', msg.content)"><Copy :size="13" /></button>
       <button v-if="hasContent && hasId" :class="A" title="编辑" @click="emit('edit', msg)">
         <Pencil :size="13" />
@@ -137,9 +156,17 @@ const A = 'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[
         </template>
       </div>
 
-      <!-- 左下角：时间 + 复制/重新生成/删除 -->
-      <div class="flex items-center gap-0.5 pl-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-        <span v-if="timeLabel" class="mr-1 text-[10px] text-[#9a9898]">{{ timeLabel }}</span>
+      <!-- 左下角：时间 + token 用量/速度 + 操作，常驻显示（不再 hover 才出现） -->
+      <div
+        class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pl-0.5 text-[10px] text-[#9a9898]"
+      >
+        <span v-if="timeLabel">{{ timeLabel }}</span>
+        <span v-if="tokenLabel" class="font-mono text-[#b0aeae]">{{ tokenLabel }}</span>
+        <span v-if="speedLabel" class="font-mono text-[#b0aeae]">{{ speedLabel }}</span>
+        <span
+          v-if="timeLabel || tokenLabel || speedLabel"
+          class="mx-0.5 h-3 w-px bg-[rgba(15,0,0,0.12)]"
+        />
         <button v-if="!streaming" :class="A" title="复制" @click="emit('copy', msg.content)">
           <Copy :size="13" />
         </button>
@@ -154,10 +181,6 @@ const A = 'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[
         <button v-if="hasContent && hasId && !streaming" :class="A" title="删除" @click="emit('remove', msg)">
           <Trash2 :size="13" />
         </button>
-      </div>
-
-      <div v-if="tokenLabel" class="mt-1 flex items-center gap-0.5 pl-0.5 font-mono text-[10px] text-[#b0aeae]">
-        {{ tokenLabel }}
       </div>
 
       <slot name="tail" />

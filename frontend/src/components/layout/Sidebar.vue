@@ -36,7 +36,7 @@ const emit = defineEmits<{ collapse: [] }>()
     <div class="flex items-center h-14 px-5 shrink-0">
       <span
         class="text-base font-bold tracking-wide"
-        style="color: #007aff; font-family: var(--font-mono)"
+        style="color: #ff9f0a; font-family: var(--font-mono)"
       >
         LocalQuant
       </span>

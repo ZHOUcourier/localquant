@@ -30,6 +30,7 @@ export interface TokenUsage {
   completion_tokens: number
   total_tokens: number
   reasoning_tokens?: number
+  elapsed_seconds?: number
   estimated?: boolean
 }
 
