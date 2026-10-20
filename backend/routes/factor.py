@@ -343,10 +343,14 @@ async def compute_factor(req: FactorComputeRequest):
 
     from backend.services.panel_artifact import build_panel_response
 
-    # 可交易掩码（停牌/ST/次新），与批量扫描 / QUBE 同一口径；随 artifact 一并
-    # 落盘，供下游分析接口统一应用，避免扫描页与研究页 IC 口径不一致。
+    # 可交易/股票池掩码（停牌/ST/次新），与批量扫描 / QUBE 同一口径；随 artifact
+    # 一并落盘，供下游分析接口统一应用，避免扫描页与研究页 IC 口径不一致。
+    universe_manifest: dict = {}
     try:
-        tradable_mask = market_data.build_cross_section_mask(panels)
+        mask_result = market_data.build_cross_section_mask_meta(panels)
+        tradable_mask = mask_result.mask if mask_result is not None else None
+        if mask_result is not None:
+            universe_manifest = mask_result.manifest()
     except Exception:
         tradable_mask = None
     panels_out: dict = {"factor_data": factor, "return_data": returns}
@@ -358,6 +362,7 @@ async def compute_factor(req: FactorComputeRequest):
     # 受限预览；下游分析接口接受同一 token。
     resp = build_panel_response(panels_out, inline_names=["factor_data", "return_data"])
     resp["has_tradable_mask"] = tradable_mask is not None
+    resp["universe"] = universe_manifest
     return resp
 
 

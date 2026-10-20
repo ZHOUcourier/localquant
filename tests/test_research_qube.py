@@ -151,6 +151,8 @@ def test_schema_is_complete_pydantic_contract(tools, study_args):
         "stamp_tax": 0.0005, "initial_capital": 1_000_000, "baseline_formulas": [],
         "candidate_weight": 0.25, "monitor_window": 60, "review_every": 20,
         "minimum_effect": 0, "regime_index": "000300.SH", "regime_shrinkage": 60,
+        "exclude_st": True, "exclude_new": True, "min_list_days": 730,
+        "include_bj": True, "exclude_delisting": True,
     }
     trial = tools["research_register_trial"].parameters
     original = TrialCreate.model_json_schema()

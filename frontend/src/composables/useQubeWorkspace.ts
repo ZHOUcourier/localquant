@@ -23,6 +23,13 @@ export interface SessionWorkspace {
     init_balance: number
     commission_rate: number
     slippage: number
+    universe_policy: {
+      exclude_st: boolean
+      exclude_new: boolean
+      min_list_days: number
+      include_bj: boolean
+      exclude_delisting: boolean
+    }
   }
   analysisParams: {
     period_start: string
@@ -61,6 +68,13 @@ function defaultSession(): SessionWorkspace {
       init_balance: 1000000,
       commission_rate: 0.001,
       slippage: 0.001,
+      universe_policy: {
+        exclude_st: true,
+        exclude_new: true,
+        min_list_days: 730,
+        include_bj: true,
+        exclude_delisting: true,
+      },
     },
     analysisParams: {
       period_start: '',
@@ -120,7 +134,17 @@ export function clampCanvasWidth(width: number, containerWidth: number): number 
 export function useQubeWorkspace() {
   function session(id: string): SessionWorkspace {
     if (!state.perSession[id]) state.perSession[id] = defaultSession()
-    return state.perSession[id]
+    const s = state.perSession[id]
+    // 兼容旧 localStorage：补齐后来新增的股票池约束字段
+    s.backtestParams = {
+      ...defaultSession().backtestParams,
+      ...s.backtestParams,
+      universe_policy: {
+        ...defaultSession().backtestParams.universe_policy,
+        ...(s.backtestParams?.universe_policy || {}),
+      },
+    }
+    return s
   }
   return { state, session }
 }

@@ -3,9 +3,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
+from backend.config_registry import SPEC_BY_ATTR
+
 # .env 为配置的唯一事实来源：设置页写入 .env，读取时也应优先于 shell 环境变量，
 # 否则残留的 AI_*/QUBE_* 环境变量会静默覆盖 .env，导致设置页显示与持久化不一致。
 load_dotenv(override=True)
+
+
+def _default(attr: str):
+    """配置默认值统一取自 config_registry，避免 Settings 与设置页各写一份。"""
+    return SPEC_BY_ATTR[attr].default
 
 
 class Settings(BaseSettings):
@@ -15,8 +22,8 @@ class Settings(BaseSettings):
     debug: bool = True
 
     # 服务
-    backend_port: int = 8000
-    frontend_port: int = 5173
+    backend_port: int = _default("backend_port")
+    frontend_port: int = _default("frontend_port")
 
     # 数据目录
     data_dir: Path = Path("./data")
@@ -28,38 +35,45 @@ class Settings(BaseSettings):
     templates_dir: Path = Path("./templates")
 
     # QMT
-    qmt_path: str = ""
-    qmt_data_dir: str = ""
+    qmt_path: str = _default("qmt_path")
+    qmt_data_dir: str = _default("qmt_data_dir")
 
     # QuantZone（宽舟科技）因子数据平台 — 对拍/因子值拉取，密钥存系统凭据库（回退 .env）
-    qz_access_key: str = ""
-    qz_sign_secret: str = ""
-    qz_base_url: str = "https://api.quantzone.tech"
+    qz_access_key: str = _default("qz_access_key")
+    qz_sign_secret: str = _default("qz_sign_secret")
+    qz_base_url: str = _default("qz_base_url")
 
     # PandaAI 公开数据 token（仅离线脚本 scrape_factors 使用）
-    panda_token: str = ""
+    panda_token: str = _default("panda_token")
 
     # AI（设置页 → 各场景化 AI 接口）
-    openai_api_key: str = ""
-    openai_base_url: str = ""  # 仅 custom（BYOK）需要；预置供应商自带 Base URL
-    ai_provider: str = "opencode-zen"  # 见 services/ai_providers.PROVIDER_PRESETS
-    ai_model: str = ""
-    ai_effort: str = "medium"  # 推理强度 minimal/low/medium/high（支持的模型生效）
-    ai_engine: str = "api"  # api=供应商接口 / cli=本机 CLI 工具
-    ai_cli: str = "claude"  # 见 services/ai_providers.CLI_TOOLS
-    ai_cli_model: str = ""  # CLI 模型（空=用 CLI 自身默认）
-    ai_cli_effort: str = "default"  # CLI 推理强度 default/minimal/low/medium/high
+    openai_api_key: str = _default("openai_api_key")
+    openai_base_url: str = _default("openai_base_url")  # 仅 custom（BYOK）需要
+    ai_provider: str = _default("ai_provider")  # 见 services/ai_providers.PROVIDER_PRESETS
+    ai_model: str = _default("ai_model")
+    ai_effort: str = _default("ai_effort")  # minimal/low/medium/high
+    ai_engine: str = _default("ai_engine")  # api=供应商接口 / cli=本机 CLI 工具
+    ai_cli: str = _default("ai_cli")  # 见 services/ai_providers.CLI_TOOLS
+    ai_cli_model: str = _default("ai_cli_model")  # 空=用 CLI 自身默认
+    ai_cli_effort: str = _default("ai_cli_effort")  # default/minimal/low/medium/high
 
     # QUBE AI Agent（与设置页 AI 配置完全独立）
-    qube_provider: str = "opencode-zen"
-    qube_model: str = ""
-    qube_effort: str = "medium"  # 推理强度 minimal/low/medium/high
-    qube_api_key: str = ""
-    qube_base_url: str = ""  # 仅 custom（BYOK）需要
-    qube_engine: str = "api"  # api / cli
-    qube_cli: str = "claude"
-    qube_cli_model: str = ""  # CLI 模型（空=用 CLI 自身默认）
-    qube_cli_effort: str = "default"  # CLI 推理强度 default/minimal/low/medium/high
+    qube_provider: str = _default("qube_provider")
+    qube_model: str = _default("qube_model")
+    qube_effort: str = _default("qube_effort")
+    qube_api_key: str = _default("qube_api_key")
+    qube_base_url: str = _default("qube_base_url")  # 仅 custom（BYOK）需要
+    qube_engine: str = _default("qube_engine")  # api / cli
+    qube_cli: str = _default("qube_cli")
+    qube_cli_model: str = _default("qube_cli_model")
+    qube_cli_effort: str = _default("qube_cli_effort")
+
+    # 股票池约束（非密钥；各入口默认继承，可在单次运行中覆盖）
+    universe_exclude_st: bool = _default("universe_exclude_st")
+    universe_exclude_new: bool = _default("universe_exclude_new")
+    universe_min_list_days: int = _default("universe_min_list_days")
+    universe_include_bj: bool = _default("universe_include_bj")
+    universe_exclude_delisting: bool = _default("universe_exclude_delisting")
 
     # 代码执行沙箱（OpenSandbox 容器隔离；仅 QUBE/回测信号代码）
     # Docker/opensandbox-server 不可用时自动降级为进程内执行

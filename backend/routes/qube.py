@@ -24,6 +24,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.config_registry import QUBE_SPECS
 from backend.database import get_db
 from backend.routes.settings import _write_env
 from backend.services import qube_attachments, tasks
@@ -81,6 +82,10 @@ QUBE_SYSTEM = """职责：通过多轮对话帮助用户设计、验证、迭代
 1. 用中文回答，结论先行；缺失关键信息（股票池/区间/风险偏好）时先追问。
 2. 平台数据全部来自本地 QMT 日线行情（open/high/low/close/volume/amount 面板），
    不要引用外部数据源；面板 index=交易日、columns=股票代码。
+2.1 股票池默认约束：剔除 ST/*ST、上市不足两年（730 自然日）与退市整理期，默认
+   包含北交所；回测/因子分析会按逐日 as-of 执行并返回 universe 统计。用户明确
+   要求放宽时，可通过 universe_policy 单次覆盖（exclude_st / exclude_new /
+   min_list_days / include_bj / exclude_delisting），不得静默关闭。
 3. 策略代码必须定义 generate_signals(prices, **kwargs)，返回同形状持仓权重/信号 DataFrame；
    代码在沙箱隔离执行，已预装 pandas/numpy。本系统只做普通股票多头投资：
    返回的负数信号会被清零（不买入），正权重按日归一为满仓组合，任何情况下
@@ -142,19 +147,6 @@ TOOL_DISPLAY_NAMES = {
 # 配置
 # ---------------------------------------------------------------------------
 
-QUBE_ENV_KEYS = {
-    "QUBE_PROVIDER": "qube_provider",
-    "QUBE_MODEL": "qube_model",
-    "QUBE_EFFORT": "qube_effort",
-    "QUBE_API_KEY": "qube_api_key",
-    "QUBE_BASE_URL": "qube_base_url",
-    "QUBE_ENGINE": "qube_engine",
-    "QUBE_CLI": "qube_cli",
-    "QUBE_CLI_MODEL": "qube_cli_model",
-    "QUBE_CLI_EFFORT": "qube_cli_effort",
-}
-
-
 class QubeConfigUpdate(BaseModel):
     qube_provider: str | None = None
     qube_model: str | None = None
@@ -165,6 +157,7 @@ class QubeConfigUpdate(BaseModel):
     qube_cli: str | None = None
     qube_cli_model: str | None = None
     qube_cli_effort: str | None = None
+    clear_api_key: bool = False
 
 
 @router.get("/config")
@@ -193,31 +186,59 @@ async def get_qube_config():
 async def update_qube_config(body: QubeConfigUpdate):
     """QUBE 独立配置：密钥存 OS 凭据库（不可用回退 .env），其余写 .env；同步内存 settings"""
     updates: dict[str, str] = {}
+    memory_updates: dict[str, object] = {}
     api_key_value = ""
-    for env_key, attr in QUBE_ENV_KEYS.items():
-        value = getattr(body, attr)
+    for spec in QUBE_SPECS:
+        value = getattr(body, spec.attr)
         if value is None:
             continue
-        if env_key == "QUBE_API_KEY":
+        if spec.secret:
             if str(value).strip():
                 api_key_value = str(value)
-                setattr(settings, attr, str(value))
             continue
-        updates[env_key] = str(value)
-        setattr(settings, attr, str(value))
+        try:
+            coerced = spec.coerce(value)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400, detail=f"{spec.env_key} 配置值不合法: {e}"
+            ) from e
+        updates[spec.env_key] = spec.env_value(coerced)
+        memory_updates[spec.attr] = coerced
 
-    if api_key_value:
+    cleared: list[str] = []
+    if body.clear_api_key:
+        from backend.secrets import delete_secret
+
+        delete_secret("QUBE_API_KEY")
+        settings.qube_api_key = ""
+        cleared.append("QUBE_API_KEY")
+
+    if api_key_value and not body.clear_api_key:
         from backend.secrets import store_secret
 
         if not store_secret("QUBE_API_KEY", api_key_value):
             updates["QUBE_API_KEY"] = api_key_value  # 凭据库不可用 → 回退 .env
+        else:
+            settings.qube_api_key = api_key_value
 
     if updates:
         _write_env(updates)
-    if api_key_value:
+    for attr, value in memory_updates.items():
+        setattr(settings, attr, value)
+    if api_key_value and not body.clear_api_key:
         via = "系统凭据库" if "QUBE_API_KEY" not in updates else ".env（回退）"
         logger.info(f"QUBE API Key 已更新（存{via}）")
-    return {"ok": True, "updated": sorted(set(updates) | ({"QUBE_API_KEY"} if api_key_value else set()))}
+    if cleared:
+        logger.info("QUBE API Key 已清除")
+    return {
+        "ok": True,
+        "updated": sorted(
+            set(updates)
+            | ({"QUBE_API_KEY"} if api_key_value and not body.clear_api_key else set())
+            | set(cleared)
+        ),
+        "cleared": cleared,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1080,11 +1101,11 @@ async def _stream_reply(
     """
     engine = settings.qube_engine
     compact = await _get_compaction(session_id)
-    usage: dict[str, int] | None = None  # API usage；None 时在完成时本地估算
+    usage: dict | None = None  # API usage；None 时在完成时本地估算
 
     def _finalize_usage(
         prompt: str, completion: str, reasoning: str = ""
-    ) -> dict[str, int]:
+    ) -> dict:
         """拿到 usage 则原样补 estimated=False；缺失时用本地估算兜底"""
         if usage:
             return {**usage, "estimated": False}
@@ -1105,6 +1126,7 @@ async def _stream_reply(
         parts.append(f"用户：{_message_llm_content(user_content, attachments)}")
         prompt = "\n".join(parts)
         full: list[str] = []
+        cli_started = time.monotonic()
         try:
             async for chunk in stream_cli(
                 settings.qube_cli,
@@ -1128,6 +1150,7 @@ async def _stream_reply(
                     "completion_tokens": estimate_tokens(content),
                     "reasoning_tokens": 0,
                     "total_tokens": estimate_tokens(prompt + content),
+                    "elapsed_seconds": round(time.monotonic() - cli_started, 2),
                     "estimated": True,  # CLI 无 usage 字段，本地估算
                 },
             )

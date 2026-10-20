@@ -2,141 +2,119 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import Field, create_model
 
 from backend.config import settings
-from backend.secrets import SECRET_FIELDS, is_available, store_secret
+from backend.config_registry import (
+    EDITABLE_SPECS,
+    SECRET_FIELDS,
+)
+from backend.env_file import secure_env_file, update_env_file
+from backend.secrets import delete_secret, is_available, store_secret
 
 router = APIRouter()
 
 ENV_FILE = Path(".env")
 
-# 允许通过设置页修改的配置项（.env 键名 → Settings 属性名）
-EDITABLE_KEYS = {
-    "QMT_PATH": "qmt_path",
-    "QMT_DATA_DIR": "qmt_data_dir",
-    "OPENAI_API_KEY": "openai_api_key",
-    "OPENAI_BASE_URL": "openai_base_url",
-    "AI_PROVIDER": "ai_provider",
-    "AI_MODEL": "ai_model",
-    "AI_EFFORT": "ai_effort",
-    "AI_ENGINE": "ai_engine",
-    "AI_CLI": "ai_cli",
-    "AI_CLI_MODEL": "ai_cli_model",
-    "AI_CLI_EFFORT": "ai_cli_effort",
-    "QZ_ACCESS_KEY": "qz_access_key",
-    "QZ_SIGN_SECRET": "qz_sign_secret",
-    "BACKEND_PORT": "backend_port",
-    "FRONTEND_PORT": "frontend_port",
+# 可编辑字段由 config_registry 派生，避免 Settings / 路由 / 前端三处手写漂移
+_update_fields: dict = {
+    spec.attr: (spec.type | None, None) for spec in EDITABLE_SPECS
 }
-
-
-class ConfigUpdate(BaseModel):
-    qmt_path: str | None = None
-    qmt_data_dir: str | None = None
-    openai_api_key: str | None = None
-    openai_base_url: str | None = None
-    ai_provider: str | None = None
-    ai_model: str | None = None
-    ai_effort: str | None = None
-    ai_engine: str | None = None
-    ai_cli: str | None = None
-    ai_cli_model: str | None = None
-    ai_cli_effort: str | None = None
-    qz_access_key: str | None = None
-    qz_sign_secret: str | None = None
-    backend_port: int | None = None
-    frontend_port: int | None = None
+_update_fields["clear_secrets"] = (list[str], Field(default_factory=list))
+ConfigUpdate = create_model("ConfigUpdate", **_update_fields)
 
 
 @router.get("/")
 async def get_config():
     """返回当前生效配置（永不回显密钥：只返回 *_set 布尔，不返回明文/掩码）"""
-    return {
-        "qmt_path": settings.qmt_path,
-        "qmt_data_dir": settings.qmt_data_dir,
-        "openai_api_key_set": bool(settings.openai_api_key),
-        "openai_base_url": settings.openai_base_url,
-        "ai_provider": settings.ai_provider,
-        "ai_model": settings.ai_model,
-        "ai_effort": settings.ai_effort,
-        "ai_engine": settings.ai_engine,
-        "ai_cli": settings.ai_cli,
-        "ai_cli_model": settings.ai_cli_model,
-        "ai_cli_effort": settings.ai_cli_effort or "default",
-        "qz_access_key_set": bool(settings.qz_access_key),
-        "qz_sign_secret_set": bool(settings.qz_sign_secret),
-        # 密钥存储后端：os_keychain=系统凭据库 / env_file=回退 .env
+    data = {
         "secrets_backend": "os_keychain" if is_available() else "env_file",
-        "backend_port": settings.backend_port,
-        "frontend_port": settings.frontend_port,
         "data_dir": str(settings.data_dir),
         "cache_dir": str(settings.cache_dir),
         "database_url": settings.database_url,
         "version": settings.version,
     }
+    for spec in EDITABLE_SPECS:
+        if spec.secret:
+            data[f"{spec.attr}_set"] = bool(getattr(settings, spec.attr))
+        else:
+            data[spec.attr] = getattr(settings, spec.attr)
+    # 固定展示“当前实际生效值”，未在 registry 中登记的历史字段保持兼容
+    data["ai_cli_effort"] = settings.ai_cli_effort or "default"
+    return data
 
 
 @router.put("/")
 async def update_config(body: ConfigUpdate):
     """更新配置：密钥优先存 OS 凭据库（不可用回退 .env），其余写 .env；同步内存 settings"""
-    updates: dict[str, str] = {}
+    clear_keys = list(getattr(body, "clear_secrets", []) or [])
+    unknown = [k for k in clear_keys if k not in SECRET_FIELDS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"未知密钥键: {', '.join(unknown)}")
+
+    env_updates: dict[str, str] = {}
+    memory_updates: dict[str, object] = {}
     secret_updates: dict[str, str] = {}
-    for env_key, attr in EDITABLE_KEYS.items():
-        value = getattr(body, attr)
+
+    for spec in EDITABLE_SPECS:
+        if spec.env_key in clear_keys:
+            continue
+        value = getattr(body, spec.attr, None)
         if value is None:
             continue
-        if env_key in SECRET_FIELDS:
-            # 密钥：空串视为不修改（凭据库无法表达空值），其余存凭据库不落盘
+        if spec.secret:
             if str(value).strip():
-                secret_updates[env_key] = str(value)
-                setattr(settings, attr, str(value))
+                secret_updates[spec.env_key] = str(value)
             continue
-        updates[env_key] = str(value)
-        # 同步内存配置，路径/AI 类配置即时生效
-        setattr(settings, attr, type(getattr(settings, attr))(value))
+        try:
+            coerced = spec.coerce(value)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400, detail=f"{spec.env_key} 配置值不合法: {e}"
+            ) from e
+        env_updates[spec.env_key] = spec.env_value(coerced)
+        memory_updates[spec.attr] = coerced
+
+    cleared: list[str] = []
+    for env_key in clear_keys:
+        attr = SECRET_FIELDS[env_key]
+        delete_secret(env_key, ENV_FILE)
+        setattr(settings, attr, "")
+        cleared.append(env_key)
 
     for env_key, value in secret_updates.items():
         if not store_secret(env_key, value, ENV_FILE):
-            # 凭据库不可用/写入失败 → 回退 .env 明文（与既有行为一致）
-            updates[env_key] = value
+            # 凭据库不可用/写入失败 → 回退 .env 明文
+            env_updates[env_key] = value
+        else:
+            setattr(settings, SECRET_FIELDS[env_key], value)
 
-    if updates:
-        _write_env(updates)
+    if env_updates:
+        update_env_file(env_updates, ENV_FILE)
+    secure_env_file(ENV_FILE)
+
+    for attr, value in memory_updates.items():
+        setattr(settings, attr, value)
+
     if secret_updates:
-        fallback = [k for k in secret_updates if k in updates]
+        fallback = [k for k in secret_updates if k in env_updates]
         logger.info(
             f"密钥已更新: {', '.join(secret_updates.keys())}"
             + (f"；{', '.join(fallback)} 回退 .env" if fallback else "（存系统凭据库）")
         )
+    if cleared:
+        logger.info(f"密钥已清除: {', '.join(cleared)}")
 
-    return {"ok": True, "updated": sorted(set(updates) | set(secret_updates))}
+    return {
+        "ok": True,
+        "updated": sorted(set(env_updates) | set(secret_updates) | set(cleared)),
+        "cleared": cleared,
+    }
 
 
 def _write_env(updates: dict[str, str]) -> None:
-    """就地更新 .env 中的键值，保留未涉及的行与注释；不存在的键追加到末尾"""
-    sanitized: dict[str, str] = {}
-    for key, value in updates.items():
-        # 清洗换行/回车/空字节等，防止通过配置值注入新的 env 键或控制字符
-        cleaned = "".join(ch for ch in str(value) if ch not in "\r\n\x00")
-        sanitized[key] = cleaned
-
-    lines: list[str] = []
-    if ENV_FILE.exists():
-        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
-
-    remaining = dict(sanitized)
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        if key in remaining:
-            lines[i] = f"{key}={remaining.pop(key)}"
-
-    for key, value in remaining.items():
-        lines.append(f"{key}={value}")
-
-    ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    """兼容旧调用：QUBE 配置路由仍通过这里落 .env。"""
+    update_env_file(updates, ENV_FILE)
+    secure_env_file(ENV_FILE)

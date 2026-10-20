@@ -6,6 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
 from backend.plugins.ui_control import ui
+from backend.services.universe_policy import UniversePolicy, filter_codes_today
+
+_DEFAULT_POLICY = UniversePolicy.from_settings()
 
 # ============================================================
 # 1. QMT K线数据节点
@@ -298,29 +301,42 @@ class TradingCalendarNode(BaseWorkNode):
         "placeholder": "留空获取全市场A股，填写板块名获取板块成分股",
     },
     exclude_st={"input_type": "boolean"},
+    exclude_new={"input_type": "boolean"},
     min_list_days={"input_type": "number_field"},
+    include_bj={"input_type": "boolean"},
+    exclude_delisting={"input_type": "boolean"},
 )
 class StockListInput(BaseModel):
     sector: str = Field(default="", title="板块名称(可选)")
-    exclude_st: bool = Field(default=True, title="剔除ST")
-    min_list_days: int = Field(default=0, title="上市至少天数")
+    exclude_st: bool = Field(default=_DEFAULT_POLICY.exclude_st, title="剔除ST")
+    exclude_new: bool = Field(default=_DEFAULT_POLICY.exclude_new, title="剔除次新")
+    min_list_days: int = Field(
+        default=_DEFAULT_POLICY.min_list_days, title="上市至少天数"
+    )
+    include_bj: bool = Field(default=_DEFAULT_POLICY.include_bj, title="包含北交所")
+    exclude_delisting: bool = Field(
+        default=_DEFAULT_POLICY.exclude_delisting, title="剔除退市整理期"
+    )
 
 
 class StockListOutput(BaseModel):
     stock_list: list = Field(default_factory=list, title="股票列表")
     count: int = Field(default=0, title="数量")
+    excluded_counts: dict = Field(default_factory=dict, title="按原因剔除数量")
+    assumptions: list = Field(default_factory=list, title="假设与覆盖警告")
 
 
 @work_node(
     name="股票列表",
     group="01-数据获取",
     box_color="orange",
-    description="获取股票列表：填写板块名返回板块成分股，留空返回全市场A股；可剔除ST与上市不足N天的新股",
+    description="获取股票列表：填写板块名返回板块成分股，留空返回全市场A股；默认剔除ST/*ST、上市不足两年、退市整理期，可包含北交所",
     example="股票列表 → QMT行情数据",
     notes=[
         "留空时返回全市场A股（优先沪深A股板块，回退各市场A股并集）；填写板块名返回该板块成分股",
-        "exclude_st 默认剔除名称含 ST 的股票；min_list_days>0 时剔除上市不足该天数的新股",
-        "ST/上市日取自合约详情快照（需先在数据管理页下载），无快照时不过滤",
+        "默认约束：exclude_st=true / exclude_new=true / min_list_days=730（自然日）/ include_bj=true / exclude_delisting=true；取自设置页全局默认，可在节点上单次覆盖",
+        "ST/退市/上市日取自 instrument 合约快照（需先在数据管理页下载并积累快照）；无快照时过滤不生效，assumptions 会明确提示",
+        "这是“当前选股”口径；历史回测请使用工作流回测节点内置的逐日 as-of 约束，不能把今天的名称状态回溯历史",
     ],
 )
 class StockListNode(BaseWorkNode):
@@ -341,43 +357,54 @@ class StockListNode(BaseWorkNode):
             # 留空 → 全市场 A 股（聚合各市场 A 股板块并集）
             stocks = qmt_client.get_all_a_stocks()
 
-        stocks = self._apply_filters(stocks, input.exclude_st, input.min_list_days)
-        return StockListOutput(stock_list=stocks, count=len(stocks))
+        stocks = self._apply_filters(
+            stocks,
+            exclude_st=input.exclude_st,
+            exclude_new=input.exclude_new,
+            min_list_days=input.min_list_days,
+            include_bj=input.include_bj,
+            exclude_delisting=input.exclude_delisting,
+        )
+        return StockListOutput(
+            stock_list=stocks[0],
+            count=len(stocks[0]),
+            excluded_counts=stocks[1].stats.get("excluded_last_date_by_reason", {}),
+            assumptions=stocks[1].warnings,
+        )
 
     @staticmethod
     def _apply_filters(
-        stocks: list[str], exclude_st: bool, min_list_days: int
-    ) -> list[str]:
-        """根据合约详情快照剔除 ST 与上市不足 N 天的新股（无快照时不过滤）"""
-        if not stocks or (not exclude_st and min_list_days <= 0):
-            return stocks
-        try:
-            from backend.services import reference_data
+        stocks: list[str],
+        *,
+        exclude_st: bool,
+        exclude_new: bool,
+        min_list_days: int,
+        include_bj: bool,
+        exclude_delisting: bool,
+    ):
+        """按今天的最新快照过滤静态股票列表，返回 (保留列表, mask result)。
 
-            inst = reference_data.load_instrument_frame()
-        except Exception:
-            inst = None
-        if inst is None:
-            return stocks
+        注意：这是“当前选股”口径；历史回测必须用逐日 mask，不能把今天的
+        ST/退市状态回溯到整段历史。
+        """
+        if not stocks:
+            from backend.services.universe_policy import UniverseMaskResult
 
-        import pandas as pd
-
-        keep: list[str] = []
-        cutoff = pd.Timestamp.today() - pd.Timedelta(days=min_list_days)
-        for code in stocks:
-            if code not in inst.index:
-                keep.append(code)  # 无详情不误删
-                continue
-            row = inst.loc[code]
-            if exclude_st and "ST" in str(row.get("name", "")).upper():
-                continue
-            if min_list_days > 0:
-                ld = row.get("list_date")
-                if ld:
-                    try:
-                        if pd.to_datetime(ld) > cutoff:
-                            continue
-                    except Exception:
-                        pass
-            keep.append(code)
-        return keep
+            policy = UniversePolicy(
+                exclude_st=exclude_st,
+                exclude_new=exclude_new,
+                min_list_days=min_list_days,
+                include_bj=include_bj,
+                exclude_delisting=exclude_delisting,
+            )
+            return [], UniverseMaskResult(
+                mask=pd.DataFrame(), policy=policy, warnings=[]
+            )
+        policy = UniversePolicy(
+            exclude_st=exclude_st,
+            exclude_new=exclude_new,
+            min_list_days=min_list_days,
+            include_bj=include_bj,
+            exclude_delisting=exclude_delisting,
+        )
+        return filter_codes_today(stocks, policy)

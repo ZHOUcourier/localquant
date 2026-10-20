@@ -18,6 +18,31 @@ from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
 from backend.plugins.ui_control import ui
 from backend.services.factor_research import factor_research
+from backend.services.universe_policy import UniversePolicy, build_equity_eligibility
+
+_DEFAULT_POLICY = UniversePolicy.from_settings()
+
+
+def _universe_mask(input_model, index, columns):
+    """按节点上的约束字段构造逐日资格掩码（默认继承全局配置）。"""
+    policy = UniversePolicy(
+        exclude_st=bool(getattr(input_model, "exclude_st", True)),
+        exclude_new=bool(getattr(input_model, "exclude_new", True)),
+        min_list_days=int(getattr(input_model, "min_list_days", 730)),
+        include_bj=bool(getattr(input_model, "include_bj", True)),
+        exclude_delisting=bool(getattr(input_model, "exclude_delisting", True)),
+    )
+    return build_equity_eligibility(index, columns, policy).mask
+
+
+def _policy_ui() -> dict:
+    return {
+        "exclude_st": {"input_type": "boolean"},
+        "exclude_new": {"input_type": "boolean"},
+        "min_list_days": {"input_type": "number_field"},
+        "include_bj": {"input_type": "boolean"},
+        "exclude_delisting": {"input_type": "boolean"},
+    }
 
 # 因子分析（综合报告）—— 对齐官网单个「因子分析」节点，一个节点产出完整报告
 
@@ -28,6 +53,7 @@ from backend.services.factor_research import factor_research
     method={"input_type": "combobox", "options": ["rank_ic", "normal_ic"]},
     factor_data={"input_type": "None"},
     return_data={"input_type": "None"},
+    **_policy_ui(),
 )
 class FactorAnalysisInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -36,6 +62,11 @@ class FactorAnalysisInput(BaseModel):
     periods: str = "1,5,10,20"
     n_groups: int = 5
     method: str = "rank_ic"
+    exclude_st: bool = _DEFAULT_POLICY.exclude_st
+    exclude_new: bool = _DEFAULT_POLICY.exclude_new
+    min_list_days: int = _DEFAULT_POLICY.min_list_days
+    include_bj: bool = _DEFAULT_POLICY.include_bj
+    exclude_delisting: bool = _DEFAULT_POLICY.exclude_delisting
 
 
 class FactorAnalysisOutput(BaseModel):
@@ -100,6 +131,9 @@ class FactorAnalysisNode(BaseWorkNode):
             periods,
             int(input.n_groups or 5),
             input.method or "rank_ic",
+            mask=_universe_mask(
+                input, input.factor_data.index, input.factor_data.columns
+            ),
         )
         ic_rep, ric_rep = rep["ic"], rep["rank_ic"]
 
@@ -195,6 +229,7 @@ class FactorAnalysisNode(BaseWorkNode):
     factor_data={"input_type": "None"},
     return_data={"input_type": "None"},
     sector_data={"input_type": "None"},
+    **_policy_ui(),
 )
 class AlphaLensInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -205,6 +240,11 @@ class AlphaLensInput(BaseModel):
     )
     periods: str = "1,5,10"
     quantiles: int = 5
+    exclude_st: bool = _DEFAULT_POLICY.exclude_st
+    exclude_new: bool = _DEFAULT_POLICY.exclude_new
+    min_list_days: int = _DEFAULT_POLICY.min_list_days
+    include_bj: bool = _DEFAULT_POLICY.include_bj
+    exclude_delisting: bool = _DEFAULT_POLICY.exclude_delisting
 
 
 class AlphaLensOutput(BaseModel):
@@ -256,7 +296,11 @@ class AlphaLensNode(BaseWorkNode):
             last = input.sector_data.iloc[-1].dropna()
             sector_map = {str(k): str(v) for k, v in last.items()}
         rep = full_alphalens_analysis(
-            input.factor_data,
+            input.factor_data.where(
+                _universe_mask(
+                    input, input.factor_data.index, input.factor_data.columns
+                )
+            ),
             input.return_data,
             periods,
             int(input.quantiles or 5),
@@ -278,6 +322,7 @@ class AlphaLensNode(BaseWorkNode):
     method={"input_type": "combobox", "options": ["rank_ic", "normal_ic"]},
     factor_data={"input_type": "None"},
     return_data={"input_type": "None"},
+    **_policy_ui(),
 )
 class ICInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -285,6 +330,11 @@ class ICInput(BaseModel):
     return_data: pd.DataFrame | None = None
     periods: str = "1,5,10,20"
     method: str = "rank_ic"
+    exclude_st: bool = _DEFAULT_POLICY.exclude_st
+    exclude_new: bool = _DEFAULT_POLICY.exclude_new
+    min_list_days: int = _DEFAULT_POLICY.min_list_days
+    include_bj: bool = _DEFAULT_POLICY.include_bj
+    exclude_delisting: bool = _DEFAULT_POLICY.exclude_delisting
 
 
 class ICOutput(BaseModel):
@@ -331,7 +381,12 @@ class ICNode(BaseWorkNode):
             for p in (input.periods or "1,5,10,20").split(",")
             if p.strip()
         ]
-        result = factor_research.ic_analysis(factor_data, return_data, periods)
+        result = factor_research.ic_analysis(
+            factor_data,
+            return_data,
+            periods,
+            mask=_universe_mask(input, factor_data.index, factor_data.columns),
+        )
 
         # 汇总表 + 逐日时序（method 决定取 ic 还是 rank_ic）
         use_rank = (input.method or "rank_ic") == "rank_ic"
@@ -375,12 +430,18 @@ class ICNode(BaseWorkNode):
     n_groups={"input_type": "number_field"},
     factor_data={"input_type": "None"},
     return_data={"input_type": "None"},
+    **_policy_ui(),
 )
 class GroupReturnInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     factor_data: pd.DataFrame | None = None
     return_data: pd.DataFrame | None = None
     n_groups: int = 5
+    exclude_st: bool = _DEFAULT_POLICY.exclude_st
+    exclude_new: bool = _DEFAULT_POLICY.exclude_new
+    min_list_days: int = _DEFAULT_POLICY.min_list_days
+    include_bj: bool = _DEFAULT_POLICY.include_bj
+    exclude_delisting: bool = _DEFAULT_POLICY.exclude_delisting
 
 
 class GroupReturnOutput(BaseModel):
@@ -422,7 +483,12 @@ class GroupReturnNode(BaseWorkNode):
             )
 
         n_groups = int(input.n_groups or 5)
-        res = factor_research.quantile_analysis(factor_data, return_data, n_groups)
+        res = factor_research.quantile_analysis(
+            factor_data,
+            return_data,
+            n_groups,
+            mask=_universe_mask(input, factor_data.index, factor_data.columns),
+        )
 
         # 各组平均单期收益
         mrbg = res.get("mean_return_by_group", {})
@@ -520,12 +586,18 @@ class FactorCorrelationNode(BaseWorkNode):
     max_period={"input_type": "number_field"},
     factor_data={"input_type": "None"},
     return_data={"input_type": "None"},
+    **_policy_ui(),
 )
 class FactorDecayInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     factor_data: pd.DataFrame | None = None
     return_data: pd.DataFrame | None = None
     max_period: int = 20
+    exclude_st: bool = _DEFAULT_POLICY.exclude_st
+    exclude_new: bool = _DEFAULT_POLICY.exclude_new
+    min_list_days: int = _DEFAULT_POLICY.min_list_days
+    include_bj: bool = _DEFAULT_POLICY.include_bj
+    exclude_delisting: bool = _DEFAULT_POLICY.exclude_delisting
 
 
 class FactorDecayOutput(BaseModel):
@@ -563,7 +635,10 @@ class FactorDecayNode(BaseWorkNode):
                 "因子衰减：需要连线提供 factor_data 与 return_data（面板）"
             )
         res = factor_research.factor_decay(
-            factor_data, return_data, int(input.max_period or 20)
+            factor_data,
+            return_data,
+            int(input.max_period or 20),
+            mask=_universe_mask(input, factor_data.index, factor_data.columns),
         )
         return FactorDecayOutput(decay_result=pd.DataFrame(res.get("decay_series", [])))
 

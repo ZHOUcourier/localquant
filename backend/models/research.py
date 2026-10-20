@@ -71,6 +71,12 @@ class ResearchProtocol(BaseModel):
     candidate_weight: float = Field(default=0.25, gt=0, le=1)
     monitor_window: int = Field(default=60, ge=20)
     review_every: int = Field(default=20, ge=1)
+    # 股票池约束（冻结在协议里，避免全局默认变化后破坏可复现性）
+    exclude_st: bool = True
+    exclude_new: bool = True
+    min_list_days: int = Field(default=730, ge=0, le=3650)
+    include_bj: bool = True
+    exclude_delisting: bool = True
     # 每日成本后相对收益的最小实用增量，不是 IC 阈值；允许有限负数。
     minimum_effect: float = 0
     regime_index: str = "000300.SH"

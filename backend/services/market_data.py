@@ -482,8 +482,12 @@ def build_return_panel(close: pd.DataFrame) -> pd.DataFrame:
 
 def build_cross_section_mask(
     panels: dict,
-    min_list_days: int = 20,
-    exclude_st: bool = True,
+    min_list_days: int | None = None,
+    exclude_st: bool | None = None,
+    *,
+    policy=None,
+    include_bj: bool | None = None,
+    exclude_delisting: bool | None = None,
 ) -> pd.DataFrame | None:
     """构建每日「可交易」掩码（True=可交易），供因子 IC/分层截面过滤。
 
@@ -493,64 +497,64 @@ def build_cross_section_mask(
             早于首次快照的日期无 ST 信息 → 不排除，避免把「现在的 ST」套到历史截面）
       - 次新股: 逐日判定（T 距上市日 < min_list_days 的截面剔除，
             而非按面板末日一刀切；早于上市日的日期天然缺数据，无需处理）
+      - 北交所 / 退市整理期：由 UniversePolicy 统一控制
 
-    Returns:
-        DataFrame(index=date, columns=code)，无可判定信息时返回 None
+    默认值来自全局配置（UNIVERSE_*），也可显式传 policy 或旧参数覆盖。
     """
+    result = build_cross_section_mask_meta(
+        panels,
+        min_list_days=min_list_days,
+        exclude_st=exclude_st,
+        policy=policy,
+        include_bj=include_bj,
+        exclude_delisting=exclude_delisting,
+    )
+    return result.mask if result is not None else None
+
+
+def build_cross_section_mask_meta(
+    panels: dict,
+    min_list_days: int | None = None,
+    exclude_st: bool | None = None,
+    *,
+    policy=None,
+    include_bj: bool | None = None,
+    exclude_delisting: bool | None = None,
+):
+    """同 build_cross_section_mask，但返回带剔除统计与警告的 UniverseMaskResult。"""
+    from backend.services.universe_policy import (
+        build_equity_eligibility,
+        resolve_policy,
+    )
+
     close = panels.get("close")
     if close is None or close.empty:
         return None
-    mask = pd.DataFrame(True, index=close.index, columns=close.columns, dtype=bool)
 
-    # 停牌（成交量>0 才可交易）
+    base = resolve_policy(policy)
+    overrides: dict = {}
+    if min_list_days is not None:
+        overrides["min_list_days"] = int(min_list_days)
+    if exclude_st is not None:
+        overrides["exclude_st"] = bool(exclude_st)
+    if include_bj is not None:
+        overrides["include_bj"] = bool(include_bj)
+    if exclude_delisting is not None:
+        overrides["exclude_delisting"] = bool(exclude_delisting)
+    if overrides:
+        base = base.model_copy(update=overrides)
+
+    result = build_equity_eligibility(close.index, close.columns, base)
+    mask = result.mask
+
+    # 停牌（成交量>0 才可交易）。注意：这不进入 eligibility，只影响当天成交。
     volume = panels.get("volume")
     if volume is not None and not volume.empty:
         vol = volume.reindex(index=close.index, columns=close.columns).fillna(0.0)
         mask = mask & (vol > 0)
+        result.mask = mask
 
-    if exclude_st:
-        try:
-            from backend.services import reference_data
-
-            st_status = reference_data.build_st_status(close.index, close.columns)
-            if st_status is not None:
-                mask = mask & ~st_status
-        except Exception:
-            pass
-
-    if min_list_days > 0:
-        try:
-            from backend.services import reference_data
-
-            inst = reference_data.load_instrument_frame()
-            if inst is not None and "list_date" in inst.columns:
-                lds = {
-                    c: pd.to_datetime(str(v)).date()
-                    for c, v in inst["list_date"].dropna().items()
-                    if c in mask.columns
-                }
-                if lds:
-                    cols = list(lds.keys())
-                    day_arr = close.index.values.astype("datetime64[D]")[:, None]
-                    ld_arr = np.array(
-                        [np.datetime64(lds[c]) for c in cols], dtype="datetime64[D]"
-                    )[None, :]
-                    since_days = (day_arr - ld_arr).astype("int64")
-                    newborn = pd.DataFrame(
-                        since_days < min_list_days, index=close.index, columns=cols
-                    )
-                    # 补齐全列（无上市日信息的股票不参与次新判定，保持可交易）
-                    newborn = newborn.reindex(
-                        index=close.index, columns=mask.columns, fill_value=False
-                    )
-                    mask = mask & ~newborn
-        except Exception:
-            pass
-
-    if mask.all().all():
-        # 没有任何可判定信息，视为无过滤
-        return mask
-    return mask
+    return result
 
 
 # ── 缓存覆盖度 ─────────────────────────────────────────────

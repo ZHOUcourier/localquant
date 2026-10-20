@@ -81,9 +81,10 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
     tool_map = {t.name: t for t in cfg.tools}
     convo: list[dict] = [{"role": "system", "content": cfg.system}, *messages]
     final_parts: list[str] = []
+    loop_started = time.monotonic()
 
     # 累计 usage（跨工具轮）：completion/reasoning 相加，prompt 取最后（最新）一次
-    usage: dict[str, int] = {
+    usage: dict[str, float | int | bool] = {
         "prompt_tokens": 0,
         "completion_tokens": 0,
         "reasoning_tokens": 0,
@@ -93,6 +94,7 @@ async def run_agent_loop(cfg: AgentConfig, messages: list[dict]) -> AsyncIterato
 
     def _emit_done(content: str) -> AsyncIterator[dict]:
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        usage["elapsed_seconds"] = round(time.monotonic() - loop_started, 2)
         yield {"type": "usage", "usage": {**usage}}
         yield {"type": "done", "content": content}
 
@@ -523,8 +525,16 @@ async def _tool_set_backtest_params(args: dict, session_id: str) -> dict:
         "frequency",
         "stock_pool",
         "execute_at",
+        "universe_policy",
     ]
     params = {k: args[k] for k in keys if args.get(k) not in (None, "")}
+    if "universe_policy" in params:
+        try:
+            from backend.services.universe_policy import UniversePolicy
+
+            UniversePolicy(**params["universe_policy"])
+        except Exception as e:
+            return {"ok": False, "error": f"universe_policy 不合法: {e}"}
     # 即时校验仓位边界，避免 AI 设了 >1 直到 run 才报错（浪费一轮交互）
     if "max_gross_exposure" in params and float(params["max_gross_exposure"]) > 1.0:
         return {
@@ -583,6 +593,7 @@ async def _tool_run_backtest(args: dict, session_id: str) -> dict:
         "stock_pool",
         "execute_at",
         "delisting_loss",
+        "universe_policy",
     ):
         if args.get(k) not in (None, ""):
             params[k] = args[k]
@@ -734,6 +745,7 @@ async def _tool_run_factor_analysis(args: dict, session_id: str) -> dict:
             "group_number",
             "factor_direction",
             "stock_pool",
+            "universe_policy",
         )
         if args.get(k) not in (None, "")
     }
@@ -1509,6 +1521,20 @@ def build_qube_tools(session_id: str) -> list[Tool]:
         "items": {"type": "string"},
         "description": "股票代码列表，空=全部本地缓存",
     }
+    _universe = {
+        "type": "object",
+        "description": (
+            "股票池约束；省略=继承全局默认（ST/*ST、上市不足两年、退市整理剔除，默认开启）。"
+            "字段：exclude_st / exclude_new / min_list_days / include_bj / exclude_delisting"
+        ),
+        "properties": {
+            "exclude_st": {"type": "boolean"},
+            "exclude_new": {"type": "boolean"},
+            "min_list_days": {"type": "integer", "minimum": 0, "maximum": 3650},
+            "include_bj": {"type": "boolean"},
+            "exclude_delisting": {"type": "boolean"},
+        },
+    }
     return [
         Tool(
             name="get_data_status",
@@ -1672,6 +1698,7 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                         "description": "执行时点：next_close / tail / next_open",
                     },
                     "stock_pool": _pool,
+                    "universe_policy": _universe,
                 },
                 "required": [],
             },
@@ -1711,6 +1738,7 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                         "description": "执行时点：next_close / tail / next_open",
                     },
                     "stock_pool": _pool,
+                    "universe_policy": _universe,
                 },
                 "required": [],
             },
@@ -1778,6 +1806,7 @@ def build_qube_tools(session_id: str) -> list[Tool]:
                         "description": "因子方向 1/-1",
                     },
                     "stock_pool": _pool,
+                    "universe_policy": _universe,
                 },
                 "required": [],
             },

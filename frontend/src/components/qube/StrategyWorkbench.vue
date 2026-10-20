@@ -208,6 +208,7 @@ async function runBacktest() {
         init_balance: Number(p.init_balance) || 1000000,
         commission_rate: Number(p.commission_rate) || 0,
         slippage: Number(p.slippage) || 0,
+        universe_policy: p.universe_policy,
       }),
     })
     tab.value = 'backtest'
@@ -480,6 +481,30 @@ const busy = computed(() => btRunning.value || aiRunning.value)
           />
         </label>
         <span>频率 1d</span>
+        <span class="mx-0.5 h-3 w-px bg-[rgba(15,0,0,0.12)]" />
+        <label class="flex items-center gap-1" title="逐日 as-of 剔除 ST/*ST">
+          <input v-model="ws.backtestParams.universe_policy.exclude_st" type="checkbox" class="accent-[#201d1d]" />
+          剔 ST
+        </label>
+        <label class="flex items-center gap-1" title="逐日剔除上市不足 N 天的次新股">
+          <input v-model="ws.backtestParams.universe_policy.exclude_new" type="checkbox" class="accent-[#201d1d]" />
+          剔次新
+        </label>
+        <label class="flex items-center gap-1" title="上市至少自然日数；730≈两年">
+          上市≥
+          <input
+            v-model.number="ws.backtestParams.universe_policy.min_list_days"
+            type="number"
+            min="0"
+            max="3650"
+            class="w-[58px] rounded-[3px] border border-[rgba(15,0,0,0.12)] bg-[#f8f7f7] px-1 py-0.5 text-[11px] outline-none"
+          />
+          天
+        </label>
+        <label class="flex items-center gap-1" title="是否把北交所纳入股票池">
+          <input v-model="ws.backtestParams.universe_policy.include_bj" type="checkbox" class="accent-[#201d1d]" />
+          含北交所
+        </label>
       </div>
 
       <div v-if="errorMsg" class="mx-3 mt-2 rounded-[4px] border border-[#ff3b30]/40 bg-[#ff3b30]/8 px-2.5 py-1.5 text-[11px] text-[#c62d23]">

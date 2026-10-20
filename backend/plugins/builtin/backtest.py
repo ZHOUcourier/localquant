@@ -7,6 +7,9 @@ from backend.plugins.base import BaseWorkNode
 from backend.plugins.registry import work_node
 from backend.plugins.ui_control import ui
 from backend.services.backtest_analysis import backtest_analysis
+from backend.services.universe_policy import UniversePolicy, apply_policy_to_panels
+
+_DEFAULT_POLICY = UniversePolicy.from_settings()
 
 # ────────────────────────────────────────────────────────────
 # 1. 回测节点
@@ -33,6 +36,11 @@ class BacktestInput(BaseModel):
     take_profit: float = 0.0  # 单仓止盈比例（0=关闭）
     stop_loss: float = 0.0  # 单仓止损比例（0=关闭）
     trailing_stop: float = 0.0  # 移动止损比例（0=关闭）
+    exclude_st: bool = _DEFAULT_POLICY.exclude_st
+    exclude_new: bool = _DEFAULT_POLICY.exclude_new
+    min_list_days: int = _DEFAULT_POLICY.min_list_days
+    include_bj: bool = _DEFAULT_POLICY.include_bj
+    exclude_delisting: bool = _DEFAULT_POLICY.exclude_delisting
 
 
 def _to_panel(value) -> pd.DataFrame | None:
@@ -60,6 +68,11 @@ def _to_panel(value) -> pd.DataFrame | None:
     take_profit={"input_type": "number_field"},
     stop_loss={"input_type": "number_field"},
     trailing_stop={"input_type": "number_field"},
+    exclude_st={"input_type": "boolean"},
+    exclude_new={"input_type": "boolean"},
+    min_list_days={"input_type": "number_field"},
+    include_bj={"input_type": "boolean"},
+    exclude_delisting={"input_type": "boolean"},
     normalize={
         "input_type": "combobox",
         "options": ["long_only"],
@@ -84,6 +97,7 @@ class BacktestOutput(BaseModel):
     assumptions: list = []  # 未能处理的假设清单（停牌/涨跌停等）
     delisting_events: list = []  # 数据提前截止标的的强制清算明细（退市/缓存截断）
     leverage_summary: dict = {}  # 仓位边界报告（Σ|w| 峰值/均值、上限、预算缩减天数）
+    universe: dict = {}  # 股票池约束的生效策略/剔除计数/覆盖警告
     report: dict = {}  # 回测综合报告（供工作流内弹窗可视化，与因子分析同构）
     initial_capital: float = 0.0
 
@@ -132,6 +146,15 @@ class BacktestNode(BaseWorkNode):
             except Exception:
                 pass
 
+        policy = UniversePolicy(
+            exclude_st=bool(input.exclude_st),
+            exclude_new=bool(input.exclude_new),
+            min_list_days=int(input.min_list_days),
+            include_bj=bool(input.include_bj),
+            exclude_delisting=bool(input.exclude_delisting),
+        )
+        signals, universe = apply_policy_to_panels(signals, prices, policy)
+
         # 参考面板：停牌掩码（需 volume）与涨跌停近似价（需参考数据快照）
         from backend.services import market_data
 
@@ -146,6 +169,7 @@ class BacktestNode(BaseWorkNode):
             stamp_tax=input.stamp_tax,
             normalize=input.normalize,
             tradable_mask=reference["tradable_mask"],
+            eligible_mask=universe.mask,
             up_limit=reference["up_limit"],
             down_limit=reference["down_limit"],
             high=high,
@@ -154,7 +178,7 @@ class BacktestNode(BaseWorkNode):
             stop_loss=input.stop_loss,
             trailing_stop=input.trailing_stop,
         )
-        assumptions = result["assumptions"]
+        assumptions = result["assumptions"] + list(universe.warnings)
         equity_curve = result["equity_curve"]
         strategy_returns = pd.Series(result["strategy_returns"])
         positions = result["positions"]
@@ -201,6 +225,7 @@ class BacktestNode(BaseWorkNode):
             "assumptions": assumptions,
             "delisting_events": result.get("delisting_events", []),
             "leverage_summary": result.get("leverage_summary", {}),
+            "universe": universe.manifest(),
             "initial_capital": init_cap,
             "trading_days": metrics.get("trading_days", 0),
         }
@@ -221,6 +246,7 @@ class BacktestNode(BaseWorkNode):
             assumptions=assumptions,
             delisting_events=result.get("delisting_events", []),
             leverage_summary=result.get("leverage_summary", {}),
+            universe=universe.manifest(),
             report=report,
             initial_capital=result["initial_capital"],
         )

@@ -97,6 +97,7 @@ DEFAULT_ANALYSIS_PARAMS = {
     "group_number": 5,
     "factor_direction": 1,
     "stock_pool": [],
+    "universe_policy": {},
 }
 
 
@@ -173,6 +174,9 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
             str(params.get("period_end") or ""),
         )
         close = panels["close"]
+        from backend.services.universe_policy import resolve_policy
+
+        policy = resolve_policy(params.get("universe_policy"))
 
         # 3 → 4. clean：求值因子 + 方向调整 + 清洗
         await stage(3)
@@ -242,13 +246,19 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
         from backend.services.factor_research import factor_research
 
         mask = None
+        universe_manifest: dict = {}
         try:
-            from backend.services.market_data import build_cross_section_mask
+            from backend.services.market_data import build_cross_section_mask_meta
 
-            mask = build_cross_section_mask(panels)
+            mask_result = build_cross_section_mask_meta(panels, policy=policy)
+            if mask_result is not None:
+                mask = mask_result.mask
+                universe_manifest = mask_result.manifest()
+                for warning in mask_result.warnings:
+                    logger.warning(f"QUBE 因子分析 {analysis_id}: {warning}")
         except Exception:
             mask = None
-            logger.warning("无法构建可交易掩码，QUBE 因子研究将不做停牌/ST 过滤", exc_info=True)
+            logger.warning("无法构建股票池/可交易掩码，QUBE 因子研究将不做过滤", exc_info=True)
         result = await asyncio.to_thread(
             factor_research.full_factor_analysis,
             factor,
@@ -259,7 +269,11 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
         )
         await stage(7)
 
-        metrics = {"summary": result["summary"], "ic_summary": result["ic_summary"]}
+        metrics = {
+            "summary": result["summary"],
+            "ic_summary": result["ic_summary"],
+            "universe": universe_manifest,
+        }
         group_return = {
             "group_perf": result["group_perf"],
             "mean_return_by_group": result["mean_return_by_group"],
@@ -283,6 +297,11 @@ async def execute_factor_analysis(analysis_id: str) -> dict:
             metrics_json=json.dumps(metrics, ensure_ascii=False, default=str),
             group_return_json=json.dumps(group_return, ensure_ascii=False, default=str),
             charts_json=json.dumps(charts, ensure_ascii=False, default=str),
+            params_json=json.dumps(
+                {**params, "universe": universe_manifest},
+                ensure_ascii=False,
+                default=str,
+            ),
             finished_at=int(time.time()),
         )
         return {"analysis_id": analysis_id, "summary": result["summary"]}
@@ -353,6 +372,7 @@ DEFAULT_BACKTEST_PARAMS = {
     "stock_pool": [],
     "execute_at": "next_close",  # next_close=次日(T+1)收盘 / tail=信号日尾盘 / next_open=次日开盘
     "delisting_loss": 0.0,  # 数据提前截止标的的强制清算折价（0=按末日价全额变现）
+    "universe_policy": {},  # 空=继承全局 UNIVERSE_* 默认；可被单次运行覆盖
 }
 
 
@@ -451,6 +471,21 @@ async def execute_backtest_run(run_id: str) -> dict:
         signals_df, sandboxed = await run_signals(code, prices)
         if signals_df is None or signals_df.empty:
             raise ValueError("信号为空 — 请检查信号逻辑与数据区间")
+        from backend.services.universe_policy import apply_policy_to_panels
+
+        signals_df, universe = await asyncio.to_thread(
+            apply_policy_to_panels,
+            signals_df,
+            prices,
+            params.get("universe_policy"),
+        )
+        log_lines.append(
+            f"[INFO] 股票池约束：{prices.shape[1]} 只 · 最新交易日可进入 "
+            f"{universe.stats.get('eligible_codes_last_date', 0)} 只 · "
+            f"剔除 cell {universe.stats.get('excluded_cells', 0)}"
+        )
+        for warning in universe.warnings:
+            log_lines.append(f"[WARN] 股票池: {warning}")
         log_lines.append(
             f"[INFO] 信号生成完成（{'沙箱隔离' if sandboxed else '进程内执行'}）"
         )
@@ -480,6 +515,7 @@ async def execute_backtest_run(run_id: str) -> dict:
                 stamp_tax=stamp_tax,
                 normalize=normalize,
                 tradable_mask=reference["tradable_mask"],
+                eligible_mask=universe.mask,
                 shortable_mask=shortable,
                 up_limit=reference["up_limit"],
                 down_limit=reference["down_limit"],
@@ -550,6 +586,7 @@ async def execute_backtest_run(run_id: str) -> dict:
                 "n_delisting": len(result.get("delisting_events", [])),
                 "leverage_summary": result.get("leverage_summary", {}),
                 "assumptions": result.get("assumptions", []),
+                "universe": universe.manifest(),
                 # 执行环境：false = 信号代码未在沙箱中隔离（前端展示徽标，agent 转告用户）
                 "sandboxed": bool(sandboxed),
             }
@@ -584,6 +621,11 @@ async def execute_backtest_run(run_id: str) -> dict:
             metrics_json=json.dumps(metrics, ensure_ascii=False, default=str),
             equity_json=json.dumps(equity_list, ensure_ascii=False),
             trades_json=json.dumps(trades, ensure_ascii=False),
+            params_json=json.dumps(
+                {**params, "universe": universe.manifest()},
+                ensure_ascii=False,
+                default=str,
+            ),
             log_text="\n".join(log_lines),
             finished_at=int(time.time()),
         )

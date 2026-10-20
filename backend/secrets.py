@@ -9,6 +9,7 @@
   回填空缺的密钥字段
 - 设置页写入走 ``store_secret()``：凭据库可用则存凭据库并清除 .env 明文；不可用
   （无桌面 Linux / CI / 容器）则由调用方回退为原 .env 写入，行为与从前一致
+- 清除走 ``delete_secret()``：同时删除凭据库条目与 .env 明文行
 
 界面永不回显密钥：配置 GET 接口只返回 ``*_set`` 布尔，不返回明文或掩码。
 """
@@ -17,16 +18,10 @@ from pathlib import Path
 
 from loguru import logger
 
-SERVICE = "LocalQuant"
+from backend.config_registry import SECRET_FIELDS
+from backend.env_file import delete_env_keys, secure_env_file, write_env_text
 
-# env 键名 → Settings 属性名（config.Settings 中对应的密钥字段）
-SECRET_FIELDS: dict[str, str] = {
-    "OPENAI_API_KEY": "openai_api_key",
-    "QUBE_API_KEY": "qube_api_key",
-    "QZ_ACCESS_KEY": "qz_access_key",
-    "QZ_SIGN_SECRET": "qz_sign_secret",
-    "PANDA_TOKEN": "panda_token",
-}
+SERVICE = "LocalQuant"
 
 
 def is_available() -> bool:
@@ -85,32 +80,37 @@ def _strip_env_value(raw: str) -> str:
 def delete_env_key(env_key: str, env_file: Path | None = None) -> bool:
     """从 .env 删除单个键的行（保留其余行与注释）；行不存在返回 False"""
     path = env_file or Path(".env")
-    if not path.exists():
-        return False
-    lines = path.read_text(encoding="utf-8").splitlines()
-    kept: list[str] = []
-    removed = False
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            kept.append(line)
-            continue
-        if stripped.split("=", 1)[0].strip() == env_key:
-            removed = True
-            continue
-        kept.append(line)
-    if removed:
-        path.write_text("\n".join(kept) + "\n", encoding="utf-8")
-    return removed
+    return delete_env_keys([env_key], path)
 
 
 def store_secret(env_key: str, value: str, env_file: Path | None = None) -> bool:
     """写入单个密钥：存凭据库并确保 .env 无明文。返回 False 表示凭据库不可用/写入失败，
-    调用方应回退为写 .env。空值不写入（清空请直接删凭据库条目）。"""
+    调用方应回退为写 .env。空值不写入（清除请调用 delete_secret）。"""
     if not value or not set_secret(env_key, value):
         return False
     delete_env_key(env_key, env_file)
+    secure_env_file(env_file or Path(".env"))
     return True
+
+
+def delete_secret(env_key: str, env_file: Path | None = None) -> bool:
+    """清除一个密钥：删除凭据库条目并从 .env 删除明文行。
+
+    返回是否有任何一处被删除；凭据库不可用时仍会清理 .env。
+    """
+    removed = False
+    if is_available():
+        try:
+            import keyring
+
+            keyring.delete_password(SERVICE, env_key)
+            removed = True
+        except Exception as e:
+            # 条目不存在不算失败；其余错误只记录，不阻断 .env 清理
+            logger.debug(f"删除凭据库 {env_key} 失败或条目不存在: {e}")
+    removed = delete_env_key(env_key, env_file) or removed
+    secure_env_file(env_file or Path(".env"))
+    return removed
 
 
 def migrate_env_secrets(env_file: Path | None = None) -> list[str]:
@@ -120,7 +120,10 @@ def migrate_env_secrets(env_file: Path | None = None) -> list[str]:
     单个写入失败时该键保留在 .env，其余已成功的照常清除。
     """
     path = env_file or Path(".env")
-    if not is_available() or not path.exists():
+    if not path.exists():
+        return []
+    secure_env_file(path)
+    if not is_available():
         return []
     lines = path.read_text(encoding="utf-8").splitlines()
     found: dict[int, str] = {}  # 行号 → env 键名（值非空的密钥行）
@@ -150,6 +153,8 @@ def migrate_env_secrets(env_file: Path | None = None) -> list[str]:
 
     migrated_set = set(migrated)
     kept = [ln for i, ln in enumerate(lines) if found.get(i) not in migrated_set]
-    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    path = env_file or Path(".env")
+    # 统一走原子写，避免迁移过程中进程退出留下半截 .env
+    write_env_text(path, "\n".join(kept) + "\n")
     logger.info(f"已将 {len(migrated)} 个密钥迁入系统凭据库: {', '.join(migrated)}")
     return migrated

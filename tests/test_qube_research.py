@@ -25,7 +25,7 @@ def qube_db(tmp_path, monkeypatch):
     return tmp_path / "test.db"
 
 
-def _synth_panels(n_days=80, n_stocks=12, seed=7):
+def _synth_panels(n_days=80, n_stocks=40, seed=7):
     rng = np.random.default_rng(seed)
     dates = pd.bdate_range("2024-01-02", periods=n_days)
     cols = [f"{600000 + i}.SH" for i in range(n_stocks)]
@@ -246,6 +246,8 @@ def test_backtest_run_pipeline(qube_db, monkeypatch):
         trades[0]
     )
     assert "回测完成" in row["log_text"]
+    assert "股票池约束" in row["log_text"]
+    assert metrics["universe"]["policy"]["min_list_days"] == 730
     assert result["metrics"]["trade_count"] == metrics["trade_count"]
     # 执行环境随记录持久化：前端徽标 / agent 转告用户都从这里读
     assert metrics["sandboxed"] is False

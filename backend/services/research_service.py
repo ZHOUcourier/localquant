@@ -117,10 +117,23 @@ def _load_inputs(study: dict, phase: str) -> dict:
         panels["market_cap"] = market_cap
     reference = market_data.load_reference_panels(raw_close, panels.get("volume"))
     reference["tradable_mask"] = reference["tradable_mask"] & close.notna()
-    mask = market_data.build_cross_section_mask(panels)
-    if mask is None:
-        raise ResearchDataUnavailable("无法构造 QMT 可交易掩码")
-    mask = mask & close.notna() & (close > 0)
+    from backend.services.universe_policy import (
+        UniversePolicy,
+        build_equity_eligibility,
+    )
+
+    policy = UniversePolicy(
+        exclude_st=bool(p.get("exclude_st", True)),
+        exclude_new=bool(p.get("exclude_new", True)),
+        min_list_days=int(p.get("min_list_days", 730)),
+        include_bj=bool(p.get("include_bj", True)),
+        exclude_delisting=bool(p.get("exclude_delisting", True)),
+    )
+    eligibility = build_equity_eligibility(close.index, close.columns, policy)
+    mask = eligibility.mask & close.notna() & (close > 0)
+    volume_mask = panels.get("volume")
+    if volume_mask is not None:
+        mask = mask & (volume_mask.reindex_like(close).fillna(0.0) > 0)
     fund = fundamental.build_fundamental_panels(list(close.columns), close.index) or {}
     states = pd.Series(index=close.index, dtype=object)
     index_frame = market_data._cache.get(p["regime_index"], "1d")
@@ -135,6 +148,7 @@ def _load_inputs(study: dict, phase: str) -> dict:
             states = history_states(index_frame["close"]).reindex(close.index)
     return {
         "panels": panels, "raw_close": raw_close, "mask": mask,
+        "eligibility": eligibility,
         "industry": industry, "fundamental": fund, "reference": reference,
         "states": states, "codes": list(close.columns),
     }
@@ -176,12 +190,14 @@ def _run_portfolio(signal: pd.DataFrame, inputs: dict, p: dict, *, stress: bool 
     scale = panels["close"].div(inputs["raw_close"].replace(0, np.nan))
     up = refs.get("up_limit")
     down = refs.get("down_limit")
+    eligibility = inputs.get("eligibility")
     return BacktestAnalysisService().run_backtest(
         signals=signal, prices=panels["close"], initial_capital=p["initial_capital"],
         commission_rate=p["commission_rate"] * (2 if stress else 1),
         slippage=p["slippage"] * (2 if stress else 1), stamp_tax=p["stamp_tax"],
         normalize="long_only", execute_at="next_close", max_gross_exposure=1.0,
         tradable_mask=refs["tradable_mask"],
+        eligible_mask=eligibility.mask if eligibility is not None else None,
         up_limit=up * scale if up is not None else None,
         down_limit=down * scale if down is not None else None,
         high=panels.get("high"), low=panels.get("low"),
@@ -293,6 +309,9 @@ def compute_evidence(study: dict, trial: dict, phase: str, inputs: dict) -> dict
         "execution": "signal_T_close_fill_T_plus_1_close", "label_end_offset": p["horizon"] + 1,
         "primary": "incremental_cost_net_return_vs_frozen_baseline", "family_alpha": p["alpha"],
         "trial_budget": p["trial_budget"], "test_alpha": alpha,
+        "universe": (
+            inputs["eligibility"].manifest() if inputs.get("eligibility") else {}
+        ),
     }
     limitations = [
         "只读取本地 QMT 缓存；不下载或接入替代金融数据。",
@@ -305,6 +324,8 @@ def compute_evidence(study: dict, trial: dict, phase: str, inputs: dict) -> dict
         "最终留出仅在本研究内封存；不能证明研究员此前未查看同一历史区间。",
     ]
     limitations.extend(inputs["reference"].get("assumptions", []))
+    if inputs.get("eligibility") is not None:
+        limitations.extend(inputs["eligibility"].warnings)
     for portfolio in portfolios.values():
         limitations.extend(portfolio.get("assumptions", []))
     result = {

@@ -27,6 +27,7 @@ class BacktestAnalysisService:
         stamp_tax: float = 0.0005,
         normalize: str = "long_only",
         tradable_mask: pd.DataFrame | None = None,
+        eligible_mask: pd.DataFrame | None = None,
         shortable_mask: pd.DataFrame | None = None,
         up_limit: pd.DataFrame | None = None,
         down_limit: pd.DataFrame | None = None,
@@ -61,6 +62,9 @@ class BacktestAnalysisService:
             该参数保留为安全护栏，防止未来改动引入意外杠杆。
         tradable_mask : DataFrame | None
             可交易掩码（False=停牌）：停牌日冻结持仓、不计换手成本。
+        eligible_mask : DataFrame | None
+            股票池资格掩码（False=ST/次新/退市整理等）：信号清零、不建仓；
+            已持有标的在可成交日退出（停牌/一字板仍由 tradable_mask 冻结）。
         shortable_mask : DataFrame | None
             兼容旧调用的可融券掩码参数；当前系统只做普通多头，负信号已清零，
             该参数不参与任何交易逻辑。
@@ -133,6 +137,15 @@ class BacktestAnalysisService:
                 "任何情况下总仓位都不允许超过 100%。"
             )
         exposure_limit = float(max_gross_exposure)
+        eligible_arr = self._align_mask(
+            eligible_mask, common_idx, common_cols, default=True
+        )
+        if eligible_mask is not None and not eligible_arr.all():
+            signals = signals.where(eligible_arr, 0.0)
+            assumptions.append(
+                "股票池约束：ST/*ST、次新等不合格标的不建仓；"
+                "已持有标的在可成交日退出（停牌/一字板由可交易掩码冻结）"
+            )
         weights = self._normalize_weights(signals, normalize)
         gross_before = weights.abs().sum(axis=1).replace(0.0, np.nan)
         gross_max = float(gross_before.max(skipna=True)) if gross_before.notna().any() else 0.0
@@ -702,6 +715,7 @@ class BacktestAnalysisService:
         trailing_stop: float = 0.0,
         execute_at: str = "next_close",
         delisting_loss: float = 0.0,
+        universe_policy=None,
     ) -> dict:
         """因子池 → 组合回测闭环（研究主链路一键打通）
 
@@ -738,6 +752,12 @@ class BacktestAnalysisService:
         close = panels["close"]
         if close is None or len(close.index) < 60:
             raise ValueError("行情区间不足 60 个交易日，无法回测")
+
+        from backend.services.universe_policy import build_equity_eligibility
+
+        universe = build_equity_eligibility(
+            close.index, close.columns, universe_policy
+        )
 
         ns = build_operator_namespace(
             panels, industry_map=reference_data.load_industry_map()
@@ -790,6 +810,8 @@ class BacktestAnalysisService:
             weights = {k: 1.0 / len(factor_frames) for k in factor_frames}
 
         # 每日截面 Top-N 做多信号（T 日信号 → 回测引擎 T+1 执行）
+        # 先剔除不合格标的再排序，避免 ST/次新进入 Top-N 后又被动跳过。
+        combined = combined.where(universe.mask)
         n = int(top_n)
         if n <= 0:
             signals = (combined > 0).astype(float)
@@ -812,6 +834,7 @@ class BacktestAnalysisService:
             stamp_tax=stamp_tax,
             normalize="long_only",
             tradable_mask=reference["tradable_mask"],
+            eligible_mask=universe.mask,
             shortable_mask=None,
             up_limit=reference["up_limit"],
             down_limit=reference["down_limit"],
@@ -881,6 +904,7 @@ class BacktestAnalysisService:
             "attribution": attribution,
             "assumptions": result["assumptions"],
             "delisting_events": result.get("delisting_events", []),
+            "universe": universe.manifest(),
             "n_stocks": int(close.shape[1]),
             "data_date": str(close.index[-1])[:10],
         }
@@ -907,6 +931,7 @@ class BacktestAnalysisService:
         trailing_stop: float = 0.0,
         execute_at: str = "next_close",
         delisting_loss: float = 0.0,
+        universe_policy=None,
     ) -> dict:
         """组合 walk-forward 回测：训练窗口定权重 → 测试窗口出信号 → 滚动拼接净值
 
@@ -941,6 +966,12 @@ class BacktestAnalysisService:
         close = panels["close"]
         if close is None or len(close.index) < train_days + test_days + 30:
             raise ValueError("行情区间不足（需 ≥ 训练窗口 + 测试窗口 + 30 个交易日）")
+
+        from backend.services.universe_policy import build_equity_eligibility
+
+        universe = build_equity_eligibility(
+            close.index, close.columns, universe_policy
+        )
 
         ns = build_operator_namespace(
             panels, industry_map=reference_data.load_industry_map()
@@ -994,7 +1025,7 @@ class BacktestAnalysisService:
                 combined = factor_research.multi_factor_combine(
                     factor_frames, method="equal"
                 )
-            sig_fold = _top_n_signal(combined)
+            sig_fold = _top_n_signal(combined.where(universe.mask))
             mask = (dates >= test_start) & (dates <= test_end)
             signals_oos.loc[mask] = sig_fold.loc[mask]
             folds.append(
@@ -1024,7 +1055,7 @@ class BacktestAnalysisService:
             combined_full = factor_research.multi_factor_combine(
                 factor_frames, method="equal"
             )
-        signals_full = _top_n_signal(combined_full)
+        signals_full = _top_n_signal(combined_full.where(universe.mask))
 
         reference = market_data.load_reference_panels(close, panels.get("volume"))
         common_kwargs = {
@@ -1035,6 +1066,7 @@ class BacktestAnalysisService:
             "stamp_tax": stamp_tax,
             "normalize": "long_only",
             "tradable_mask": reference["tradable_mask"],
+            "eligible_mask": universe.mask,
             "up_limit": reference["up_limit"],
             "down_limit": reference["down_limit"],
             "high": panels.get("high"),
@@ -1094,6 +1126,7 @@ class BacktestAnalysisService:
                     "ic_weighted 时权重只含训练窗口 RankIC，无前视"
                 ),
             ],
+            "universe": universe.manifest(),
             "n_stocks": int(close.shape[1]),
             "data_date": str(close.index[-1])[:10],
         }
@@ -1110,6 +1143,7 @@ class BacktestAnalysisService:
         down_limit=None,
         high=None,
         low=None,
+        universe_policy=None,
     ) -> dict:
         """回测参数网格扫描：对 param_grid 做笛卡尔积，逐组合跑回测
 
@@ -1122,6 +1156,13 @@ class BacktestAnalysisService:
         import itertools
 
         base = base or {}
+        from backend.services.universe_policy import build_equity_eligibility
+
+        universe = build_equity_eligibility(
+            prices.index, prices.columns, universe_policy
+        )
+        if not universe.mask.all().all():
+            signals = signals.where(universe.mask, 0.0)
         keys = list(param_grid.keys())
         combos = list(itertools.product(*param_grid.values()))
         rows: list[dict] = []
@@ -1138,6 +1179,7 @@ class BacktestAnalysisService:
                     stamp_tax=float(params.get("stamp_tax", 0.0005)),
                     normalize=str(params.get("normalize", "long_only")),
                     tradable_mask=tradable_mask,
+                    eligible_mask=universe.mask,
                     up_limit=up_limit,
                     down_limit=down_limit,
                     high=high,
@@ -1161,7 +1203,12 @@ class BacktestAnalysisService:
                 )
             except Exception as e:
                 rows.append({"params": dict(zip(keys, combo)), "error": str(e)[:200]})
-        return {"keys": keys, "rows": rows, "n_combos": len(combos)}
+        return {
+            "keys": keys,
+            "rows": rows,
+            "n_combos": len(combos),
+            "universe": universe.manifest(),
+        }
 
     # ── 绩效报告 ─────────────────────────────────────────────
 

@@ -19,6 +19,11 @@ interface ConfigData {
   ai_cli_effort: string
   qz_access_key_set: boolean
   qz_sign_secret_set: boolean
+  universe_exclude_st: boolean
+  universe_exclude_new: boolean
+  universe_min_list_days: number
+  universe_include_bj: boolean
+  universe_exclude_delisting: boolean
   secrets_backend: 'os_keychain' | 'env_file'
   backend_port: number
   frontend_port: number
@@ -78,6 +83,11 @@ const form = reactive({
   ai_cli_effort: 'default',
   qz_access_key: '', // QuantZone 密钥（只写输入，留空不修改）
   qz_sign_secret: '',
+  universe_exclude_st: true,
+  universe_exclude_new: true,
+  universe_min_list_days: 730,
+  universe_include_bj: true,
+  universe_exclude_delisting: true,
   backend_port: 8000,
   frontend_port: 5173,
 })
@@ -153,6 +163,11 @@ watch(config, (c) => {
   form.ai_cli = c.ai_cli ?? 'claude'
   form.ai_cli_model = c.ai_cli_model ?? ''
   form.ai_cli_effort = c.ai_cli_effort ?? 'default'
+  form.universe_exclude_st = c.universe_exclude_st ?? true
+  form.universe_exclude_new = c.universe_exclude_new ?? true
+  form.universe_min_list_days = c.universe_min_list_days ?? 730
+  form.universe_include_bj = c.universe_include_bj ?? true
+  form.universe_exclude_delisting = c.universe_exclude_delisting ?? true
   form.backend_port = c.backend_port ?? 8000
   form.frontend_port = c.frontend_port ?? 5173
 }, { immediate: true })
@@ -171,6 +186,11 @@ const saveMutation = useMutation({
       ai_cli: form.ai_cli,
       ai_cli_model: form.ai_cli_model,
       ai_cli_effort: form.ai_cli_effort,
+      universe_exclude_st: form.universe_exclude_st,
+      universe_exclude_new: form.universe_exclude_new,
+      universe_min_list_days: Number(form.universe_min_list_days),
+      universe_include_bj: form.universe_include_bj,
+      universe_exclude_delisting: form.universe_exclude_delisting,
       backend_port: Number(form.backend_port),
       frontend_port: Number(form.frontend_port),
     }
@@ -204,6 +224,24 @@ const saveMutation = useMutation({
 
 // 表单编辑时重置保存状态
 watch(form, () => saveMutation.reset())
+
+async function clearSecret(envKey: string) {
+  if (!window.confirm(`确认清除 ${envKey}？清除后相关功能需重新配置密钥。`)) return
+  try {
+    const res = await fetch('/api/config/', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear_secrets: [envKey] }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      throw new Error(data?.detail ?? `清除失败 (HTTP ${res.status})`)
+    }
+    queryClient.invalidateQueries({ queryKey: ['config'] })
+  } catch (e) {
+    window.alert(e instanceof Error ? e.message : String(e))
+  }
+}
 
 // 切换供应商：预置免填 Base URL（后端自带），仅 BYOK 需要自填
 function selectProvider(p: ProviderInfo) {
@@ -309,7 +347,17 @@ function selectProvider(p: ProviderInfo) {
                 type="password"
                 :placeholder="config?.openai_api_key_set ? '留空则保持不变' : 'sk-...'"
               />
-              <div class="mt-1 text-[10px] text-[#9a9898]">密钥仅写入、不回显；保存后存入系统凭据库，不落 .env 明文</div>
+              <div class="mt-1 flex items-center justify-between gap-2 text-[10px] text-[#9a9898]">
+                <span>密钥仅写入、不回显；保存后存入系统凭据库，不落 .env 明文</span>
+                <button
+                  v-if="config?.openai_api_key_set"
+                  type="button"
+                  class="shrink-0 text-[#c62d23] hover:underline"
+                  @click="clearSecret('OPENAI_API_KEY')"
+                >
+                  清除
+                </button>
+              </div>
             </div>
             <div class="grid gap-3" :class="selectedProvider?.byok ? 'grid-cols-2' : 'grid-cols-1'">
               <div v-if="selectedProvider?.byok">
@@ -435,6 +483,14 @@ function selectProvider(p: ProviderInfo) {
               </span>
             </label>
             <Input v-model="form.qz_access_key" type="password" :placeholder="config?.qz_access_key_set ? '留空则保持不变' : 'QZ_ACCESS_KEY'" />
+            <button
+              v-if="config?.qz_access_key_set"
+              type="button"
+              class="mt-1 text-[10px] text-[#c62d23] hover:underline"
+              @click="clearSecret('QZ_ACCESS_KEY')"
+            >
+              清除 Access Key
+            </button>
           </div>
           <div>
             <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">
@@ -448,12 +504,65 @@ function selectProvider(p: ProviderInfo) {
               </span>
             </label>
             <Input v-model="form.qz_sign_secret" type="password" :placeholder="config?.qz_sign_secret_set ? '留空则保持不变' : 'QZ_SIGN_SECRET'" />
+            <button
+              v-if="config?.qz_sign_secret_set"
+              type="button"
+              class="mt-1 text-[10px] text-[#c62d23] hover:underline"
+              @click="clearSecret('QZ_SIGN_SECRET')"
+            >
+              清除 Sign Secret
+            </button>
           </div>
           <div class="flex items-start gap-1.5 pt-1">
             <Info :size="13" class="mt-0.5 shrink-0 text-[#9a9898]" />
             <span class="text-xs text-[#9a9898]">
               用于「分钟因子 · QuantZone 对拍（Beta）」官方因子值拉取；免费版每日 512MB 下载配额。密钥仅写入、不回显。
             </span>
+          </div>
+        </div>
+      </Card>
+
+      <!-- 股票池约束 -->
+      <Card title="股票池约束">
+        <div class="space-y-3">
+          <p class="text-xs leading-relaxed text-[#646262]">
+            非密钥全局默认，默认开启；工作流、QUBE 与回测可在单次运行中覆盖。ST 与退市整理按 instrument 名称快照逐日 as-of，次新按当日距上市日判定，不会用今天的状态倒灌历史。
+          </p>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex items-center gap-2 text-[13px] text-[#201d1d]">
+              <input v-model="form.universe_exclude_st" type="checkbox" class="accent-[#201d1d]" />
+              剔除 ST/*ST
+            </label>
+            <label class="flex items-center gap-2 text-[13px] text-[#201d1d]">
+              <input v-model="form.universe_exclude_new" type="checkbox" class="accent-[#201d1d]" />
+              剔除次新股
+            </label>
+            <label class="flex items-center gap-2 text-[13px] text-[#201d1d]">
+              <input v-model="form.universe_include_bj" type="checkbox" class="accent-[#201d1d]" />
+              包含北交所
+            </label>
+            <label class="flex items-center gap-2 text-[13px] text-[#201d1d]">
+              <input v-model="form.universe_exclude_delisting" type="checkbox" class="accent-[#201d1d]" />
+              剔除退市整理期
+            </label>
+          </div>
+          <div>
+            <label class="block text-[13px] font-medium text-[#201d1d] mb-1.5">上市至少天数（自然日）</label>
+            <Input
+              :model-value="String(form.universe_min_list_days)"
+              type="number"
+              :min="0"
+              :max="3650"
+              @update:model-value="(v: string) => (form.universe_min_list_days = Number(v))"
+            />
+            <div class="mt-1 text-[10px] text-[#9a9898]">730 ≈ 两年；0 = 不按上市时间过滤。次新股过滤仅在“剔除次新股”开启时生效。</div>
+          </div>
+          <div v-if="!form.universe_exclude_st || !form.universe_exclude_new" class="rounded-[4px] border border-[rgba(255,159,10,0.4)] bg-[#fff8e8] px-2.5 py-2 text-[11px] text-[#8a6100]">
+            当前关闭了部分股票池约束；回测/研究会记录实际策略，关闭后的结果不应与默认口径直接比较。
+          </div>
+          <div class="flex items-start gap-1.5">
+            <Info :size="13" class="mt-0.5 shrink-0 text-[#9a9898]" />
+            <span class="text-xs text-[#9a9898]">历史 ST/退市状态依赖 instrument 快照积累；首次快照前的区间无法回溯，结果会给出覆盖警告。</span>
           </div>
         </div>
       </Card>

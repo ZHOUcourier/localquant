@@ -22,6 +22,7 @@ from backend.routes import settings as settings_routes
 from backend.secrets import (
     SERVICE,
     delete_env_key,
+    delete_secret,
     get_secret,
     is_available,
     migrate_env_secrets,
@@ -180,6 +181,26 @@ def test_update_config_empty_secret_is_noop(fake_keyring, env_file, monkeypatch)
 
     assert get_secret("OPENAI_API_KEY") == ""  # 空串不写入凭据库
     assert env_file.read_text(encoding="utf-8") == ""
+
+
+def test_delete_secret_clears_keyring_and_env(fake_keyring, env_file):
+    store_secret("OPENAI_API_KEY", "sk-to-clear", env_file)
+    assert get_secret("OPENAI_API_KEY") == "sk-to-clear"
+    assert delete_secret("OPENAI_API_KEY", env_file) is True
+    assert get_secret("OPENAI_API_KEY") == ""
+    assert "OPENAI_API_KEY" not in env_file.read_text(encoding="utf-8")
+
+
+def test_update_config_clear_secrets(fake_keyring, env_file, monkeypatch):
+    from backend.config import settings as app_settings
+
+    store_secret("OPENAI_API_KEY", "sk-clear-me", env_file)
+    monkeypatch.setattr(app_settings, "openai_api_key", "sk-clear-me", raising=False)
+    body = settings_routes.ConfigUpdate(clear_secrets=["OPENAI_API_KEY"])
+    result = asyncio.run(settings_routes.update_config(body))
+    assert result["cleared"] == ["OPENAI_API_KEY"]
+    assert app_settings.openai_api_key == ""
+    assert get_secret("OPENAI_API_KEY") == ""
 
 
 # ── QUBE 配置路由 ──────────────────────────────────────────────

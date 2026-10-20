@@ -565,31 +565,61 @@ def load_instrument_frame() -> pd.DataFrame | None:
     return latest.set_index("code")[keep]
 
 
-def build_st_status(dates, codes) -> pd.DataFrame | None:
-    """逐日 as-of ST 状态：True=ST（index=日期, columns=代码）
+def instrument_snapshot_dates() -> list[str]:
+    """instrument 快照的日期列表（升序），用于判断 ST/退市状态覆盖起点。"""
+    df = _read(_INSTRUMENT_FILE)
+    if df is None or df.empty or "date" not in df.columns:
+        return []
+    return sorted({str(pd.Timestamp(v).date()) for v in df["date"].dropna().unique()})
 
-    基于 instrument 快照（date, code, name）：ST 状态从「含 ST 名称的快照日」起
-    生效并前向填充——今天才快照到的 *ST 名称不会倒灌到 2015 年截面（避免用未来
-    信息）；早于首次快照的日期无 ST 信息 → False（不排除，调用方用 assumptions
-    明示该局限）。代码从未出现于快照 → False。
+
+def build_name_flag_status(
+    dates, codes, needles: tuple[str, ...]
+) -> pd.DataFrame | None:
+    """逐日 as-of 名称标记状态：True=命中任一关键词（index=日期, columns=代码）。
+
+    基于 instrument 快照（date, code, name）：状态从「含关键词的快照日」起生效并
+    前向填充——今天才出现的名称不会倒灌到历史截面。早于首次快照的日期无信息 →
+    False（不排除，调用方需在 assumptions 明示覆盖局限）。代码从未出现于快照 →
+    False。
     """
     df = _read(_INSTRUMENT_FILE)
     if df is None or df.empty or "name" not in df.columns:
         return None
     snap = df[["date", "code", "name"]].copy()
-    snap["is_st"] = snap["name"].fillna("").str.upper().str.contains("ST")
+    upper = snap["name"].fillna("").astype(str).str.upper()
+    flag = pd.Series(False, index=snap.index)
+    for needle in needles:
+        flag = flag | upper.str.contains(str(needle).upper(), regex=False)
+    snap["flag"] = flag
     snap_dates = pd.to_datetime(snap["date"]).dt.normalize()
     pivot = snap.pivot_table(
-        index=snap_dates, columns="code", values="is_st", aggfunc="any"
+        index=snap_dates, columns="code", values="flag", aggfunc="any"
     )
     if pivot.empty:
         return None
-    pivot = pivot.reindex(columns=codes)
+    pivot = pivot.reindex(columns=codes).astype("boolean")
     target = pd.DatetimeIndex(pd.to_datetime(dates)).normalize()
     all_dates = pd.DatetimeIndex(sorted(set(pivot.index) | set(target)))
     aligned = pivot.reindex(all_dates).ffill().reindex(target)
-    # nullable boolean 填充：避免 object dtype 隐式 downcast 警告
-    return aligned.astype("boolean").fillna(False).astype(bool)
+    return aligned.fillna(False).astype(bool)
+
+
+def build_st_status(dates, codes) -> pd.DataFrame | None:
+    """逐日 as-of ST 状态：True=ST（index=日期, columns=代码）
+
+    覆盖 ST / *ST / SST / S*ST（名称含 ST）。历史覆盖取决于 instrument 快照；
+    首次快照前的日期无法判定，调用方需明示局限。
+    """
+    return build_name_flag_status(dates, codes, ("ST",))
+
+
+def build_delisting_status(dates, codes) -> pd.DataFrame | None:
+    """逐日 as-of 退市整理状态：True=名称含“退”（index=日期, columns=代码）。
+
+    注意：不要用「今天的退市清单」回溯历史；这里只按当日名称状态排除退市整理期。
+    """
+    return build_name_flag_status(dates, codes, ("退",))
 
 
 # ── 派生面板（可交易掩码 / 涨跌停近似价） ─────────────────────────

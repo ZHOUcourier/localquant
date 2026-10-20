@@ -48,7 +48,7 @@ async function save() {
   saving.value = true
   msg.value = ''
   try {
-    const body: Record<string, string> = { qube_base_url: baseUrl.value }
+    const body: Record<string, unknown> = { qube_base_url: baseUrl.value }
     if (apiKey.value) body.qube_api_key = apiKey.value
     await jsonFetch('/api/qube/config', {
       method: 'PUT',
@@ -57,6 +57,26 @@ async function save() {
     })
     apiKey.value = ''
     msg.value = '已保存'
+    load()
+  } catch (e) {
+    msg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function clearKey() {
+  if (!window.confirm('确认清除 QUBE API Key？清除后 API 模式需重新配置密钥。')) return
+  saving.value = true
+  msg.value = ''
+  try {
+    await jsonFetch('/api/qube/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clear_api_key: true }),
+    })
+    apiKey.value = ''
+    msg.value = '已清除'
     load()
   } catch (e) {
     msg.value = e instanceof Error ? e.message : String(e)
@@ -113,6 +133,14 @@ void props
                 <span class="inline-block h-1.5 w-1.5 rounded-full" :class="keySet ? 'bg-[#30d158]' : 'bg-[#c8c4c4]'" />
                 {{ keySet ? '已配置' : '未配置' }}
               </span>
+              <button
+                v-if="keySet"
+                type="button"
+                class="ml-auto text-[10px] text-[#c62d23] hover:underline"
+                @click="clearKey"
+              >
+                清除
+              </button>
             </label>
             <input
               v-model="apiKey"

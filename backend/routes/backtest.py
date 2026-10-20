@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from backend.database import get_db
 from backend.services import market_data, tasks
 from backend.services.backtest_analysis import backtest_analysis
+from backend.services.universe_policy import UniversePolicy, apply_policy_to_panels
 
 router = APIRouter()
 
@@ -45,6 +46,7 @@ class RunBacktestRequest(BaseModel):
     shortable_codes: list[str] = []  # 兼容旧字段；系统只做多，已不参与交易逻辑
     execute_at: str = "next_close"  # next_close=次日(T+1)收盘 / tail=信号日尾盘 / next_open=次日开盘
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
+    universe_policy: UniversePolicy | None = None  # 空=全局默认（设置页/UNIVERSE_*）
 
 
 class TearSheetRequest(BaseModel):
@@ -80,6 +82,7 @@ class RunStrategyRequest(BaseModel):
     execute_at: str = "next_close"  # next_close=次日(T+1)收盘 / tail=信号日尾盘 / next_open=次日开盘
     shortable_codes: list[str] = []  # 兼容旧字段；系统只做多，已不参与交易逻辑
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
+    universe_policy: UniversePolicy | None = None  # 空=全局默认
 
 
 # ── 工具函数 ─────────────────────────────────────────────────
@@ -136,6 +139,10 @@ async def run_strategy(req: RunStrategyRequest):
             status_code=400, detail="信号为空 — 请检查信号逻辑与数据区间"
         )
 
+    signals_df, universe = await asyncio.to_thread(
+        apply_policy_to_panels, signals_df, prices, req.universe_policy
+    )
+
     # 3. 回测 + 绩效（接入停牌/涨跌停等参考面板，缺失项记入 assumptions）
     try:
         reference = await asyncio.to_thread(
@@ -153,6 +160,7 @@ async def run_strategy(req: RunStrategyRequest):
             stamp_tax=req.stamp_tax,
             normalize=req.normalize,
             tradable_mask=reference["tradable_mask"],
+            eligible_mask=universe.mask,
             shortable_mask=shortable,
             up_limit=reference["up_limit"],
             down_limit=reference["down_limit"],
@@ -212,6 +220,7 @@ async def run_strategy(req: RunStrategyRequest):
         run_params = req.model_dump()
         run_params["n_stocks"] = int(signals_df.shape[1])
         run_params["n_days"] = int(signals_df.shape[0])
+        run_params["universe"] = universe.manifest()
         run_id = await persist_backtest_run(
             params=run_params,
             result=result,
@@ -239,6 +248,7 @@ async def run_strategy(req: RunStrategyRequest):
             "assumptions": result["assumptions"],
             "delisting_events": result.get("delisting_events", []),
             "leverage_summary": result.get("leverage_summary", {}),
+            "universe": universe.manifest(),
         }
     except HTTPException:
         raise
@@ -254,6 +264,9 @@ async def run_backtest(req: RunBacktestRequest):
 
         signals_df = _dict_to_df(req.signals)
         prices_df = _dict_to_df(req.prices)
+        signals_df, universe = await asyncio.to_thread(
+            apply_policy_to_panels, signals_df, prices_df, req.universe_policy
+        )
 
         # 普通多头：不做空，shortable 始终为 None（不参与交易逻辑）
         shortable = None
@@ -270,6 +283,7 @@ async def run_backtest(req: RunBacktestRequest):
             stop_loss=req.stop_loss,
             trailing_stop=req.trailing_stop,
             shortable_mask=shortable,
+            eligible_mask=universe.mask,
             execute_at=req.execute_at,
             delisting_loss=req.delisting_loss,
             max_gross_exposure=req.max_gross_exposure,
@@ -291,6 +305,7 @@ async def run_backtest(req: RunBacktestRequest):
         run_params = {k: v for k, v in req.model_dump().items() if k not in ("signals", "prices")}
         run_params["n_stocks"] = int(signals_df.shape[1])
         run_params["n_days"] = int(signals_df.shape[0])
+        run_params["universe"] = universe.manifest()
         run_id = await persist_backtest_run(
             params=run_params,
             result=result,
@@ -316,6 +331,7 @@ async def run_backtest(req: RunBacktestRequest):
             "assumptions": result["assumptions"],
             "delisting_events": result.get("delisting_events", []),
             "leverage_summary": result.get("leverage_summary", {}),
+            "universe": universe.manifest(),
         }
     except Exception as e:
         logger.error(f"回测执行失败: {e}")
@@ -375,6 +391,7 @@ class PortfolioRequest(BaseModel):
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
+    universe_policy: UniversePolicy | None = None  # 空=全局默认
 
 
 @router.post("/portfolio")
@@ -455,6 +472,7 @@ async def portfolio_backtest(req: PortfolioRequest):
             stop_loss=req.stop_loss,
             trailing_stop=req.trailing_stop,
             delisting_loss=req.delisting_loss,
+            universe_policy=req.universe_policy,
         )
         # 溯源
         try:
@@ -491,6 +509,7 @@ class SensitivityRequest(BaseModel):
     end_date: str = ""
     param_grid: dict[str, list]  # {commission_rate: [0.0005, 0.001, 0.002], ...}
     base_params: dict = {}
+    universe_policy: UniversePolicy | None = None  # 空=全局默认
 
 
 @router.post("/sensitivity")
@@ -539,6 +558,7 @@ async def sensitivity(req: SensitivityRequest):
             down_limit=reference["down_limit"],
             high=panels.get("high"),
             low=panels.get("low"),
+            universe_policy=req.universe_policy,
         )
         result["status"] = "ok"
         result["sandboxed"] = sandboxed
@@ -621,6 +641,7 @@ class CreateRunRequest(BaseModel):
     stock_pool: list[str] = []
     execute_at: str = "next_close"  # next_close=次日(T+1)收盘 / tail=信号日尾盘 / next_open=次日开盘
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
+    universe_policy: UniversePolicy | None = None  # 空=全局默认
 
 
 @router.post("/runs")
@@ -796,6 +817,7 @@ class WalkForwardRequest(BaseModel):
     stop_loss: float = 0.0
     trailing_stop: float = 0.0
     delisting_loss: float = 0.0  # 数据提前截止标的的强制清算折价
+    universe_policy: UniversePolicy | None = None  # 空=全局默认
 
 
 @router.post("/walk-forward")
@@ -824,6 +846,7 @@ async def walk_forward(req: WalkForwardRequest):
             stop_loss=req.stop_loss,
             trailing_stop=req.trailing_stop,
             delisting_loss=req.delisting_loss,
+            universe_policy=req.universe_policy,
         )
         return result
     except ValueError as e:
