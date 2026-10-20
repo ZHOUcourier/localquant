@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { PanelLeftOpen } from 'lucide-vue-next'
 import Sidebar from './Sidebar.vue'
@@ -16,21 +16,55 @@ const isFullBleedPage = computed(
 )
 
 // —— 主侧边栏：可收起 + 可拖宽（VSCode 风格拖杆），localStorage 持久化 ——
+// 宽度默认贴合导航文字：刚好显示最长一行不换行（图标 + 文本 + 内边距/间距按当前字体计算）。
 const SIDEBAR_KEY = 'lq-main-sidebar'
-const SIDEBAR_MIN = 160
 const SIDEBAR_MAX = 360
+const FALLBACK_FIT_WIDTH = 120
+const NAV_LABELS = [
+  '工作台', '数据中心', '因子研究', '工作流', 'QUBE',
+  '策略库', '技能库', '回测记录', '实验管理', '风险分析', '设置',
+]
+
+const fitWidth = ref(FALLBACK_FIT_WIDTH)
+
+function measureFitWidth(): number {
+  try {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    let maxLabel = 0
+    if (ctx) {
+      ctx.font = `13px ${getComputedStyle(document.body).fontFamily || 'sans-serif'}`
+      maxLabel = Math.max(...NAV_LABELS.map((label) => ctx.measureText(label).width))
+    }
+    if (!maxLabel) maxLabel = 52
+    // 图标 16 + 文本 + nav px-2×2 + item px-3×2 + gap-2.5（rem 系数 3.125）+ 2px 余量
+    return Math.ceil(maxLabel + 16 + rem * 3.125 + 2)
+  } catch {
+    return FALLBACK_FIT_WIDTH
+  }
+}
 
 function loadSidebar() {
   try {
     const raw = localStorage.getItem(SIDEBAR_KEY)
     if (raw) {
       const p = JSON.parse(raw)
-      return { width: Number(p.width) || 220, collapsed: !!p.collapsed }
+      if (p.v === 2) {
+        return {
+          width: Number(p.width) || FALLBACK_FIT_WIDTH,
+          collapsed: !!p.collapsed,
+          auto: p.auto !== false,
+          v: 2,
+        }
+      }
+      // v1 旧记录：宽度默认按贴合处理，一次迁移到 auto
+      return { width: FALLBACK_FIT_WIDTH, collapsed: !!p.collapsed, auto: true, v: 2 }
     }
   } catch {
     /* 回默认 */
   }
-  return { width: 220, collapsed: false }
+  return { width: FALLBACK_FIT_WIDTH, collapsed: false, auto: true, v: 2 }
 }
 
 const sidebar = reactive(loadSidebar())
@@ -42,10 +76,29 @@ watch(sidebar, () => {
   }
 })
 
+// 首次挂载后按真实字体测量贴合宽度；auto 模式跟随贴合宽度，手动拖宽后保留用户选择
+onMounted(async () => {
+  await nextTick()
+  try {
+    await document.fonts?.ready
+  } catch {
+    /* 字体 API 不可用时忽略 */
+  }
+  fitWidth.value = measureFitWidth()
+  if (sidebar.auto || sidebar.width < fitWidth.value) {
+    sidebar.width = fitWidth.value
+  }
+})
+
 const sidebarDragging = ref(false)
 
 function clampSidebar(w: number) {
-  return Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w))
+  return Math.max(fitWidth.value, Math.min(SIDEBAR_MAX, w))
+}
+
+function resetSidebarWidth() {
+  sidebar.auto = true
+  sidebar.width = fitWidth.value
 }
 
 function onSidebarDrag(e: MouseEvent) {
@@ -55,6 +108,7 @@ function onSidebarDrag(e: MouseEvent) {
   document.body.style.cursor = 'ew-resize'
   document.body.style.userSelect = 'none'
   const move = (ev: MouseEvent) => {
+    sidebar.auto = false
     sidebar.width = clampSidebar(startWidth + (ev.clientX - startX))
   }
   const up = () => {
@@ -84,7 +138,7 @@ function onSidebarDrag(e: MouseEvent) {
           side="right"
           :dragging="sidebarDragging"
           @drag-start="onSidebarDrag"
-          @dblclick="sidebar.width = 220"
+          @dblclick="resetSidebarWidth"
         />
       </div>
 

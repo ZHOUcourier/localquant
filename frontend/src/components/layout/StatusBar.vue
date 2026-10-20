@@ -44,8 +44,8 @@ const NEWS_SOURCE_LABELS: Record<string, string> = {
  * 上行滚动资讯（真实快讯源：东财/新浪 7×24，不可用时明确提示）、
  * 下行指数行情（QMT 实时优先，未连接回退本地缓存收盘价）+ QMT 连接状态。
  *
- * 资讯优先级：后端已将关联个股/重大事项的快讯置顶并标 important，前端红色 ● 高亮。
- * 滚动速度按内容总长度归一（恒定像素速度），避免条目多时“滚得太快”。
+ * 资讯优先级：后端已将关联个股/重大事项的快讯置顶并标 important；前端不区分颜色，
+ * 统一灰色展示，避免红绿行情色与资讯混淆。滚动速度按内容总长度归一（恒定像素速度）。
  */
 interface NewsEntry {
   time: string
@@ -188,9 +188,8 @@ function openDetail(e: NewsEntry) {
               :title="e.url ? '点击查看详情' : ''"
               @click="openDetail(e)"
             >
-              <span v-if="e.important" class="text-[#ff3b30]">●</span>
               <span v-if="e.time" class="text-[#9a9898]">{{ e.time }}</span>
-              <span :class="e.important ? 'font-medium text-[#d70015]' : 'text-[#424245]'">{{ e.text }}</span>
+              <span class="text-[#646262]">{{ e.text }}</span>
             </span>
           </template>
         </div>
@@ -200,7 +199,7 @@ function openDetail(e: NewsEntry) {
       </div>
       <!-- 关闭资讯行 -->
       <button
-        class="shrink-0 text-[12px] text-[#9a9898] hover:text-[#ff3b30]"
+        class="shrink-0 text-[12px] text-[#9a9898] hover:text-[#201d1d]"
         title="关闭资讯"
         @click="newsClosed = true"
       >
